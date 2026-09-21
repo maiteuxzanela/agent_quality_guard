@@ -3,13 +3,13 @@
     "choice": {
       "selected": "devops",
       "top_confidence": 0.3985,
-      "latency_ms": 4921.0,
+      "latency_ms": 4285.8,
       "correct": false
     },
     "noul": {
       "passed": true,
       "probability": 0.9541,
-      "latency_ms": 508.4
+      "latency_ms": 511.5
     },
     "score": {
       "score": 3.68,
@@ -21,20 +21,20 @@
         "good quality": 0.6568,
         "exceptional": 0.0619
       },
-      "latency_ms": 937.8
+      "latency_ms": 860.3
     }
   },
   "laya": {
     "choice": {
-      "selected": "security",
-      "top_confidence": 0.2142,
-      "latency_ms": 255.6,
-      "correct": false
+      "selected": "backend",
+      "top_confidence": 0.8958,
+      "latency_ms": 4062.4,
+      "correct": true
     },
     "noul": {
       "passed": true,
       "probability": 0.9238,
-      "latency_ms": 4803.4
+      "latency_ms": 3058.1
     },
     "score": {
       "score": 3.15,
@@ -47,7 +47,7 @@
         "3": 0.0813,
         "4": 0.3093
       },
-      "latency_ms": 664.0
+      "latency_ms": 274.7
     }
   }
 }

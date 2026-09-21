@@ -124,7 +124,13 @@ def benchmark_laya():
         "specialist": {
             "type": "choice",
             "instructions": "Which specialist agent should handle this task?",
-            "criteria": {opt: f"specialist in {opt}" for opt in c["options"]},
+            "criteria": {
+                "backend": "API, server-side logic, database, REST, authentication bugs",
+                "frontend": "UI, CSS, React, browser rendering issues",
+                "security": "vulnerabilities, SQL injection, auth bypass, CVE",
+                "devops": "CI/CD, Docker, Kubernetes, deployment pipeline",
+                "documentation": "README, docstrings, API docs",
+            },
         }
     }
     t0 = time.perf_counter()
