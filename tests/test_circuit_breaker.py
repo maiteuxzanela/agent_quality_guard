@@ -2,7 +2,7 @@
 
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
-from src.mcp_server import openjev_score, _score_history
+from src.mcp_server import openjev_score, _score_history, _get_workspace_git_signature
 from src.core.schemas import ScoreResponse
 
 
@@ -105,6 +105,46 @@ class TestCircuitBreakerAndAntiGaming(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(res["passed"])
                 self.assertTrue(_score_history[workspace_dir]["passed"])
                 self.assertEqual(_score_history[workspace_dir]["attempts"], 0)
+
+    async def test_workspace_isolation(self):
+        """Verifica que o estado de tentativas em um workspace não contamina outro workspace."""
+        ws1 = "/tmp/ws_one"
+        ws2 = "/tmp/ws_two"
+
+        _score_history[ws1] = {
+            "passed": False,
+            "attempts": 5,
+            "git_state": "state1",
+            "last_score": 3.0,
+        }
+
+        with patch("src.mcp_server._get_workspace_git_signature", return_value="state2"):
+            mock_engine = MagicMock()
+            mock_resp = ScoreResponse(
+                score=3.90,
+                normalized_score=0.725,
+                passed=True,
+                breakdown={"good quality": 0.8},
+                latency_ms=10.0,
+            )
+            mock_engine.evaluate_score = AsyncMock(return_value=mock_resp)
+
+            with patch("src.mcp_server.get_engine", return_value=mock_engine):
+                res2 = await openjev_score(
+                    premise="Workspace two task",
+                    workspace=ws2,
+                    threshold=3.75,
+                )
+                self.assertTrue(res2["passed"])
+                self.assertEqual(res2["score"], 3.90)
+                # ws1 continua com suas tentativas inalteradas
+                self.assertEqual(_score_history[ws1]["attempts"], 5)
+
+    def test_git_signature_computation(self):
+        """Verifica a extração robusta da assinatura Git com subprocess."""
+        sig = _get_workspace_git_signature(".")
+        self.assertIsInstance(sig, str)
+        self.assertIn(":", sig)
 
 
 if __name__ == "__main__":
