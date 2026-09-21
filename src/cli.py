@@ -28,7 +28,7 @@ from src.orchestrator.guardrail import GuardrailInterceptor
 from src.orchestrator.router import SpecialistRouter
 
 
-def get_engine(model_path="com-kotobalabs/open-jev-deberta-v3-large"):
+def get_engine(model_path="convaiinnovations/laya"):
     engine = OpenJevEngine(model_id_or_path=model_path, allow_cpu_fallback=True)
     engine.load_model()
     return engine
@@ -193,7 +193,7 @@ def main():
         help="Opções de subagentes separadas por vírgula",
     )
     p_choice.add_argument("--temperature", "-t", type=float, default=1.0, help="Temperatura do softmax")
-    p_choice.add_argument("--model", default="com-kotobalabs/open-jev-deberta-v3-large", help="Modelo Open Jev")
+    p_choice.add_argument("--model", default="convaiinnovations/laya", help="Modelo Open Jev (default: Laya)")
     p_choice.add_argument("--json", action="store_true", help="Saída em formato JSON estruturado")
 
     # Subcomando noul
@@ -201,7 +201,7 @@ def main():
     p_noul.add_argument("premise", help="Ação, comando ou modificação proposta")
     p_noul.add_argument("--hypothesis", "-y", required=True, help="Condição de segurança a validar")
     p_noul.add_argument("--threshold", "-t", type=float, default=0.85, help="Limiar de aprovação (default: 0.85)")
-    p_noul.add_argument("--model", default="com-kotobalabs/open-jev-deberta-v3-large", help="Modelo Open Jev")
+    p_noul.add_argument("--model", default="convaiinnovations/laya", help="Modelo Open Jev (default: Laya)")
     p_noul.add_argument("--json", action="store_true", help="Saída em formato JSON estruturado")
 
     # Subcomando score
@@ -212,7 +212,7 @@ def main():
     p_score.add_argument("--min-score", type=float, default=1.0, help="Nota mínima (default: 1.0)")
     p_score.add_argument("--max-score", type=float, default=5.0, help="Nota máxima (default: 5.0)")
     p_score.add_argument("--threshold", "-t", type=float, default=4.0, help="Nota de corte para aprovação (default: 4.0)")
-    p_score.add_argument("--model", default="com-kotobalabs/open-jev-deberta-v3-large", help="Modelo Open Jev")
+    p_score.add_argument("--model", default="convaiinnovations/laya", help="Modelo Open Jev (default: Laya)")
     p_score.add_argument("--json", action="store_true", help="Saída em formato JSON estruturado")
 
     args = parser.parse_args()
