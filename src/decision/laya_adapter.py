@@ -2,12 +2,14 @@
 
 Encapsula a API nativa do Laya (choice/noul/score) mapeando para os
 esquemas internos do JEV, com suporte a thresholds recalibrados e
-fallback automático para o motor DeBERTa-v3 em caso de indisponibilidade.
+fallback automático para CPU em caso de indisponibilidade de GPU.
+O modelo DeBERTa-v3 foi removido do pipeline em set/2026 — o Laya
+é agora o único backend discriminativo suportado.
 
 Hardware alvo: GTX 1050 Ti (4 GB VRAM, Pascal sm_61).
   - Flash Attention 2: INCOMPATÍVEL (requer Ampere sm_80+).
   - Atenção padrão (sdpa): COMPATÍVEL.
-  - VRAM necessária para laya english: ~1.57 GB (isolado, sem DeBERTa concorrente).
+  - VRAM necessária para laya english: ~1.57 GB (isolado).
   - VRAM necessária para laya-multilingual: ~1.0 GB.
 
 Baseado em benchmark: benchmarks/laya_vs_deberta_cpu_stage1.json
@@ -170,6 +172,10 @@ class LayaAdapter:
                 raise InferenceError(
                     f"Falha ao carregar Laya na GPU e CPU fallback desabilitado: {gpu_err}"
                 ) from gpu_err
+
+    def load_model(self) -> None:
+        """Alias para load() mantendo compatibilidade de interface com OpenJevEngine."""
+        self.load()
 
     def _ensure_ready(self) -> None:
         if not self.is_ready or self._agent is None:

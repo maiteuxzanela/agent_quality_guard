@@ -1,6 +1,7 @@
-"""Testes da política estrita Fail-Fast da OpenJevEngine.
+"""Testes da política estrita Fail-Fast da OpenJevEngine com backend Laya.
 Garante que sem modelo carregado ou ambiente pronto, a engine NUNCA simula dados
-e lança imediatamente exceções tipadas explícitas.
+e lança imediatamente exceções tipadas explícitas. Usa convaiinnovations/laya
+como model_id para cobrir o caminho Laya pós-migração (set/2026).
 """
 
 import pytest
@@ -16,7 +17,8 @@ from src.decision.engine import OpenJevEngine
 
 @pytest.mark.asyncio
 async def test_engine_unloaded_raises_noul_error():
-    engine = OpenJevEngine(model_id_or_path="AlexWortega/openjev")
+    engine = OpenJevEngine(model_id_or_path="convaiinnovations/laya")
+    assert engine.is_laya is True
     assert engine.is_ready is False
 
     req = NoulRequest(
@@ -33,7 +35,8 @@ async def test_engine_unloaded_raises_noul_error():
 
 @pytest.mark.asyncio
 async def test_engine_unloaded_raises_choice_error():
-    engine = OpenJevEngine(model_id_or_path="AlexWortega/openjev")
+    engine = OpenJevEngine(model_id_or_path="convaiinnovations/laya")
+    assert engine.is_laya is True
     assert engine.is_ready is False
 
     req = ChoiceRequest(
@@ -49,7 +52,8 @@ async def test_engine_unloaded_raises_choice_error():
 
 @pytest.mark.asyncio
 async def test_engine_unloaded_raises_score_error():
-    engine = OpenJevEngine(model_id_or_path="AlexWortega/openjev")
+    engine = OpenJevEngine(model_id_or_path="convaiinnovations/laya")
+    assert engine.is_laya is True
     assert engine.is_ready is False
 
     req = ScoreRequest(
