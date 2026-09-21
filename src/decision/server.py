@@ -30,10 +30,10 @@ logger = logging.getLogger("jev.server")
 def create_app(
     engine: Optional[OpenJevEngine] = None,
     auto_load_model: bool = False,
-    model_id: str = "AlexWortega/openjev",
+    model_id: str = "convaiinnovations/laya",
     max_length: int = 1024,
 ) -> FastAPI:
-    """Cria e configura a instância da aplicação FastAPI."""
+    """Cria e configura a instância da aplicação FastAPI com backend Laya."""
 
     # Cria engine se não fornecida
     if engine is None:
