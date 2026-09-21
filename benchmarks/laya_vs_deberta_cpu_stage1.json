@@ -1,0 +1,53 @@
+{
+  "deberta": {
+    "choice": {
+      "selected": "devops",
+      "top_confidence": 0.3985,
+      "latency_ms": 4921.0,
+      "correct": false
+    },
+    "noul": {
+      "passed": true,
+      "probability": 0.9541,
+      "latency_ms": 508.4
+    },
+    "score": {
+      "score": 3.68,
+      "passed": false,
+      "breakdown": {
+        "critical flaws": 0.0174,
+        "poor quality": 0.0691,
+        "acceptable": 0.1948,
+        "good quality": 0.6568,
+        "exceptional": 0.0619
+      },
+      "latency_ms": 937.8
+    }
+  },
+  "laya": {
+    "choice": {
+      "selected": "security",
+      "top_confidence": 0.2142,
+      "latency_ms": 255.6,
+      "correct": false
+    },
+    "noul": {
+      "passed": true,
+      "probability": 0.9238,
+      "latency_ms": 4803.4
+    },
+    "score": {
+      "score": 3.15,
+      "score_ordinal_raw": 2.152,
+      "passed": false,
+      "breakdown": {
+        "0": 0.058,
+        "1": 0.4319,
+        "2": 0.1195,
+        "3": 0.0813,
+        "4": 0.3093
+      },
+      "latency_ms": 664.0
+    }
+  }
+}

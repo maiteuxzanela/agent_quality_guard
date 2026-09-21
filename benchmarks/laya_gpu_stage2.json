@@ -1,0 +1,33 @@
+{
+  "device": "cuda",
+  "load_error": null,
+  "choice": {
+    "selected": "backend",
+    "confidence": 0.2678,
+    "latency_ms": 2136.3,
+    "correct": true
+  },
+  "noul": {
+    "probability": 0.827,
+    "passed": false,
+    "latency_ms": 335.8
+  },
+  "score": {
+    "score_jev": 3.62,
+    "score_ordinal": 2.6162,
+    "passed": false,
+    "breakdown": {
+      "0": 0.02,
+      "1": 0.0588,
+      "2": 0.3547,
+      "3": 0.418,
+      "4": 0.1485
+    },
+    "latency_ms": 624.7
+  },
+  "vram": {
+    "allocated_gb": 0.008,
+    "reserved_gb": 0.02,
+    "peak_gb": 1.742
+  }
+}
