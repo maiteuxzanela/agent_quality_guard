@@ -35,6 +35,7 @@ from src.memory.needle_client import Needle3Client
 from src.orchestrator.evaluator import DeliveryEvaluator
 from src.orchestrator.guardrail import GuardrailInterceptor
 from src.orchestrator.router import SpecialistRouter
+from tests.test_circuit_breaker import TestCircuitBreakerAndAntiGaming
 
 
 class TestSchemas(unittest.TestCase):
