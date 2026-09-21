@@ -60,7 +60,19 @@ Calcula a distribuição de probabilidade sobre um array de opções em única p
 
 ### 3. `score` (Avaliação Ordinal e Nota de Rubrica)
 Compara a entrega contra uma rubrica de qualidade e interpola uma nota contínua de 1.0 a 5.0.
-- **Uso:** Validação de conformidade antes de aceitar código gerado. Se `score < 4.0`, o subagente entra em refatoração.
+- **Uso:** Validação de conformidade antes de aceitar código gerado. Se `score < 3.75`, o subagente entra em refatoração real no disco (com proteção anti-premise gaming e saída de emergência após 10 tentativas).
+
+### 4. `laya_adapter` (Suporte Experimental / RLCD Calibrado)
+Adaptador discriminativo modular em `src/decision/laya_adapter.py` para o modelo Laya (`convaiinnovations/laya` via `laya==0.3.5`).
+- **Uso:** Alternativa calibrada via RLCD com suporte a CPU e GPU isolada na GTX 1050 Ti. Mapeia a escala nativa ordinal (0–4) para a escala JEV (1–5).
+
+---
+
+## Benchmarks Comparativos (Laya vs DeBERTa-v3)
+
+Os relatórios detalhados de benchmark de latência e consumo de VRAM estão documentados nos arquivos:
+- `benchmarks/laya_stage1_results.json`: Benchmark CPU (latência, escolha categórica e guardrails).
+- `benchmarks/laya_stage2_results.json`: Benchmark GPU isolado na GTX 1050 Ti (4GB VRAM).
 
 ---
 
