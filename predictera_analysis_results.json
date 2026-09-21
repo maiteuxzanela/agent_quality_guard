@@ -1,0 +1,69 @@
+{
+  "total_time_ms": 10053.040700997371,
+  "evaluations": [
+    {
+      "id": "caminho_1_automacao_quant",
+      "title": "Caminho 1: Pipeline Causal Automatizado (Full Quant + Scraping +EV)",
+      "selected_role": "quant_developer",
+      "role_confidence": 0.3896,
+      "feasibility_passed": true,
+      "feasibility_probability": 0.9517,
+      "strategic_score": 3.44,
+      "breakdown": {
+        "critical flaws": 0.05,
+        "poor quality": 0.0817,
+        "acceptable": 0.3383,
+        "good quality": 0.44,
+        "exceptional": 0.09
+      }
+    },
+    {
+      "id": "caminho_2_xg_ml_ensemble",
+      "title": "Caminho 2: Expans\u00e3o com Machine Learning Tabular & xG (Expected Goals)",
+      "selected_role": "quant_researcher",
+      "role_confidence": 0.3846,
+      "feasibility_passed": true,
+      "feasibility_probability": 0.7887,
+      "strategic_score": 3.1,
+      "breakdown": {
+        "critical flaws": 0.0709,
+        "poor quality": 0.171,
+        "acceptable": 0.3899,
+        "good quality": 0.3218,
+        "exceptional": 0.0463
+      }
+    },
+    {
+      "id": "caminho_3_deep_learning_sequencial",
+      "title": "Caminho 3: Deep Learning Sequencial (LSTMs / Transformers / Chronos)",
+      "selected_role": "deep_learning_researcher",
+      "role_confidence": 0.575,
+      "feasibility_passed": true,
+      "feasibility_probability": 0.8086,
+      "strategic_score": 2.84,
+      "breakdown": {
+        "critical flaws": 0.1055,
+        "poor quality": 0.2455,
+        "acceptable": 0.374,
+        "good quality": 0.2497,
+        "exceptional": 0.0253
+      }
+    },
+    {
+      "id": "caminho_4_agente_autonomo_jev",
+      "title": "Caminho 4: Sistema de Decis\u00e3o Aut\u00f4noma JEV-Predictera (Tri-Camada)",
+      "selected_role": "quant_developer",
+      "role_confidence": 0.5733,
+      "feasibility_passed": true,
+      "feasibility_probability": 0.8563,
+      "strategic_score": 3.58,
+      "breakdown": {
+        "critical flaws": 0.0323,
+        "poor quality": 0.091,
+        "acceptable": 0.2443,
+        "good quality": 0.5286,
+        "exceptional": 0.1037
+      }
+    }
+  ]
+}

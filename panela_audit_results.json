@@ -1,0 +1,213 @@
+{
+  "total_time_ms": 13011.598568002228,
+  "needle_time_ms": 59.72741399455117,
+  "decision_time_ms": 4172.679999999999,
+  "dimensions": [
+    {
+      "dimension": "monolithic_screens",
+      "name": "Telas Monol\u00edticas (CriarScreen / CardapioScreen / PerfilScreen)",
+      "snippets_count": 1,
+      "tokens": 798,
+      "needle_latency_ms": 25.78773899949738,
+      "choice_selected": "frontend_architect",
+      "choice_confidence": 0.3874,
+      "choice_latency_ms": 634.17,
+      "noul_risk_confirmed": true,
+      "noul_probability": 0.649,
+      "noul_latency_ms": 486.85,
+      "score": 3.28,
+      "score_breakdown": {
+        "critical flaws": 0.0401,
+        "poor quality": 0.1399,
+        "acceptable": 0.3605,
+        "good quality": 0.4216,
+        "exceptional": 0.0379
+      },
+      "score_latency_ms": 261.17,
+      "snippets": [
+        {
+          "file": "src/screens/CardapioScreen.js",
+          "start": 190,
+          "end": 1709,
+          "relations": [
+            "name:CardapioScreen",
+            "hook:useEffect",
+            "hook:useState",
+            "has_api_call"
+          ]
+        }
+      ]
+    },
+    {
+      "dimension": "root_and_state",
+      "name": "Ponto de Entrada e Estado Global (App.js e Contextos)",
+      "snippets_count": 1,
+      "tokens": 956,
+      "needle_latency_ms": 6.433753998862812,
+      "choice_selected": "frontend_architect",
+      "choice_confidence": 0.3311,
+      "choice_latency_ms": 439.05,
+      "noul_risk_confirmed": true,
+      "noul_probability": 0.7495,
+      "noul_latency_ms": 181.16,
+      "score": 3.26,
+      "score_breakdown": {
+        "critical flaws": 0.0463,
+        "poor quality": 0.1359,
+        "acceptable": 0.379,
+        "good quality": 0.3881,
+        "exceptional": 0.0506
+      },
+      "score_latency_ms": 179.13,
+      "snippets": [
+        {
+          "file": "App.js",
+          "start": 108,
+          "end": 1058,
+          "relations": [
+            "name:AppContent",
+            "hook:useEffect",
+            "hook:useState",
+            "has_api_call"
+          ]
+        }
+      ]
+    },
+    {
+      "dimension": "services_and_api",
+      "name": "Camada de Servi\u00e7os e Integra\u00e7\u00e3o Externa (Services)",
+      "snippets_count": 3,
+      "tokens": 916,
+      "needle_latency_ms": 11.46030800009612,
+      "choice_selected": "qa_testing",
+      "choice_confidence": 0.3829,
+      "choice_latency_ms": 222.64,
+      "noul_risk_confirmed": true,
+      "noul_probability": 0.799,
+      "noul_latency_ms": 217.97,
+      "score": 2.61,
+      "score_breakdown": {
+        "critical flaws": 0.1634,
+        "poor quality": 0.304,
+        "acceptable": 0.317,
+        "good quality": 0.1914,
+        "exceptional": 0.0242
+      },
+      "score_latency_ms": 226.87,
+      "snippets": [
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "start": 1,
+          "end": 60,
+          "relations": [
+            "file:apiService.test.js"
+          ]
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "start": 61,
+          "end": 70,
+          "relations": [
+            "file:apiService.test.js"
+          ]
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "start": 121,
+          "end": 143,
+          "relations": [
+            "file:authService.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "dimension": "security_and_rules",
+      "name": "Seguran\u00e7a, Regras do Firestore e Chaves Keystore",
+      "snippets_count": 2,
+      "tokens": 1124,
+      "needle_latency_ms": 8.657981998112518,
+      "choice_selected": "security_auditor",
+      "choice_confidence": 0.3617,
+      "choice_latency_ms": 222.8,
+      "noul_risk_confirmed": false,
+      "noul_probability": 0.4947,
+      "noul_latency_ms": 216.23,
+      "score": 3.27,
+      "score_breakdown": {
+        "critical flaws": 0.0652,
+        "poor quality": 0.1252,
+        "acceptable": 0.3569,
+        "good quality": 0.3833,
+        "exceptional": 0.0694
+      },
+      "score_latency_ms": 227.94,
+      "snippets": [
+        {
+          "file": "firestore.rules",
+          "start": 1,
+          "end": 50,
+          "relations": [
+            "file:firestore.rules"
+          ]
+        },
+        {
+          "file": "firestore.rules",
+          "start": 51,
+          "end": 100,
+          "relations": [
+            "file:firestore.rules"
+          ]
+        }
+      ]
+    },
+    {
+      "dimension": "build_and_performance",
+      "name": "Configura\u00e7\u00e3o de Build, Depend\u00eancias e Otimiza\u00e7\u00e3o Expo/Android",
+      "snippets_count": 3,
+      "tokens": 776,
+      "needle_latency_ms": 7.387630997982342,
+      "choice_selected": "performance_engineer",
+      "choice_confidence": 0.3844,
+      "choice_latency_ms": 219.66,
+      "noul_risk_confirmed": true,
+      "noul_probability": 0.7454,
+      "noul_latency_ms": 215.08,
+      "score": 3.19,
+      "score_breakdown": {
+        "critical flaws": 0.0501,
+        "poor quality": 0.1712,
+        "acceptable": 0.3538,
+        "good quality": 0.3864,
+        "exceptional": 0.0385
+      },
+      "score_latency_ms": 221.96,
+      "snippets": [
+        {
+          "file": "app.json",
+          "start": 1,
+          "end": 50,
+          "relations": [
+            "file:app.json"
+          ]
+        },
+        {
+          "file": "app.json",
+          "start": 51,
+          "end": 84,
+          "relations": [
+            "file:app.json"
+          ]
+        },
+        {
+          "file": "eas.json",
+          "start": 1,
+          "end": 38,
+          "relations": [
+            "file:eas.json"
+          ]
+        }
+      ]
+    }
+  ]
+}
