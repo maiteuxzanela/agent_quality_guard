@@ -116,8 +116,47 @@ class TestScoreAndDiagnoseReprovado(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(diag["description"]) > 10)
         self.assertIn("macro_probabilities", diag)
         self.assertIn("micro_probabilities", diag)
+        self.assertIn("macro_confidence", diag)
+        self.assertIn("micro_confidence", diag)
+        self.assertIn("diagnosis_latency_ms", diag)
         # Deve ter chamado choice exatamente 2 vezes
         self.assertEqual(mock_engine.evaluate_choice.call_count, 2)
+
+        # Valida contrato completo do ScoreDiagnoseResponse serializado via Pydantic
+        self.assertIn("score", result)
+        self.assertIn("normalized_score", result)
+        self.assertIn("threshold", result)
+        self.assertIn("breakdown", result)
+        self.assertIn("score_latency_ms", result)
+        self.assertIn("attempts", result)
+        self.assertIn("max_attempts", result)
+        self.assertIn("emergency_exit_unlocked", result)
+        self.assertEqual(result["max_attempts"], 10)
+        self.assertIsInstance(result["score"], float)
+        self.assertIsInstance(result["normalized_score"], float)
+        self.assertIsInstance(result["breakdown"], dict)
+
+    async def test_aprovado_schema_completo(self):
+        """Verifica que a aprovação também serializa todos os campos obrigatórios."""
+        with patch("src.mcp_server._get_workspace_git_signature", return_value="xyz:clean"):
+            mock_engine = MagicMock()
+            mock_engine.evaluate_score = AsyncMock(return_value=_make_score_resp(4.00))
+
+            with patch("src.mcp_server.get_engine", return_value=mock_engine):
+                result = await openjev_score_and_diagnose(
+                    premise="Código aprovado.",
+                    workspace=WS,
+                    threshold=3.60,
+                )
+
+        self.assertTrue(result["passed"])
+        self.assertIsNone(result["diagnosis"])
+        self.assertIn("score_latency_ms", result)
+        self.assertIn("normalized_score", result)
+        self.assertIn("breakdown", result)
+        self.assertIn("max_attempts", result)
+        self.assertEqual(result["attempts"], 0)
+        mock_engine.evaluate_choice.assert_not_called()
 
 
 class TestAntiGamingAndCircuitBreaker(unittest.IsolatedAsyncioTestCase):
