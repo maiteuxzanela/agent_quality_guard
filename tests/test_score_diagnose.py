@@ -282,3 +282,100 @@ async def test_cada_macro_categoria_produz_diagnostico_valido(macro: str):
     assert result["diagnosis"]["micro_diagnosis"] == micro
     assert result["diagnosis"]["description"] != ""
     assert mock_engine.evaluate_choice.call_count == 2
+
+
+# ─── Testes de integração Pydantic (sem mock do engine) ─────────────────────
+
+class TestPydanticSchemaIntegration(unittest.TestCase):
+    """Verifica que os schemas Pydantic DiagnosisResult e ScoreDiagnoseResponse
+    constroem, validam e serializam corretamente sem mock do engine."""
+
+    def test_diagnosis_result_instancia_e_serializa(self):
+        from src.core.schemas import DiagnosisResult
+        diag = DiagnosisResult(
+            macro_category="qualidade_de_testes",
+            macro_confidence=0.82,
+            macro_probabilities={"qualidade_de_testes": 0.82, "robustez_e_limites": 0.18},
+            micro_diagnosis="falta_cobertura_caminhos_de_erro",
+            micro_confidence=0.74,
+            micro_probabilities={
+                "ausencia_de_testes_unitarios": 0.1,
+                "teste_tautologico_ou_falso_positivo": 0.1,
+                "falta_cobertura_caminhos_de_erro": 0.74,
+                "testes_nao_reprodutiveis_flaky": 0.06,
+            },
+            description="Testes cobrem apenas o caminho feliz.",
+            diagnosis_latency_ms=42.5,
+        )
+        dumped = diag.model_dump()
+        self.assertEqual(dumped["macro_category"], "qualidade_de_testes")
+        self.assertEqual(dumped["micro_diagnosis"], "falta_cobertura_caminhos_de_erro")
+        self.assertAlmostEqual(dumped["macro_confidence"], 0.82)
+        self.assertIsInstance(dumped["macro_probabilities"], dict)
+        self.assertIsInstance(dumped["micro_probabilities"], dict)
+
+    def test_score_diagnose_response_aprovado_serializa(self):
+        from src.core.schemas import ScoreDiagnoseResponse
+        resp = ScoreDiagnoseResponse(
+            score=4.10,
+            normalized_score=0.775,
+            passed=True,
+            threshold=3.60,
+            breakdown={"good quality": 0.6, "exceptional": 0.4},
+            score_latency_ms=120.0,
+            diagnosis=None,
+            attempts=0,
+            max_attempts=10,
+            emergency_exit_unlocked=False,
+        )
+        dumped = resp.model_dump()
+        self.assertTrue(dumped["passed"])
+        self.assertIsNone(dumped["diagnosis"])
+        self.assertEqual(dumped["attempts"], 0)
+        self.assertFalse(dumped["emergency_exit_unlocked"])
+
+    def test_score_diagnose_response_reprovado_com_diagnosis(self):
+        from src.core.schemas import DiagnosisResult, ScoreDiagnoseResponse
+        diag = DiagnosisResult(
+            macro_category="integridade_e_seguranca",
+            macro_confidence=0.65,
+            macro_probabilities={"integridade_e_seguranca": 0.65},
+            micro_diagnosis="credenciais_hardcoded",
+            micro_confidence=0.58,
+            micro_probabilities={"credenciais_hardcoded": 0.58},
+            description="Chaves de API inseridas diretamente no código-fonte.",
+            diagnosis_latency_ms=33.1,
+        )
+        resp = ScoreDiagnoseResponse(
+            score=2.80,
+            normalized_score=0.45,
+            passed=False,
+            threshold=3.60,
+            breakdown={"critical flaws": 0.3, "poor quality": 0.3, "acceptable": 0.4},
+            score_latency_ms=98.0,
+            diagnosis=diag,
+            attempts=2,
+            max_attempts=10,
+            emergency_exit_unlocked=False,
+        )
+        dumped = resp.model_dump()
+        self.assertFalse(dumped["passed"])
+        self.assertIsNotNone(dumped["diagnosis"])
+        self.assertEqual(dumped["diagnosis"]["micro_diagnosis"], "credenciais_hardcoded")
+        self.assertEqual(dumped["attempts"], 2)
+
+    def test_diagnosis_result_rejeita_macro_confidence_invalida(self):
+        """Valida que DiagnosisResult enforça ge=0.0, le=1.0 em macro_confidence."""
+        from pydantic import ValidationError
+        from src.core.schemas import DiagnosisResult
+        with self.assertRaises(ValidationError):
+            DiagnosisResult(
+                macro_category="qualidade_de_testes",
+                macro_confidence=1.5,  # inválido: > 1.0
+                macro_probabilities={},
+                micro_diagnosis="ausencia_de_testes_unitarios",
+                micro_confidence=0.5,
+                micro_probabilities={},
+                description="Test",
+                diagnosis_latency_ms=10.0,
+            )
