@@ -212,128 +212,172 @@ class ScoreResponse(BaseModel):
 
 
 # ==============================================================================
-# Schemas Open Jev: Score + Diagnose (Avaliação com Árvore de Defeitos)
+# Schemas Open Jev: Score + Diagnose (Diagnóstico Flat — Choice único com 26 opções)
 # ==============================================================================
 
-# Taxonomia Nível 1 — Macro-Categorias ortogonais de defeito
-DEFECT_MACRO_CATEGORIES = [
-    "falha_funcional_logica",
-    "robustez_e_limites",
-    "integridade_e_seguranca",
-    "qualidade_de_testes",
-    "contrato_e_acoplamento",
+# Lista flat de todos os defeitos possíveis (choice único — sem hierarquia L1/L2)
+DEFECT_OPTIONS: List[str] = [
+    # Falhas funcionais / lógicas
+    "erro_off_by_one",
+    "regra_de_negocio_incompleta",
+    "estado_mutavel_inconsistente",
+    "inversao_de_predicado",
+    # Robustez e limites
+    "falta_tratamento_nulo_ou_vazio",
+    "estouro_de_limites_numericos",
+    "falha_de_tratamento_de_excecoes",
+    "condicao_de_corrida_deadlock",
+    # Integridade e segurança
+    "injecao_e_sanitizacao",
+    "vazamento_de_recursos",
+    "credenciais_hardcoded",
+    "autorizacao_e_autenticacao_frouxa",
+    # Qualidade de testes
+    "ausencia_de_testes_unitarios",
+    "teste_tautologico_ou_falso_positivo",
+    "falta_cobertura_caminhos_de_erro",
+    "testes_nao_reprodutiveis_flaky",
+    # Contrato e acoplamento
+    "dependencia_ou_import_inexistente",
+    "incompatibilidade_de_assinatura",
+    "violacao_de_schema_de_dados",
+    "quebra_de_retrocompatibilidade",
+    # Ambiente, performance e escopo
+    "incompatibilidade_de_ambiente_ou_runtime",
+    "gargalo_de_performance_ou_complexidade",
+    "alucinacao_de_efeitos_colaterais_externos",
+    "desvio_de_escopo_ou_overengineering",
+    "inconsistencia_estilistica_ou_linting_estrito",
+    "stub_ou_mock_em_producao",
 ]
 
-# Taxonomia Nível 2 — Micro-diagnósticos por macro-categoria
-DEFECT_MICRO_OPTIONS: Dict[str, List[str]] = {
-    "falha_funcional_logica": [
-        "erro_off_by_one",
-        "regra_de_negocio_incompleta",
-        "estado_mutavel_inconsistente",
-        "inversao_de_predicado",
-    ],
-    "robustez_e_limites": [
-        "falta_tratamento_nulo_ou_vazio",
-        "estouro_de_limites_numericos",
-        "falha_de_tratamento_de_excecoes",
-        "condicao_de_corrida_deadlock",
-    ],
-    "integridade_e_seguranca": [
-        "injecao_e_sanitizacao",
-        "vazamento_de_recursos",
-        "credenciais_hardcoded",
-        "autorizacao_e_autenticacao_frouxa",
-    ],
-    "qualidade_de_testes": [
-        "ausencia_de_testes_unitarios",
-        "teste_tautologico_ou_falso_positivo",
-        "falta_cobertura_caminhos_de_erro",
-        "testes_nao_reprodutiveis_flaky",
-    ],
-    "contrato_e_acoplamento": [
-        "dependencia_ou_import_inexistente",
-        "incompatibilidade_de_assinatura",
-        "violacao_de_schema_de_dados",
-        "quebra_de_retrocompatibilidade",
-    ],
-}
-
-# Descrições humanas de cada micro-diagnóstico para feedback rico
-DEFECT_MICRO_DESCRIPTIONS: Dict[str, str] = {
-    # falha_funcional_logica
-    "erro_off_by_one": "Índices de loops, fatiamento ou intervalos desviados por um elemento (< em vez de <=).",
-    "regra_de_negocio_incompleta": "O fluxo geral foi implementado, mas uma cláusula específica da especificação foi omitida.",
-    "estado_mutavel_inconsistente": "Efeitos colaterais indesejados, mutação acidental de parâmetros ou variáveis compartilhadas.",
-    "inversao_de_predicado": "Operadores booleanos invertidos (and/or, ! mal posicionado ou lógica de curto-circuito errada).",
-    # robustez_e_limites
-    "falta_tratamento_nulo_ou_vazio": "Código lança exceções com coleções vazias ou valores nulos (NullPointerError, AttributeError).",
-    "estouro_de_limites_numericos": "Divisão por zero, overflow de inteiros, perda de precisão em ponto flutuante ou datas inválidas.",
-    "falha_de_tratamento_de_excecoes": "Exceções silenciadas (swallowed) ou ausência de try/catch em operações de I/O e rede.",
-    "condicao_de_corrida_deadlock": "Falta de sincronização em concorrência, locks travados ou async/await mal utilizado.",
-    # integridade_e_seguranca
-    "injecao_e_sanitizacao": "Concatenação direta de parâmetros em SQL, shell ou HTML sem sanitização (CWE-89, CWE-79).",
-    "vazamento_de_recursos": "Conexões de banco, file descriptors ou sockets não fechados após uso (with/try-finally ausente).",
-    "credenciais_hardcoded": "Chaves de API, senhas, tokens ou URLs sensíveis inseridos diretamente no código-fonte.",
-    "autorizacao_e_autenticacao_frouxa": "Falta de validação de escopo, permissões ou tokens antes de executar ações restritas.",
-    # qualidade_de_testes
-    "ausencia_de_testes_unitarios": "Nenhum arquivo ou função de teste foi fornecido na entrega.",
-    "teste_tautologico_ou_falso_positivo": "Testes que sempre passam por mocks excessivos ou asserções triviais (assert True).",
-    "falta_cobertura_caminhos_de_erro": "Testes cobrem apenas o caminho feliz (happy path), sem verificar falhas esperadas.",
-    "testes_nao_reprodutiveis_flaky": "Testes dependem de ordem de execução, sleeps fixos ou estado externo não controlado.",
-    # contrato_e_acoplamento
-    "dependencia_ou_import_inexistente": "O código importa pacotes ou funções alucinadas/não declaradas no ambiente do projeto.",
-    "incompatibilidade_de_assinatura": "Quantidade, nome ou tipo de argumentos e retornos divergem da interface esperada.",
-    "violacao_de_schema_de_dados": "Objeto de saída não segue o formato exigido (campos faltantes ou tipos errados em JSON/dicts).",
-    "quebra_de_retrocompatibilidade": "Alterações que quebram contratos públicos existentes sem migração documentada.",
+# Descrições de cada defeito para feedback legível ao agente
+DEFECT_DESCRIPTIONS: Dict[str, str] = {
+    # Falhas funcionais / lógicas
+    "erro_off_by_one": (
+        "Índices de loops, fatiamento ou intervalos desviados por um elemento (< em vez de <=)."
+    ),
+    "regra_de_negocio_incompleta": (
+        "O fluxo geral foi implementado, mas uma cláusula específica da especificação foi omitida."
+    ),
+    "estado_mutavel_inconsistente": (
+        "Efeitos colaterais indesejados, mutação acidental de parâmetros ou variáveis compartilhadas."
+    ),
+    "inversao_de_predicado": (
+        "Operadores booleanos invertidos (and/or, ! mal posicionado ou lógica de curto-circuito errada)."
+    ),
+    # Robustez e limites
+    "falta_tratamento_nulo_ou_vazio": (
+        "Código lança exceções com coleções vazias ou valores nulos (NullPointerError, AttributeError)."
+    ),
+    "estouro_de_limites_numericos": (
+        "Divisão por zero, overflow de inteiros, perda de precisão em ponto flutuante ou datas inválidas."
+    ),
+    "falha_de_tratamento_de_excecoes": (
+        "Exceções silenciadas (swallowed) ou ausência de try/catch em operações de I/O e rede."
+    ),
+    "condicao_de_corrida_deadlock": (
+        "Falta de sincronização em concorrência, locks travados ou async/await mal utilizado."
+    ),
+    # Integridade e segurança
+    "injecao_e_sanitizacao": (
+        "Concatenação direta de parâmetros em SQL, shell ou HTML sem sanitização (CWE-89, CWE-79)."
+    ),
+    "vazamento_de_recursos": (
+        "Conexões de banco, file descriptors ou sockets não fechados após uso (with/try-finally ausente)."
+    ),
+    "credenciais_hardcoded": (
+        "Chaves de API, senhas, tokens ou URLs sensíveis inseridos diretamente no código-fonte."
+    ),
+    "autorizacao_e_autenticacao_frouxa": (
+        "Falta de validação de escopo, permissões ou tokens antes de executar ações restritas."
+    ),
+    # Qualidade de testes
+    "ausencia_de_testes_unitarios": (
+        "Nenhum arquivo ou função de teste foi fornecido na entrega."
+    ),
+    "teste_tautologico_ou_falso_positivo": (
+        "Testes que sempre passam por mocks excessivos ou asserções triviais (assert True)."
+    ),
+    "falta_cobertura_caminhos_de_erro": (
+        "Testes cobrem apenas o caminho feliz (happy path), sem verificar falhas esperadas."
+    ),
+    "testes_nao_reprodutiveis_flaky": (
+        "Testes dependem de ordem de execução, sleeps fixos ou estado externo não controlado."
+    ),
+    # Contrato e acoplamento
+    "dependencia_ou_import_inexistente": (
+        "O código importa pacotes ou funções alucinadas/não declaradas no ambiente do projeto."
+    ),
+    "incompatibilidade_de_assinatura": (
+        "Quantidade, nome ou tipo de argumentos e retornos divergem da interface esperada."
+    ),
+    "violacao_de_schema_de_dados": (
+        "Objeto de saída não segue o formato exigido (campos faltantes ou tipos errados em JSON/dicts)."
+    ),
+    "quebra_de_retrocompatibilidade": (
+        "Alterações que quebram contratos públicos existentes sem migração documentada."
+    ),
+    # Ambiente, performance e escopo
+    "incompatibilidade_de_ambiente_ou_runtime": (
+        "O código assume versão específica de linguagem (ex: Python 3.12+ em runtime 3.10), "
+        "SO específico (caminhos Windows em Linux) ou flags de compilação inexistentes."
+    ),
+    "gargalo_de_performance_ou_complexidade": (
+        "A solução funciona, mas possui complexidade algorítmica inaceitável (O(n²) ou O(2ⁿ) onde "
+        "cabia O(n)), consumo excessivo de memória ou gera time-out no runner de execução."
+    ),
+    "alucinacao_de_efeitos_colaterais_externos": (
+        "O código tenta acessar serviços externos indisponíveis, assume rede sempre acessível sem "
+        "retry/circuit-breaker, ou depende de variáveis de ambiente não declaradas nem documentadas."
+    ),
+    "desvio_de_escopo_ou_overengineering": (
+        "O agente implementou classes abstratas, design patterns complexos ou funcionalidades não "
+        "pedidas, introduzindo fragilidades desnecessárias (YAGNI — You Aren't Gonna Need It)."
+    ),
+    "inconsistencia_estilistica_ou_linting_estrito": (
+        "O código quebra pipelines de CI/CD por violações de formatação, docstrings obrigatórias, "
+        "naming conventions proibidas ou regras estritas de linter do repositório."
+    ),
+    "stub_ou_mock_em_producao": (
+        "Uso de dados mockados, retornos simulados (hardcoded) ou stubs dentro do código de "
+        "produção em vez da implementação real."
+    ),
 }
 
 
 class DiagnosisResult(BaseModel):
-    """Resultado completo do diagnóstico em dois níveis após reprovação no Score."""
-    macro_category: str = Field(
+    """Resultado do diagnóstico de defeito via choice único sobre 26 opções flat."""
+    selected: str = Field(
         ...,
-        description="Macro-categoria de defeito selecionada pelo Laya (Nível 1 da árvore de diagnóstico).",
+        description="Defeito selecionado pelo Laya dentre as 26 opções da taxonomia flat.",
     )
-    macro_confidence: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Confiança do Laya na seleção da macro-categoria (probabilidade da opção vencedora).",
-    )
-    macro_probabilities: Dict[str, float] = Field(
-        default_factory=dict,
-        description="Distribuição completa de probabilidades sobre as 5 macro-categorias.",
-    )
-    micro_diagnosis: str = Field(
-        ...,
-        description="Micro-diagnóstico específico dentro da macro-categoria (Nível 2 da árvore).",
-    )
-    micro_confidence: float = Field(
+    confidence: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="Confiança do Laya na seleção do micro-diagnóstico.",
+        description="Probabilidade da opção vencedora (confiança do Laya na seleção).",
     )
-    micro_probabilities: Dict[str, float] = Field(
+    probabilities: Dict[str, float] = Field(
         default_factory=dict,
-        description="Distribuição completa de probabilidades sobre os 4 micro-diagnósticos do nível 2.",
+        description="Distribuição completa de probabilidades sobre todas as 26 opções.",
     )
     description: str = Field(
         ...,
-        description="Descrição legível do micro-diagnóstico identificado para feedback ao agente.",
+        description="Descrição legível do defeito identificado para feedback ao agente.",
     )
     diagnosis_latency_ms: float = Field(
         ...,
         ge=0.0,
-        description="Latência total das duas chamadas choice de diagnóstico em milissegundos.",
+        description="Latência da chamada de choice em milissegundos.",
     )
 
 
 class ScoreDiagnoseResponse(BaseModel):
-    """Resposta unificada da validação Score + Diagnóstico em Árvore (quando score < threshold).
+    """Resposta unificada: Score + Diagnóstico flat (quando score < threshold).
 
     Se passed=True, o campo 'diagnosis' é None.
-    Se passed=False, 'diagnosis' contém o resultado completo L1+L2 da árvore de defeitos.
+    Se passed=False, 'diagnosis' contém o defeito identificado pelo choice único.
     """
     # --- Campos do Score (sempre presentes) ---
     score: float = Field(..., description="Nota contínua calculada pelo Laya (escala 1.0–5.0).")
@@ -344,15 +388,15 @@ class ScoreDiagnoseResponse(BaseModel):
     breakdown: Dict[str, float] = Field(default_factory=dict, description="Pesos por nível de qualidade.")
     score_latency_ms: float = Field(..., ge=0.0, description="Latência da inferência de score em ms.")
 
-    # --- Campos do Diagnóstico (apenas quando passed=False) ---
+    # --- Diagnóstico (apenas quando passed=False) ---
     diagnosis: Optional["DiagnosisResult"] = Field(
         default=None,
-        description="Árvore de diagnóstico L1+L2. Presente apenas quando passed=False.",
+        description="Defeito identificado pelo choice flat. Presente apenas quando passed=False.",
     )
 
-    # --- Controle Anti-Gaming (herdado do score) ---
-    attempts: int = Field(default=1, description="Número de tentativas consecutivas sem aprovação.")
-    max_attempts: int = Field(default=10, description="Máximo de tentativas antes da saída de emergência.")
+    # --- Controle Anti-Gaming ---
+    attempts: int = Field(default=1, description="Tentativas consecutivas sem aprovação.")
+    max_attempts: int = Field(default=10, description="Máximo antes da saída de emergência.")
     emergency_exit_unlocked: bool = Field(default=False, description="True após 10 tentativas sem refatoração.")
 
 

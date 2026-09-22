@@ -152,10 +152,9 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "name": "openjev_score_and_diagnose",
             "description": (
                 "Avalia a qualidade de um artefato técnico com score contínuo (1.0–5.0) e, "
-                "se a nota de corte não for atingida, executa automaticamente dois choice em cascata "
-                "para identificar a natureza do defeito: "
-                "(L1) Macro-categoria ortogonal de falha entre 5 dimensões; "
-                "(L2) Micro-diagnóstico específico entre os 4 subtipos da categoria eleita. "
+                "se a nota de corte não for atingida, executa um choice único sobre 26 possíveis "
+                "defeitos flat e retorna o defeito identificado com confiança, distribuição de "
+                "probabilidades completa e descrição legível para auto-correção precisa. "
                 "Use este tool como substituto completo do openjev_score_evaluate quando feedback "
                 "estruturado de auto-correção for necessário."
             ),
@@ -180,7 +179,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "number",
                         "default": 3.60,
                         "description": (
-                            "Nota de corte. Se score < threshold, dispara a árvore de diagnóstico L1→L2. "
+                            "Nota de corte. Se score < threshold, dispara o choice flat de diagnóstico (26 opções). "
                             "Padrão Laya calibrado: 3.60."
                         ),
                     },

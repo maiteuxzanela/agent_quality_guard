@@ -27,13 +27,21 @@ O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
 
 ## 2. Taxonomia de Diagnóstico (openjev_score_and_diagnose)
 
-Quando `score < threshold`, o motor executa dois `choice` em cascata:
+Quando `score < threshold`, o motor executa um **choice único** sobre **26 opções flat** (sem hierarquia L1/L2):
 
-**Nível 1 — Macro-Categorias:**
-`falha_funcional_logica` | `robustez_e_limites` | `integridade_e_seguranca` | `qualidade_de_testes` | `contrato_e_acoplamento`
+**Falhas funcionais/lógicas:** `erro_off_by_one` | `regra_de_negocio_incompleta` | `estado_mutavel_inconsistente` | `inversao_de_predicado`
 
-**Nível 2 — Micro-Diagnósticos (4 por categoria, total 20 combinações):**
-Ver `DEFECT_MICRO_OPTIONS` em `src/core/schemas.py` para o mapeamento completo.
+**Robustez e limites:** `falta_tratamento_nulo_ou_vazio` | `estouro_de_limites_numericos` | `falha_de_tratamento_de_excecoes` | `condicao_de_corrida_deadlock`
+
+**Integridade e segurança:** `injecao_e_sanitizacao` | `vazamento_de_recursos` | `credenciais_hardcoded` | `autorizacao_e_autenticacao_frouxa`
+
+**Qualidade de testes:** `ausencia_de_testes_unitarios` | `teste_tautologico_ou_falso_positivo` | `falta_cobertura_caminhos_de_erro` | `testes_nao_reprodutiveis_flaky`
+
+**Contrato e acoplamento:** `dependencia_ou_import_inexistente` | `incompatibilidade_de_assinatura` | `violacao_de_schema_de_dados` | `quebra_de_retrocompatibilidade`
+
+**Ambiente, performance e escopo:** `incompatibilidade_de_ambiente_ou_runtime` | `gargalo_de_performance_ou_complexidade` | `alucinacao_de_efeitos_colaterais_externos` | `desvio_de_escopo_ou_overengineering` | `inconsistencia_estilistica_ou_linting_estrito` | `stub_ou_mock_em_producao`
+
+Ver `DEFECT_OPTIONS` e `DEFECT_DESCRIPTIONS` em `src/core/schemas.py` para o mapeamento completo.
 
 ---
 

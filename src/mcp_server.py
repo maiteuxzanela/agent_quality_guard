@@ -21,9 +21,8 @@ sys.path.insert(0, str(PROJECT_DIR))
 from mcp.server import MCPServer
 from src.core.schemas import (
     ChoiceRequest,
-    DEFECT_MACRO_CATEGORIES,
-    DEFECT_MICRO_DESCRIPTIONS,
-    DEFECT_MICRO_OPTIONS,
+    DEFECT_DESCRIPTIONS,
+    DEFECT_OPTIONS,
     DiagnosisResult,
     Needle3Query,
     NoulRequest,
@@ -312,12 +311,11 @@ async def openjev_score(
 @app.tool(
     name="openjev_score_and_diagnose",
     description=(
-        "Avaliacao de qualidade com diagnostico estruturado em arvore de dois niveis. "
-        "Se score >= threshold: retorna aprovacao simples. "
-        "Se score < threshold: executa dois choice em cascata — (L1) macro-categoria do defeito "
-        "(falha_funcional_logica | robustez_e_limites | integridade_e_seguranca | "
-        "qualidade_de_testes | contrato_e_acoplamento) e (L2) micro-diagnostico especifico "
-        "dentro da categoria eleita. Retorna feedback estruturado para auto-correcao precisa."
+        "Avaliacao de qualidade com diagnostico estruturado de defeito. "
+        "Se score >= threshold: retorna aprovacao simples (diagnosis=null). "
+        "Se score < threshold: executa um choice unico sobre 26 possiveis defeitos flat e retorna "
+        "o defeito identificado com confianca, distribuicao de probabilidades e descricao legivel "
+        "para auto-correcao precisa pelo agente."
     ),
 )
 async def openjev_score_and_diagnose(
@@ -328,14 +326,13 @@ async def openjev_score_and_diagnose(
     max_score: float = 5.0,
     threshold: float = 3.60,
 ) -> dict:
-    """Executa Score + Diagnóstico em Árvore L1→L2 com cascata condicional de choice."""
-    # DEFECT_MACRO_CATEGORIES, DEFECT_MICRO_OPTIONS, DEFECT_MICRO_DESCRIPTIONS
-    # já importados no topo do módulo via src.core.schemas
+    """Executa Score + Diagnóstico via choice único flat sobre 26 defeitos possíveis."""
+    # DEFECT_OPTIONS e DEFECT_DESCRIPTIONS importados no topo do módulo via src.core.schemas
 
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
     current_git_state = _get_workspace_git_signature(target_workspace)
 
-    # ── Anti-Premise Gaming (mesmo mecanismo do openjev_score) ──────────────
+    # ── Anti-Premise Gaming ──────────────────────────────────────────────────
     hist = _score_history.get(target_workspace)
     if hist and not hist.get("passed", True):
         prev_state = hist.get("git_state", "")
@@ -412,45 +409,27 @@ async def openjev_score_and_diagnose(
         "last_score": round(score_resp.score, 2),
     }
 
-    # ── ETAPA 2: Choice L1 — Macro-Categoria ────────────────────────────────
-    # A premissa para o diagnóstico contextualiza score e breakdown
+    # ── ETAPA 2: Choice único flat — 26 defeitos ──────────────────────────────
     breakdown_str = ", ".join(
-        f"{k}: {v:.2f}" for k, v in score_resp.breakdown.items()
-        if v > 0.05
+        f"{k}: {v:.2f}" for k, v in score_resp.breakdown.items() if v > 0.05
     )
-    diag_premise_l1 = (
-        f"Código avaliado com score {score_resp.score:.2f}/{max_score} (reprovado, corte={threshold}). "
+    diag_premise = (
+        f"Código avaliado com score {score_resp.score:.2f}/{max_score} "
+        f"(reprovado, corte={threshold}). "
         f"Distribuição: {breakdown_str}. "
-        f"Contexto do artefato: {premise[:400]}"
+        f"Contexto do artefato: {premise[:500]}"
     )
 
     t_diag_start = time.perf_counter()
-    l1_req = ChoiceRequest(premise=diag_premise_l1, options=DEFECT_MACRO_CATEGORIES)
-    l1_resp = await engine.evaluate_choice(l1_req)
-    macro_category = l1_resp.selected
-
-    # ── ETAPA 3: Choice L2 — Micro-Diagnóstico (cascata condicional) ────────
-    micro_options = DEFECT_MICRO_OPTIONS[macro_category]
-    diag_premise_l2 = (
-        f"Macro-categoria detectada: {macro_category} "
-        f"(confiança {l1_resp.top_confidence:.2f}). "
-        f"Score: {score_resp.score:.2f}. "
-        f"Contexto: {premise[:400]}"
-    )
-
-    l2_req = ChoiceRequest(premise=diag_premise_l2, options=micro_options)
-    l2_resp = await engine.evaluate_choice(l2_req)
-    micro_diagnosis = l2_resp.selected
+    choice_req = ChoiceRequest(premise=diag_premise, options=DEFECT_OPTIONS)
+    choice_resp = await engine.evaluate_choice(choice_req)
     diag_latency_ms = (time.perf_counter() - t_diag_start) * 1000.0
 
     diagnosis = DiagnosisResult(
-        macro_category=macro_category,
-        macro_confidence=round(l1_resp.top_confidence, 4),
-        macro_probabilities={k: round(v, 4) for k, v in l1_resp.probabilities.items()},
-        micro_diagnosis=micro_diagnosis,
-        micro_confidence=round(l2_resp.top_confidence, 4),
-        micro_probabilities={k: round(v, 4) for k, v in l2_resp.probabilities.items()},
-        description=DEFECT_MICRO_DESCRIPTIONS.get(micro_diagnosis, ""),
+        selected=choice_resp.selected,
+        confidence=round(choice_resp.top_confidence, 4),
+        probabilities={k: round(v, 4) for k, v in choice_resp.probabilities.items()},
+        description=DEFECT_DESCRIPTIONS.get(choice_resp.selected, ""),
         diagnosis_latency_ms=round(diag_latency_ms, 2),
     )
 
