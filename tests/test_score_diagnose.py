@@ -1,4 +1,4 @@
-"""Testes unitários para openjev_score_and_diagnose — cascata Score→Choice L1→Choice L2.
+"""Testes para openjev_score_and_diagnose — cascata Score→Choice L1→Choice L2.
 
 Cobre:
   - Aprovação direta (sem diagnóstico)
@@ -6,6 +6,14 @@ Cobre:
   - Trava anti-premise gaming (sem refatoração)
   - Saída de emergência após 10 tentativas
   - Integridade da taxonomia (todas as 20 combinações L1×L2 existem nos dicionários)
+  - Contrato Pydantic (DiagnosisResult e ScoreDiagnoseResponse sem mock)
+
+⚠️  DÍVIDA TÉCNICA (AGENTS.md §5.2): Os testes das classes TestScoreAndDiagnoseApproved,
+TestScoreAndDiagnoseReprovado, TestAntiGamingAndCircuitBreaker e test_cada_macro_categoria*
+utilizam MagicMock/AsyncMock para substituir o engine real — o que é proibido pela política
+global de mocks. Devem ser migrados para testes de integração reais contra o modelo Laya
+assim que o ambiente de CI suportar carga de GPU ou CPU fallback estável.
+Os testes da classe TestPydanticSchemaIntegration estão em conformidade (sem mock).
 """
 
 import unittest
