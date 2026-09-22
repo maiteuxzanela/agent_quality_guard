@@ -37,7 +37,7 @@ def get_engine() -> OpenJevEngine:
     global _engine_instance
     if _engine_instance is None:
         _engine_instance = OpenJevEngine(
-            model_id_or_path="com-kotobalabs/open-jev-deberta-v3-large",
+            model_id_or_path="convaiinnovations/laya",
             allow_cpu_fallback=True,
         )
         _engine_instance.load_model()
@@ -94,7 +94,7 @@ async def needle3_search(
 
 @app.tool(
     name="openjev_choice",
-    description="Roteamento deterministico de subagente especialista usando Open JEV (DeBERTa-v3 NLI) local na GPU.",
+    description="Roteamento deterministico de subagente especialista usando Laya (RLCD Classifier) local na GPU GTX 1050 Ti.",
 )
 async def openjev_choice(
     premise: str,
@@ -148,12 +148,12 @@ async def openjev_choice(
 
 @app.tool(
     name="openjev_noul",
-    description="Guardrail de validacao pre-acao critica (seguranca, isolamento, transacoes) usando NLI local.",
+    description="Guardrail de validacao pre-acao critica (seguranca, isolamento, transacoes) usando Laya RLCD local na GPU.",
 )
 async def openjev_noul(
     premise: str,
     hypothesis: str,
-    threshold: float = 0.70,
+    threshold: float = 0.78,
 ) -> dict:
     """Verifica se a premissa implica a hipotese de seguranca com probabilidade >= threshold."""
     engine = get_engine()
@@ -209,7 +209,7 @@ def _get_workspace_git_signature(workspace_dir: str) -> str:
 
 @app.tool(
     name="openjev_score",
-    description="Avaliacao ordinal de qualidade de codigo de 1.0 a 5.0 com protecao anti-premise gaming e saida de emergencia.",
+    description="Avaliacao ordinal de qualidade de codigo de 1.0 a 5.0 usando Laya com protecao anti-premise gaming e saida de emergencia.",
 )
 async def openjev_score(
     premise: str,
@@ -217,7 +217,7 @@ async def openjev_score(
     rubric: str = DEFAULT_SCORE_RUBRIC,
     min_score: float = 1.0,
     max_score: float = 5.0,
-    threshold: float = 3.75,
+    threshold: float = 3.60,
 ) -> dict:
     """Avalia conformidade qualitativa em escala continua com travamento anti-gaming e saida de emergencia."""
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
@@ -300,6 +300,170 @@ async def openjev_score(
         "emergency_exit_unlocked": attempts_count >= 10,
         "breakdown": resp.breakdown,
         "latency_ms": round(resp.latency_ms, 2),
+    }
+
+
+
+@app.tool(
+    name="openjev_score_and_diagnose",
+    description=(
+        "Avaliacao de qualidade com diagnostico estruturado em arvore de dois niveis. "
+        "Se score >= threshold: retorna aprovacao simples. "
+        "Se score < threshold: executa dois choice em cascata — (L1) macro-categoria do defeito "
+        "(falha_funcional_logica | robustez_e_limites | integridade_e_seguranca | "
+        "qualidade_de_testes | contrato_e_acoplamento) e (L2) micro-diagnostico especifico "
+        "dentro da categoria eleita. Retorna feedback estruturado para auto-correcao precisa."
+    ),
+)
+async def openjev_score_and_diagnose(
+    premise: str,
+    workspace: str = "",
+    rubric: str = DEFAULT_SCORE_RUBRIC,
+    min_score: float = 1.0,
+    max_score: float = 5.0,
+    threshold: float = 3.60,
+) -> dict:
+    """Executa Score + Diagnóstico em Árvore L1→L2 com cascata condicional de choice."""
+    from src.core.schemas import (
+        DEFECT_MACRO_CATEGORIES,
+        DEFECT_MICRO_DESCRIPTIONS,
+        DEFECT_MICRO_OPTIONS,
+    )
+
+    target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
+    current_git_state = _get_workspace_git_signature(target_workspace)
+
+    # ── Anti-Premise Gaming (mesmo mecanismo do openjev_score) ──────────────
+    hist = _score_history.get(target_workspace)
+    if hist and not hist.get("passed", True):
+        prev_state = hist.get("git_state", "")
+        attempts = hist.get("attempts", 1)
+
+        if current_git_state == prev_state and current_git_state != "":
+            if attempts >= 10:
+                return {
+                    "score": hist.get("last_score", 0.0),
+                    "passed": False,
+                    "threshold": threshold,
+                    "attempts": attempts,
+                    "max_attempts": 10,
+                    "emergency_exit_unlocked": True,
+                    "diagnosis": None,
+                    "message": (
+                        "🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA]: Limite de 10 tentativas atingido. "
+                        "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
+                    ),
+                }
+            else:
+                hist["attempts"] = attempts + 1
+                return {
+                    "error": (
+                        f"🚨 AVALIAÇÃO RECUSADA (Tentativa {attempts}/10): Nenhuma alteração detectada "
+                        "no repositório desde a última reprovação. Refatore o código antes de reavaliar."
+                    ),
+                    "attempts": attempts,
+                    "max_attempts": 10,
+                    "emergency_exit_unlocked": False,
+                }
+
+    engine = get_engine()
+
+    # ── ETAPA 1: Score ───────────────────────────────────────────────────────
+    score_req = ScoreRequest(
+        premise=premise,
+        rubric=rubric,
+        min_score=min_score,
+        max_score=max_score,
+        threshold=threshold,
+    )
+    score_resp = await engine.evaluate_score(score_req)
+
+    # Atualiza histórico
+    if score_resp.passed:
+        _score_history[target_workspace] = {
+            "passed": True,
+            "attempts": 0,
+            "git_state": current_git_state,
+            "last_score": round(score_resp.score, 2),
+        }
+        return {
+            "score": round(score_resp.score, 2),
+            "max_score": max_score,
+            "normalized_score": round(score_resp.normalized_score, 4),
+            "passed": True,
+            "threshold": threshold,
+            "breakdown": score_resp.breakdown,
+            "score_latency_ms": round(score_resp.latency_ms, 2),
+            "diagnosis": None,
+            "attempts": 0,
+            "max_attempts": 10,
+            "emergency_exit_unlocked": False,
+        }
+
+    # Score reprovado — atualiza tentativas
+    prev_attempts = hist.get("attempts", 0) if hist else 0
+    new_attempts = prev_attempts + 1
+    _score_history[target_workspace] = {
+        "passed": False,
+        "attempts": new_attempts,
+        "git_state": current_git_state,
+        "last_score": round(score_resp.score, 2),
+    }
+
+    # ── ETAPA 2: Choice L1 — Macro-Categoria ────────────────────────────────
+    # A premissa para o diagnóstico contextualiza score e breakdown
+    breakdown_str = ", ".join(
+        f"{k}: {v:.2f}" for k, v in score_resp.breakdown.items()
+        if v > 0.05
+    )
+    diag_premise_l1 = (
+        f"Código avaliado com score {score_resp.score:.2f}/{max_score} (reprovado, corte={threshold}). "
+        f"Distribuição: {breakdown_str}. "
+        f"Contexto do artefato: {premise[:400]}"
+    )
+
+    t_diag_start = time.perf_counter()
+    l1_req = ChoiceRequest(premise=diag_premise_l1, options=DEFECT_MACRO_CATEGORIES)
+    l1_resp = await engine.evaluate_choice(l1_req)
+    macro_category = l1_resp.selected
+
+    # ── ETAPA 3: Choice L2 — Micro-Diagnóstico (cascata condicional) ────────
+    micro_options = DEFECT_MICRO_OPTIONS[macro_category]
+    diag_premise_l2 = (
+        f"Macro-categoria detectada: {macro_category} "
+        f"(confiança {l1_resp.top_confidence:.2f}). "
+        f"Score: {score_resp.score:.2f}. "
+        f"Contexto: {premise[:400]}"
+    )
+
+    l2_req = ChoiceRequest(premise=diag_premise_l2, options=micro_options)
+    l2_resp = await engine.evaluate_choice(l2_req)
+    micro_diagnosis = l2_resp.selected
+    diag_latency_ms = (time.perf_counter() - t_diag_start) * 1000.0
+
+    diagnosis = {
+        "macro_category": macro_category,
+        "macro_confidence": round(l1_resp.top_confidence, 4),
+        "macro_probabilities": {k: round(v, 4) for k, v in l1_resp.probabilities.items()},
+        "micro_diagnosis": micro_diagnosis,
+        "micro_confidence": round(l2_resp.top_confidence, 4),
+        "micro_probabilities": {k: round(v, 4) for k, v in l2_resp.probabilities.items()},
+        "description": DEFECT_MICRO_DESCRIPTIONS.get(micro_diagnosis, ""),
+        "diagnosis_latency_ms": round(diag_latency_ms, 2),
+    }
+
+    return {
+        "score": round(score_resp.score, 2),
+        "max_score": max_score,
+        "normalized_score": round(score_resp.normalized_score, 4),
+        "passed": False,
+        "threshold": threshold,
+        "breakdown": score_resp.breakdown,
+        "score_latency_ms": round(score_resp.latency_ms, 2),
+        "diagnosis": diagnosis,
+        "attempts": new_attempts,
+        "max_attempts": 10,
+        "emergency_exit_unlocked": new_attempts >= 10,
     }
 
 

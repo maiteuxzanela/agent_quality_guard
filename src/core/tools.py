@@ -145,7 +145,50 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "required": ["premise", "rubric"]
             }
         }
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "openjev_score_and_diagnose",
+            "description": (
+                "Avalia a qualidade de um artefato técnico com score contínuo (1.0–5.0) e, "
+                "se a nota de corte não for atingida, executa automaticamente dois choice em cascata "
+                "para identificar a natureza do defeito: "
+                "(L1) Macro-categoria ortogonal de falha entre 5 dimensões; "
+                "(L2) Micro-diagnóstico específico entre os 4 subtipos da categoria eleita. "
+                "Use este tool como substituto completo do openjev_score_evaluate quando feedback "
+                "estruturado de auto-correção for necessário."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "premise": {
+                        "type": "string",
+                        "description": "Pedido original concatenado com resultado executado (arquivos modificados, testes, commits).",
+                    },
+                    "rubric": {
+                        "type": "string",
+                        "description": "Rubrica de avaliação. Padrão calibrado: critérios de rigor analítico, clareza e fidelidade ao repositório.",
+                    },
+                    "workspace": {
+                        "type": "string",
+                        "description": "Caminho absoluto do repositório Git para rastreamento anti-premise gaming. Padrão: cwd.",
+                    },
+                    "min_score": {"type": "number", "default": 1.0, "description": "Nota mínima da escala."},
+                    "max_score": {"type": "number", "default": 5.0, "description": "Nota máxima da escala."},
+                    "threshold": {
+                        "type": "number",
+                        "default": 3.60,
+                        "description": (
+                            "Nota de corte. Se score < threshold, dispara a árvore de diagnóstico L1→L2. "
+                            "Padrão Laya calibrado: 3.60."
+                        ),
+                    },
+                },
+                "required": ["premise"],
+            },
+        },
+    },
 ]
 
 
