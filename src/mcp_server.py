@@ -21,9 +21,14 @@ sys.path.insert(0, str(PROJECT_DIR))
 from mcp.server import MCPServer
 from src.core.schemas import (
     ChoiceRequest,
+    DEFECT_MACRO_CATEGORIES,
+    DEFECT_MICRO_DESCRIPTIONS,
+    DEFECT_MICRO_OPTIONS,
+    DiagnosisResult,
     Needle3Query,
     NoulRequest,
     ScoreRequest,
+    ScoreDiagnoseResponse,
 )
 from src.decision.engine import OpenJevEngine
 from src.memory.local_needle import LocalNeedleEngine
@@ -324,11 +329,8 @@ async def openjev_score_and_diagnose(
     threshold: float = 3.60,
 ) -> dict:
     """Executa Score + Diagnóstico em Árvore L1→L2 com cascata condicional de choice."""
-    from src.core.schemas import (
-        DEFECT_MACRO_CATEGORIES,
-        DEFECT_MICRO_DESCRIPTIONS,
-        DEFECT_MICRO_OPTIONS,
-    )
+    # DEFECT_MACRO_CATEGORIES, DEFECT_MICRO_OPTIONS, DEFECT_MICRO_DESCRIPTIONS
+    # já importados no topo do módulo via src.core.schemas
 
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
     current_git_state = _get_workspace_git_signature(target_workspace)
@@ -386,19 +388,19 @@ async def openjev_score_and_diagnose(
             "git_state": current_git_state,
             "last_score": round(score_resp.score, 2),
         }
-        return {
-            "score": round(score_resp.score, 2),
-            "max_score": max_score,
-            "normalized_score": round(score_resp.normalized_score, 4),
-            "passed": True,
-            "threshold": threshold,
-            "breakdown": score_resp.breakdown,
-            "score_latency_ms": round(score_resp.latency_ms, 2),
-            "diagnosis": None,
-            "attempts": 0,
-            "max_attempts": 10,
-            "emergency_exit_unlocked": False,
-        }
+        return ScoreDiagnoseResponse(
+            score=round(score_resp.score, 2),
+            max_score=max_score,
+            normalized_score=round(score_resp.normalized_score, 4),
+            passed=True,
+            threshold=threshold,
+            breakdown=score_resp.breakdown,
+            score_latency_ms=round(score_resp.latency_ms, 2),
+            diagnosis=None,
+            attempts=0,
+            max_attempts=10,
+            emergency_exit_unlocked=False,
+        ).model_dump()
 
     # Score reprovado — atualiza tentativas
     prev_attempts = hist.get("attempts", 0) if hist else 0
@@ -441,30 +443,30 @@ async def openjev_score_and_diagnose(
     micro_diagnosis = l2_resp.selected
     diag_latency_ms = (time.perf_counter() - t_diag_start) * 1000.0
 
-    diagnosis = {
-        "macro_category": macro_category,
-        "macro_confidence": round(l1_resp.top_confidence, 4),
-        "macro_probabilities": {k: round(v, 4) for k, v in l1_resp.probabilities.items()},
-        "micro_diagnosis": micro_diagnosis,
-        "micro_confidence": round(l2_resp.top_confidence, 4),
-        "micro_probabilities": {k: round(v, 4) for k, v in l2_resp.probabilities.items()},
-        "description": DEFECT_MICRO_DESCRIPTIONS.get(micro_diagnosis, ""),
-        "diagnosis_latency_ms": round(diag_latency_ms, 2),
-    }
+    diagnosis = DiagnosisResult(
+        macro_category=macro_category,
+        macro_confidence=round(l1_resp.top_confidence, 4),
+        macro_probabilities={k: round(v, 4) for k, v in l1_resp.probabilities.items()},
+        micro_diagnosis=micro_diagnosis,
+        micro_confidence=round(l2_resp.top_confidence, 4),
+        micro_probabilities={k: round(v, 4) for k, v in l2_resp.probabilities.items()},
+        description=DEFECT_MICRO_DESCRIPTIONS.get(micro_diagnosis, ""),
+        diagnosis_latency_ms=round(diag_latency_ms, 2),
+    )
 
-    return {
-        "score": round(score_resp.score, 2),
-        "max_score": max_score,
-        "normalized_score": round(score_resp.normalized_score, 4),
-        "passed": False,
-        "threshold": threshold,
-        "breakdown": score_resp.breakdown,
-        "score_latency_ms": round(score_resp.latency_ms, 2),
-        "diagnosis": diagnosis,
-        "attempts": new_attempts,
-        "max_attempts": 10,
-        "emergency_exit_unlocked": new_attempts >= 10,
-    }
+    return ScoreDiagnoseResponse(
+        score=round(score_resp.score, 2),
+        max_score=max_score,
+        normalized_score=round(score_resp.normalized_score, 4),
+        passed=False,
+        threshold=threshold,
+        breakdown=score_resp.breakdown,
+        score_latency_ms=round(score_resp.latency_ms, 2),
+        diagnosis=diagnosis,
+        attempts=new_attempts,
+        max_attempts=10,
+        emergency_exit_unlocked=new_attempts >= 10,
+    ).model_dump()
 
 
 if __name__ == "__main__":
