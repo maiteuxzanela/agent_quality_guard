@@ -1,5 +1,11 @@
-"""Testes do LayaAdapter: verifica mapeamento de escala, thresholds recalibrados
-e comportamento de fallback sem depender do modelo real (mock lightweight).
+"""Testes do LayaAdapter: mapeamento de escala ordinal (0-4 → 1-5), thresholds recalibrados
+e comportamento de fallback sem depender do modelo real.
+
+EXCEÇÃO TOLERADA (AGENTS.md §5.2): O MagicMock aqui substitui APENAS a saída bruta do Agent
+interno do Laya (valores numéricos fixos como score_ordinal=2.5) para testar a lógica de
+transformação matemática do adaptador (offset LAYA_ORDINAL_OFFSET, normalização, threshold).
+Não substitui o modelo real nem envolve I/O, rede ou GPU — enquadra-se estritamente na
+exceção de "lógica matemática pura ou transformação de dados".
 """
 
 import asyncio
