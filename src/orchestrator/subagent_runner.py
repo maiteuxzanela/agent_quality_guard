@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -149,6 +150,18 @@ class SubagentRunner:
             k in clean_task_lower for k in ("placa de vídeo", "placa de video", "gpu", "vram", "hardware", "temperatura", "pascal", "1050")
         ):
             execution_report = self._diagnose_gpu_hardware()
+        elif os.getenv("JEV_USE_HERMES", "true").lower() in ("true", "1", "yes"):
+            hermes_bin = shutil.which("hermes") or os.path.expanduser("~/.local/bin/hermes")
+            if os.path.isfile(hermes_bin) and os.access(hermes_bin, os.X_OK):
+                hermes_out = await self._execute_via_hermes(
+                    hermes_bin=hermes_bin,
+                    persona_name=persona_name,
+                    system_prompt=system_prompt,
+                    task=request.task,
+                    workspace=target_workspace,
+                )
+                if hermes_out:
+                    execution_report = hermes_out
 
         # Captura os arquivos modificados no workspace após a tarefa
         diff_files = get_workspace_diff_files(target_workspace)
@@ -288,3 +301,56 @@ class SubagentRunner:
             lines.append(f"- **PyTorch:** Erro: {e}")
 
         return "\n".join(lines)
+
+    async def _execute_via_hermes(
+        self,
+        hermes_bin: str,
+        persona_name: str,
+        system_prompt: str,
+        task: str,
+        workspace: Path,
+    ) -> str:
+        """Executa a tarefa usando o Hermes Agent conectado ao DeepSeek Flash em contexto isolado."""
+        prompt = (
+            f"Você é o especialista [{persona_name}].\n"
+            f"Diretrizes da Persona:\n{system_prompt}\n\n"
+            f"MISSÃO TÉCNICA:\n{task}\n\n"
+            "Execute a missão no workspace e forneça um resumo conciso e factual do que foi implementado."
+        )
+
+        cmd = [
+            hermes_bin,
+            "-z",
+            prompt,
+            "--in",
+            str(workspace),
+            "--yolo",
+        ]
+
+        logger.info(f"Despachando tarefa para Hermes Agent (DeepSeek Flash): [{persona_name}]")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90.0)
+            out_text = stdout.decode("utf-8", errors="replace").strip()
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+
+            if proc.returncode != 0:
+                logger.warning(f"Hermes finalizou com código {proc.returncode}: {err_text}")
+                return f"[Hermes]: {out_text or err_text}"
+
+            return out_text
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            logger.warning("Hermes Agent atingiu timeout de 90s.")
+            return "[Hermes]: Timeout de execução atingido (90s)."
+        except Exception as e:
+            logger.warning(f"Erro ao invocar Hermes Agent: {e}")
+            return f"[Hermes]: Falha na invocação: {e}"
