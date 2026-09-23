@@ -20,6 +20,7 @@ SCORE_PREMISE_MAX_LEN = 1500
 MAX_ATTEMPTS = 5
 
 _score_history: Dict[str, dict] = {}
+_stages_cache: Dict[str, Dict[str, dict]] = {}
 _score_history_lock = threading.Lock()
 
 
@@ -46,6 +47,32 @@ def history_increment_attempts(workspace: str) -> int:
 def history_clear() -> None:
     with _score_history_lock:
         _score_history.clear()
+        _stages_cache.clear()
+
+
+def stages_cache_get(workspace: str, stage_id: str) -> Optional[dict]:
+    """Retorna dados de uma etapa já aprovada em ciclo anterior se presente."""
+    with _score_history_lock:
+        ws_cache = _stages_cache.get(workspace)
+        if not ws_cache:
+            return None
+        entry = ws_cache.get(stage_id)
+        return dict(entry) if entry else None
+
+
+def stages_cache_set(workspace: str, stage_id: str, entry: dict) -> None:
+    """Registra uma etapa aprovada no cache do workspace."""
+    with _score_history_lock:
+        if workspace not in _stages_cache:
+            _stages_cache[workspace] = {}
+        _stages_cache[workspace][stage_id] = entry
+
+
+def stages_cache_clear(workspace: str) -> None:
+    """Limpa o cache de etapas de um workspace específico."""
+    with _score_history_lock:
+        _stages_cache.pop(workspace, None)
+
 
 
 def validate_score_premise(premise: str) -> Optional[str]:

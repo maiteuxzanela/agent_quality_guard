@@ -470,6 +470,19 @@ class DiagnosisResult(BaseModel):
     )
 
 
+class DiffStageResult(BaseModel):
+    """Resultado da avaliação de uma etapa/chunk individual de diff de código."""
+    stage_id: str = Field(..., description="Identificador único da etapa de diff.")
+    file_path: str = Field(..., description="Caminho do arquivo correspondente.")
+    part_index: int = Field(default=1, description="Índice da parte/bloco do arquivo.")
+    total_parts: int = Field(default=1, description="Total de blocos gerados para o arquivo.")
+    score: float = Field(..., description="Nota do Laya para a etapa (1.0 a 5.0).")
+    passed: bool = Field(..., description="Se a etapa foi aprovada individualmente.")
+    borderline: bool = Field(default=False, description="Se a etapa caiu na fronteira probabilística.")
+    cached: bool = Field(default=False, description="Se foi reaproveitada de validação anterior sem nova inferência.")
+    diagnosis: Optional["DiagnosisResult"] = Field(default=None, description="Diagnóstico de defeito se a etapa foi reprovada.")
+
+
 class ScoreDiagnoseResponse(BaseModel):
     """Resposta unificada: Score + Diagnóstico flat (quando score < threshold).
 
@@ -536,6 +549,15 @@ class ScoreDiagnoseResponse(BaseModel):
             "como ruído de fronteira; divulgar score_margin (§4.7). Nula fraca não aprova."
         ),
     )
+
+    # --- Avaliação Multi-Etapas (Diffs Reais) ---
+    stages: List[DiffStageResult] = Field(
+        default_factory=list,
+        description="Lista detalhada das etapas de diff avaliadas.",
+    )
+    total_stages: int = Field(default=1, description="Total de etapas geradas a partir da diff do repositório.")
+    passed_stages: int = Field(default=1, description="Quantidade de etapas aprovadas.")
+    failed_stages: int = Field(default=0, description="Quantidade de etapas reprovadas.")
 
     # --- Controle Anti-Gaming ---
     attempts: int = Field(default=1, description="Tentativas consecutivas sem aprovação.")

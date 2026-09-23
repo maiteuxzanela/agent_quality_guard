@@ -34,12 +34,14 @@ from src.core.schemas import (
     DEFECT_OPTIONS,
     DIAG_CHOICE_INSTRUCTIONS,
     DiagnosisResult,
+    DiffStageResult,
     Needle3Query,
     NoulRequest,
     RUBRIC_CATALOG,
     ScoreRequest,
     ScoreDiagnoseResponse,
 )
+from src.core.diff_inspector import extract_workspace_stages, format_stage_premise
 from src.decision.engine import OpenJevEngine
 from src.decision.laya_adapter import evaluate_borderline_mass_gate
 from src.memory.local_needle import LocalNeedleEngine
@@ -261,6 +263,8 @@ from src.core.score_gate import (  # noqa: E402
     history_increment_attempts as _history_increment_attempts,
     history_set as _history_set,
     resolve_task_rubric as _resolve_task_rubric,
+    stages_cache_get as _stages_cache_get,
+    stages_cache_set as _stages_cache_set,
     validate_score_premise as _validate_score_premise,
     _score_history,
 )
@@ -371,7 +375,181 @@ async def openjev_score_and_diagnose(
 
     engine = await _get_engine_async()
 
-    # ── ETAPA 1: Score ───────────────────────────────────────────────────────
+    # ── Avaliação Multi-Etapas via Diffs Reais do Git ─────────────────────────
+    diff_stages = extract_workspace_stages(target_workspace)
+
+    if diff_stages:
+        evaluated_stages: List[DiffStageResult] = []
+        for st in diff_stages:
+            cached_data = _stages_cache_get(target_workspace, st.stage_id)
+            if cached_data and cached_data.get("passed", False):
+                # Cache Hit: etapa inalterada já aprovada em ciclo anterior
+                evaluated_stages.append(
+                    DiffStageResult(
+                        stage_id=st.stage_id,
+                        file_path=st.file_path,
+                        part_index=st.part_index,
+                        total_parts=st.total_parts,
+                        score=cached_data["score"],
+                        passed=True,
+                        borderline=cached_data.get("borderline", False),
+                        cached=True,
+                        diagnosis=None,
+                    )
+                )
+                continue
+
+            # Avalia a etapa individualmente com o Laya Score
+            st_premise = format_stage_premise(premise, st)
+            st_score_req = ScoreRequest(
+                premise=st_premise,
+                rubric=resolved_rubric,
+                min_score=min_score,
+                max_score=max_score,
+                threshold=threshold,
+            )
+            st_score_resp = await engine.evaluate_score(st_score_req)
+
+            st_passed = st_score_resp.passed
+            st_borderline = bool(st_score_resp.borderline)
+            st_diag = None
+
+            if not st_passed and st_borderline:
+                mass_ok, _, _ = evaluate_borderline_mass_gate(
+                    st_score_resp.breakdown,
+                    healthy_min=BORDERLINE_HEALTHY_MIN_MASS,
+                    flawed_max=BORDERLINE_FLAWED_MAX_MASS,
+                )
+                if mass_ok:
+                    st_passed = True
+
+            if not st_passed:
+                # Dispara choice sobre as 10 categorias no diff da etapa
+                st_diag_premise = (
+                    f"Código alterado avaliado com score {st_score_resp.score:.2f}/{max_score} "
+                    f"(corte={threshold}, borderline={st_borderline}). "
+                    f"Arquivo: {st.file_path} (bloco {st.part_index}/{st.total_parts}).\n"
+                    f"{st.content[:700]}"
+                )
+                t_st_diag = time.perf_counter()
+                st_choice_req = ChoiceRequest(
+                    premise=st_diag_premise,
+                    options=DEFECT_OPTIONS,
+                    instructions=DIAG_CHOICE_INSTRUCTIONS,
+                    criteria=DEFECT_DESCRIPTIONS,
+                )
+                st_choice_resp = await engine.evaluate_choice(st_choice_req)
+                st_diag = DiagnosisResult(
+                    selected=st_choice_resp.selected,
+                    confidence=round(st_choice_resp.top_confidence, 4),
+                    probabilities={k: round(v, 4) for k, v in st_choice_resp.probabilities.items()},
+                    description=DEFECT_DESCRIPTIONS.get(st_choice_resp.selected, ""),
+                    candidate_defects=list(DEFECT_MEMBERS.get(st_choice_resp.selected, [])),
+                    diagnosis_latency_ms=round((time.perf_counter() - t_st_diag) * 1000.0, 2),
+                )
+                if (
+                    st_borderline
+                    and st_diag.selected in NULL_DEFECT_OPTIONS
+                    and st_diag.confidence >= NULL_CHOICE_MIN_CONFIDENCE
+                ):
+                    st_passed = True
+
+            # Registra no cache de etapas aprovadas
+            if st_passed:
+                _stages_cache_set(
+                    target_workspace,
+                    st.stage_id,
+                    {
+                        "score": round(st_score_resp.score, 2),
+                        "passed": True,
+                        "borderline": st_borderline,
+                    },
+                )
+
+            evaluated_stages.append(
+                DiffStageResult(
+                    stage_id=st.stage_id,
+                    file_path=st.file_path,
+                    part_index=st.part_index,
+                    total_parts=st.total_parts,
+                    score=round(st_score_resp.score, 2),
+                    passed=st_passed,
+                    borderline=st_borderline,
+                    cached=False,
+                    diagnosis=st_diag if not st_passed else None,
+                )
+            )
+
+        all_passed = all(s.passed for s in evaluated_stages)
+        passed_cnt = sum(1 for s in evaluated_stages if s.passed)
+        failed_cnt = len(evaluated_stages) - passed_cnt
+        avg_score = round(sum(s.score for s in evaluated_stages) / len(evaluated_stages), 2)
+        any_borderline = any(s.borderline for s in evaluated_stages)
+        first_failure = next((s for s in evaluated_stages if not s.passed), None)
+        global_diag = first_failure.diagnosis if first_failure else None
+
+        if all_passed:
+            _history_set(target_workspace, {
+                "passed": True,
+                "attempts": 0,
+                "git_state": current_git_state,
+                "last_score": avg_score,
+            })
+            return ScoreDiagnoseResponse(
+                score=avg_score,
+                max_score=max_score,
+                normalized_score=round((avg_score - min_score) / (max_score - min_score), 4),
+                passed=True,
+                threshold=threshold,
+                breakdown={},
+                score_latency_ms=0.0,
+                score_margin=round(avg_score - threshold, 4),
+                borderline=any_borderline,
+                task_type=task_type_key,
+                rubric_source=f"catalog:{task_type_key}",
+                diagnosis=None,
+                approved_as_borderline=any_borderline,
+                stages=evaluated_stages,
+                total_stages=len(evaluated_stages),
+                passed_stages=passed_cnt,
+                failed_stages=failed_cnt,
+                attempts=0,
+                max_attempts=MAX_ATTEMPTS,
+                emergency_exit_unlocked=False,
+            ).model_dump()
+        else:
+            prev_attempts = hist.get("attempts", 0) if hist else 0
+            new_attempts = prev_attempts + 1
+            _history_set(target_workspace, {
+                "passed": False,
+                "attempts": new_attempts,
+                "git_state": current_git_state,
+                "last_score": avg_score,
+            })
+            return ScoreDiagnoseResponse(
+                score=avg_score,
+                max_score=max_score,
+                normalized_score=round((avg_score - min_score) / (max_score - min_score), 4),
+                passed=False,
+                threshold=threshold,
+                breakdown={},
+                score_latency_ms=0.0,
+                score_margin=round(avg_score - threshold, 4),
+                borderline=any_borderline,
+                task_type=task_type_key,
+                rubric_source=f"catalog:{task_type_key}",
+                diagnosis=global_diag,
+                approved_as_borderline=False,
+                stages=evaluated_stages,
+                total_stages=len(evaluated_stages),
+                passed_stages=passed_cnt,
+                failed_stages=failed_cnt,
+                attempts=new_attempts,
+                max_attempts=MAX_ATTEMPTS,
+                emergency_exit_unlocked=new_attempts >= MAX_ATTEMPTS,
+            ).model_dump()
+
+    # ── CAMINHO FALLBACK MONO-ETAPA (quando repositório limpo ou sem diffs de código) ─
     score_req = ScoreRequest(
         premise=premise,
         rubric=resolved_rubric,
@@ -381,7 +559,19 @@ async def openjev_score_and_diagnose(
     )
     score_resp = await engine.evaluate_score(score_req)
 
-    # Atualiza histórico
+    # Etapa sintética para preenchimento de contrato
+    mono_stage = DiffStageResult(
+        stage_id="mono_stage_premise",
+        file_path="workspace",
+        part_index=1,
+        total_parts=1,
+        score=round(score_resp.score, 2),
+        passed=score_resp.passed,
+        borderline=bool(score_resp.borderline),
+        cached=False,
+        diagnosis=None,
+    )
+
     if score_resp.passed:
         _history_set(target_workspace, {
             "passed": True,
@@ -403,15 +593,16 @@ async def openjev_score_and_diagnose(
             rubric_source=f"catalog:{task_type_key}",
             diagnosis=None,
             approved_as_borderline=False,
+            stages=[mono_stage],
+            total_stages=1,
+            passed_stages=1,
+            failed_stages=0,
             attempts=0,
             max_attempts=MAX_ATTEMPTS,
             emergency_exit_unlocked=False,
         ).model_dump()
 
-    # ── ETAPA 1.5: Borderline Mass Gate (Critério Probabilístico de Fronteira) ─
-    # Se o score contínuo caiu na fronteira (borderline=True) mas a distribuição
-    # de probabilidade concentra massa saudável >= 85% e massa de falhas <= 12%,
-    # a entrega é matematicamente aprovada sem viés léxico do choice.
+    # Borderline Mass Gate
     if score_resp.borderline:
         mass_approved, p_healthy, p_flawed = evaluate_borderline_mass_gate(
             score_resp.breakdown,
@@ -425,6 +616,7 @@ async def openjev_score_and_diagnose(
                 "git_state": current_git_state,
                 "last_score": round(score_resp.score, 2),
             })
+            mono_stage.passed = True
             return ScoreDiagnoseResponse(
                 score=round(score_resp.score, 2),
                 max_score=max_score,
@@ -439,13 +631,16 @@ async def openjev_score_and_diagnose(
                 rubric_source=f"catalog:{task_type_key}",
                 diagnosis=None,
                 approved_as_borderline=True,
+                stages=[mono_stage],
+                total_stages=1,
+                passed_stages=1,
+                failed_stages=0,
                 attempts=0,
                 max_attempts=MAX_ATTEMPTS,
                 emergency_exit_unlocked=False,
             ).model_dump()
 
-    # ── ETAPA 2: Choice de diagnóstico flat (10 categorias) ───────────────────
-    # Premissa cirúrgica: score + contexto factual neutro.
+    # Choice de diagnóstico flat (10 categorias)
     diag_premise = (
         f"Código avaliado com score {score_resp.score:.2f}/{max_score} "
         f"(corte={threshold}, borderline={bool(score_resp.borderline)}). "
@@ -470,11 +665,8 @@ async def openjev_score_and_diagnose(
         candidate_defects=list(DEFECT_MEMBERS.get(choice_resp.selected, [])),
         diagnosis_latency_ms=round(diag_latency_ms, 2),
     )
+    mono_stage.diagnosis = diagnosis
 
-    # ── Carve-out §4.4: borderline + nula com confiança ≥ mínimo ⇒ APROVADO ─
-    # O Laya escolhe a categoria; o agente não pode "declarar" sem defeito.
-    # Gate: nula fraca (ex. conf 0.216 no FP de injecao) NÃO resgata borderline.
-    # Aprovação borderline zera o histórico (mesmo caminho de aprovação normal).
     null_elected = diagnosis.selected in NULL_DEFECT_OPTIONS
     null_conf_ok = diagnosis.confidence >= NULL_CHOICE_MIN_CONFIDENCE
     if score_resp.borderline and null_elected and null_conf_ok:
@@ -484,6 +676,7 @@ async def openjev_score_and_diagnose(
             "git_state": current_git_state,
             "last_score": round(score_resp.score, 2),
         })
+        mono_stage.passed = True
         return ScoreDiagnoseResponse(
             score=round(score_resp.score, 2),
             max_score=max_score,
@@ -498,12 +691,15 @@ async def openjev_score_and_diagnose(
             rubric_source=f"catalog:{task_type_key}",
             diagnosis=diagnosis,
             approved_as_borderline=True,
+            stages=[mono_stage],
+            total_stages=1,
+            passed_stages=1,
+            failed_stages=0,
             attempts=0,
             max_attempts=MAX_ATTEMPTS,
             emergency_exit_unlocked=False,
         ).model_dump()
 
-    # Reprovação com defeito concreto, nula fraca ou não-borderline: tentativas.
     prev_attempts = hist.get("attempts", 0) if hist else 0
     new_attempts = prev_attempts + 1
     _history_set(target_workspace, {
@@ -527,6 +723,10 @@ async def openjev_score_and_diagnose(
         rubric_source=f"catalog:{task_type_key}",
         diagnosis=diagnosis,
         approved_as_borderline=False,
+        stages=[mono_stage],
+        total_stages=1,
+        passed_stages=0,
+        failed_stages=1,
         attempts=new_attempts,
         max_attempts=MAX_ATTEMPTS,
         emergency_exit_unlocked=new_attempts >= MAX_ATTEMPTS,
