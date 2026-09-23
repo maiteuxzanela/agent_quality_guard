@@ -62,7 +62,7 @@ def get_hardware_profile() -> HardwareProfile:
             supports_bfloat16=False,
             recommended_dtype="float32",
             recommended_device="cpu",
-            recommended_max_length=512,
+            recommended_max_length=1024,
         )
 
     has_cuda = torch.cuda.is_available()
@@ -78,7 +78,7 @@ def get_hardware_profile() -> HardwareProfile:
             supports_bfloat16=False,
             recommended_dtype="float32",
             recommended_device="cpu",
-            recommended_max_length=512,
+            recommended_max_length=1024,
         )
 
     device_name = torch.cuda.get_device_name(0)
@@ -107,7 +107,7 @@ def get_hardware_profile() -> HardwareProfile:
     if free_mb < 2200:
         recommended_device = "cpu"
         recommended_dtype = "float32"
-        recommended_max_length = 512
+        recommended_max_length = 1024
         logger.warning(
             f"VRAM livre na GPU ({free_mb} MB < 2200 MB) insuficiente para operar com segurança "
             "sem asfixiar o compositor desktop. Ativando fallback seguro para CPU."

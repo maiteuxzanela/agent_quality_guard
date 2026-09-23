@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-# Teto seguro de caracteres por etapa (para caber em 512 tokens com instruções)
-DEFAULT_MAX_STAGE_CHARS = 1200
+# Teto seguro de caracteres por etapa (1200 chars calibrado para o Golden Set; configurável via JEV_MAX_STAGE_CHARS)
+DEFAULT_MAX_STAGE_CHARS = int(os.getenv("JEV_MAX_STAGE_CHARS", "1200"))
 
 # Extensões e caminhos ignorados na inspeção de diffs de código
 IGNORE_EXTENSIONS = {

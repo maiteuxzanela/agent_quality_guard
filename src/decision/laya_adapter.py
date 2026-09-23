@@ -19,8 +19,10 @@ Baseado em benchmark: benchmarks/laya_vs_deberta_cpu_stage1.json
 import asyncio
 import logging
 import math
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..core.schemas import (
@@ -151,6 +153,9 @@ def finalize_choice(
     selected = max(probs, key=probs.get)
     return selected, probs[selected], probs
 
+# Checkpoint padrão do sistema (english é calibrado com precisão de segurança no Golden Set)
+LAYA_DEFAULT_CHECKPOINT: str = os.getenv("JEV_LAYA_CHECKPOINT", "english")
+
 # Checkpoints disponíveis por custo de VRAM
 LAYA_CHECKPOINTS = {
     "english": {
@@ -159,13 +164,8 @@ LAYA_CHECKPOINTS = {
         "vram_gb": 1.57,
         "params": "421M",
         "languages": ["en"],
-    },
-    "multilingual": {
-        "repo": "convaiinnovations/laya",
-        "subfolder": "multilingual",
-        "vram_gb": 1.0,
-        "params": "322M",
-        "languages": ["100+"],
+        "max_len": 512,
+        "head_max_len": 192,
     },
     "typed-decisions": {
         "repo": "convaiinnovations/laya",
@@ -173,8 +173,41 @@ LAYA_CHECKPOINTS = {
         "vram_gb": 1.57,
         "params": "421M",
         "languages": ["en"],
+        "max_len": 1024,
+        "head_max_len": 256,
+    },
+    "multilingual": {
+        "repo": "convaiinnovations/laya",
+        "subfolder": "multilingual",
+        "vram_gb": 1.0,
+        "params": "322M",
+        "languages": ["100+"],
+        "max_len": 512,
+        "head_max_len": 192,
     },
 }
+
+
+def _resolve_checkpoint_target(checkpoint_key: str, cfg: Dict[str, Any]) -> tuple[str, Optional[str]]:
+    """Resolve o alvo de carregamento para o Agent Laya.
+
+    Prioriza snapshots locais completos no cache do Hugging Face para subfolders
+    como 'typed-decisions', permitindo execução 100% offline e resiliente sem erros de rede.
+    """
+    subfolder = cfg.get("subfolder")
+    if subfolder:
+        hf_cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / "models--convaiinnovations--laya" / "snapshots"
+        if hf_cache_dir.is_dir():
+            for snap in hf_cache_dir.iterdir():
+                sub_dir = snap / subfolder
+                if (
+                    sub_dir.is_dir()
+                    and (sub_dir / "model.safetensors").exists()
+                    and (sub_dir / "rl_agent_config.json").exists()
+                ):
+                    logger.info(f"Usando snapshot local offline para '{checkpoint_key}': {sub_dir}")
+                    return str(sub_dir), None
+    return cfg["repo"], subfolder
 
 
 class LayaAdapter:
@@ -184,7 +217,7 @@ class LayaAdapter:
     (coexistência na GTX 1050 Ti 4GB é inviável).
 
     Exemplo:
-        adapter = LayaAdapter(checkpoint="multilingual", device="cuda")
+        adapter = LayaAdapter(checkpoint="typed-decisions", device="cuda")
         adapter.load()
         resp = await adapter.evaluate_choice(request)
     """
@@ -212,7 +245,7 @@ class LayaAdapter:
 
     def __init__(
         self,
-        checkpoint: str = "english",
+        checkpoint: Optional[str] = None,
         device: Optional[str] = None,
         noul_threshold_override: Optional[float] = None,
         score_threshold_override: Optional[float] = None,
@@ -220,20 +253,21 @@ class LayaAdapter:
     ):
         """
         Args:
-            checkpoint: Um de 'english', 'multilingual', 'typed-decisions'.
+            checkpoint: Um de 'typed-decisions', 'english', 'multilingual'. Defaults to JEV_LAYA_CHECKPOINT or 'typed-decisions'.
             device: 'cuda', 'cpu', ou None (auto-detecta).
             noul_threshold_override: Sobrescreve o threshold de noul calibrado.
             score_threshold_override: Sobrescreve o threshold de score calibrado.
             allow_cpu_fallback: Se True, cai para CPU em caso de OOM na GPU.
         """
-        if checkpoint not in LAYA_CHECKPOINTS:
-            raise ValueError(
-                f"Checkpoint inválido: {checkpoint!r}. "
-                f"Opções: {list(LAYA_CHECKPOINTS.keys())}"
+        cp_key = checkpoint or LAYA_DEFAULT_CHECKPOINT
+        if cp_key not in LAYA_CHECKPOINTS:
+            logger.warning(
+                f"Checkpoint {cp_key!r} desconhecido. Recorrendo a 'typed-decisions' com fallback para 'english'."
             )
+            cp_key = "typed-decisions" if "typed-decisions" in LAYA_CHECKPOINTS else "english"
 
-        self._checkpoint_key = checkpoint
-        self._checkpoint_cfg = LAYA_CHECKPOINTS[checkpoint]
+        self._checkpoint_key = cp_key
+        self._checkpoint_cfg = LAYA_CHECKPOINTS[cp_key]
         self._device = device
         self._allow_cpu_fallback = allow_cpu_fallback
         self._agent: Any = None
@@ -247,7 +281,8 @@ class LayaAdapter:
         self.score_threshold = score_threshold_override or LAYA_SCORE_THRESHOLD_DEFAULT
 
         logger.info(
-            f"LayaAdapter inicializado | checkpoint={checkpoint} | "
+            f"LayaAdapter inicializado | checkpoint={cp_key} | "
+            f"max_len={self._checkpoint_cfg.get('max_len', 1024)} | "
             f"noul_threshold={self.noul_threshold} | "
             f"score_threshold={self.score_threshold}"
         )
@@ -270,11 +305,13 @@ class LayaAdapter:
             f"no dispositivo '{target_device}'..."
         )
 
+        model_target, subfolder_target = _resolve_checkpoint_target(self._checkpoint_key, cfg)
+
         try:
             self._agent = Agent(
-                cfg["repo"],
+                model_target,
                 device=target_device,
-                subfolder=cfg["subfolder"],
+                subfolder=subfolder_target,
             )
             self.is_ready = True
             logger.info(f"Laya '{self._checkpoint_key}' carregado com sucesso em {target_device}.")
@@ -286,9 +323,9 @@ class LayaAdapter:
                 )
                 try:
                     self._agent = Agent(
-                        cfg["repo"],
+                        model_target,
                         device="cpu",
-                        subfolder=cfg["subfolder"],
+                        subfolder=subfolder_target,
                     )
                     self.is_ready = True
                     logger.info("Laya carregado em CPU (fallback).")

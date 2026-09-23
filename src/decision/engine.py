@@ -63,7 +63,7 @@ class OpenJevEngine:
         if self.is_laya:
             from .laya_adapter import LayaAdapter
             self.laya_adapter = LayaAdapter(
-                checkpoint="english",
+                checkpoint=os.getenv("JEV_LAYA_CHECKPOINT", "english"),
                 device=self.target_device,
                 allow_cpu_fallback=allow_cpu_fallback,
             )
