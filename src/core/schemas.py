@@ -351,7 +351,7 @@ DEFECT_OPTIONS: List[str] = [
     "evidencia_insuficiente",
     "contrato_ambiente",
     "performance_escopo_estilo",
-    "mock_stub_em_producao",
+    "requisito_incompleto_ou_ausente",
     "documentacao_configuracao",
 ]
 
@@ -380,7 +380,7 @@ DEFECT_DESCRIPTIONS: Dict[str, str] = {
     "evidencia_insuficiente": "cannot classify: no evidence",
     "contrato_ambiente": "signature or schema mismatch",
     "performance_escopo_estilo": "bottleneck, scope drift, lint",
-    "mock_stub_em_producao": "fake return in production",
+    "requisito_incompleto_ou_ausente": "missing requested feature",
     "documentacao_configuracao": "docs or config wrong",
 }
 
@@ -424,8 +424,10 @@ DEFECT_MEMBERS: Dict[str, List[str]] = {
         "desvio_de_escopo_ou_overengineering",
         "inconsistencia_estilistica_ou_linting_estrito",
     ],
-    "mock_stub_em_producao": [
-        "stub_ou_mock_em_producao",
+    "requisito_incompleto_ou_ausente": [
+        "funcionalidade_do_pedido_ausente",
+        "requisito_do_prompt_ignorado",
+        "caso_de_borda_do_pedido_faltando",
     ],
     "documentacao_configuracao": [
         "documentacao_ausente_ou_incorreta",

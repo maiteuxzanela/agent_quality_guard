@@ -260,7 +260,7 @@ class TestTaxonomiaFlatIntegridade(unittest.TestCase):
             "qualidade_de_testes",
             "contrato_ambiente",
             "performance_escopo_estilo",
-            "mock_stub_em_producao",
+            "requisito_incompleto_ou_ausente",
             "documentacao_configuracao",
         ]
         for opt in essenciais:
@@ -292,7 +292,7 @@ class TestTaxonomiaFlatIntegridade(unittest.TestCase):
             all_leaves.extend(leaves)
         self.assertEqual(len(all_leaves), len(set(all_leaves)),
                          "Folha duplicada entre categorias de DEFECT_MEMBERS.")
-        self.assertIn("stub_ou_mock_em_producao", DEFECT_MEMBERS["mock_stub_em_producao"])
+        self.assertIn("funcionalidade_do_pedido_ausente", DEFECT_MEMBERS["requisito_incompleto_ou_ausente"])
 
     def test_tool_catalog_reflete_choice_flat(self):
         from src.core.tools import get_tool_definition
@@ -390,11 +390,11 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
     def test_score_diagnose_response_reprovado_com_diagnosis(self):
         from src.core.schemas import DiagnosisResult, ScoreDiagnoseResponse
         diag = DiagnosisResult(
-            selected="mock_stub_em_producao",
+            selected="requisito_incompleto_ou_ausente",
             confidence=0.65,
-            probabilities={"mock_stub_em_producao": 0.65},
-            description=DEFECT_DESCRIPTIONS["mock_stub_em_producao"],
-            candidate_defects=["stub_ou_mock_em_producao"],
+            probabilities={"requisito_incompleto_ou_ausente": 0.65},
+            description=DEFECT_DESCRIPTIONS["requisito_incompleto_ou_ausente"],
+            candidate_defects=["funcionalidade_do_pedido_ausente"],
             diagnosis_latency_ms=33.1,
         )
         resp = ScoreDiagnoseResponse(
@@ -411,8 +411,8 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
         )
         dumped = resp.model_dump()
         self.assertFalse(dumped["passed"])
-        self.assertEqual(dumped["diagnosis"]["selected"], "mock_stub_em_producao")
-        self.assertEqual(dumped["diagnosis"]["candidate_defects"], ["stub_ou_mock_em_producao"])
+        self.assertEqual(dumped["diagnosis"]["selected"], "requisito_incompleto_ou_ausente")
+        self.assertEqual(dumped["diagnosis"]["candidate_defects"], ["funcionalidade_do_pedido_ausente"])
         self.assertEqual(dumped["attempts"], 2)
 
     def test_diagnosis_result_rejeita_confidence_invalida(self):

@@ -95,6 +95,22 @@ class NeedleASTGuard:
         if is_test:
             violations.extend(cls._detect_tautological_tests(tree, lines, file_path))
 
+        # 5. Detecção de Credenciais e Segredos Hardcoded (somente fora de testes)
+        if not is_test:
+            violations.extend(cls._detect_hardcoded_secrets(tree, lines, file_path))
+
+        # 6. Detecção de Injeção de Comandos do Sistema (shell=True com f-string)
+        violations.extend(cls._detect_command_injection(tree, lines, file_path))
+
+        # 7. Detecção de Deserialização Insegura (pickle.loads / yaml.load)
+        violations.extend(cls._detect_insecure_deserialization(tree, lines, file_path))
+
+        # 8. Detecção de Execução Dinâmica Perigosa (eval / exec dinâmico)
+        violations.extend(cls._detect_dangerous_eval_exec(tree, lines, file_path))
+
+        # 9. Detecção de Desativação de Verificação SSL (verify=False)
+        violations.extend(cls._detect_insecure_ssl(tree, lines, file_path))
+
         return violations
 
     @classmethod
@@ -345,6 +361,225 @@ class NeedleASTGuard:
                     )
 
         return violations
+
+    SECRET_VAR_NAMES = re.compile(
+        r"^(API_KEY|SECRET_KEY|PRIVATE_KEY|ACCESS_TOKEN|AUTH_TOKEN|PASSWORD|PASSWD|DB_PASSWORD|SECRET)$",
+        re.IGNORECASE,
+    )
+    SECRET_PATTERNS = (
+        re.compile(r"sk-[a-zA-Z0-9_\-]{20,}"),
+        re.compile(r"ghp_[a-zA-Z0-9]{20,}"),
+        re.compile(r"AKIA[0-9A-Z]{16}"),
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY"),
+    )
+
+    @classmethod
+    def _detect_hardcoded_secrets(
+        cls, tree: ast.AST, lines: List[str], file_path: str
+    ) -> List[ASTViolation]:
+        """Detecta credenciais, tokens de API e senhas expostas no código de produção."""
+        violations: List[ASTViolation] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                # Caso 1: Nome da variável sugestivo (API_KEY, PASSWORD, etc.)
+                is_secret_var = False
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and cls.SECRET_VAR_NAMES.match(target.id):
+                        is_secret_var = True
+                        break
+
+                if is_secret_var and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    val = node.value.value.strip()
+                    # Ignora strings vazias ou placeholders evidentes
+                    if len(val) >= 8 and not any(p in val.lower() for p in ("dummy", "test", "fake", "placeholder", "xxx", "your_")):
+                        violations.append(
+                            ASTViolation(
+                                file_path=file_path,
+                                line_number=node.lineno,
+                                rule_id="hardcoded_secret",
+                                category="seguranca",
+                                message="Credencial ou segredo hardcoded detectado em código de produção.",
+                                snippet=cls._get_snippet(lines, node.lineno),
+                            )
+                        )
+                        continue
+
+                # Caso 2: Padrões regex de tokens conhecidos em qualquer string constante
+                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    val = node.value.value
+                    if any(pat.search(val) for pat in cls.SECRET_PATTERNS):
+                        violations.append(
+                            ASTViolation(
+                                file_path=file_path,
+                                line_number=node.lineno,
+                                rule_id="hardcoded_secret",
+                                category="seguranca",
+                                message="Token de serviço ou chave privada reconhecida exposta no código.",
+                                snippet=cls._get_snippet(lines, node.lineno),
+                            )
+                        )
+
+        return violations
+
+    @classmethod
+    def _detect_command_injection(
+        cls, tree: ast.AST, lines: List[str], file_path: str
+    ) -> List[ASTViolation]:
+        """Detecta execução de comandos do sistema operacional com shell=True e interpolação."""
+        violations: List[ASTViolation] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func_name = ""
+                if isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+                elif isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+
+                # subprocess.run/Popen/call com shell=True
+                if func_name in ("run", "Popen", "call", "check_output", "check_call"):
+                    has_shell_true = any(
+                        kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                        for kw in node.keywords
+                    )
+                    if has_shell_true and node.args:
+                        cmd_arg = node.args[0]
+                        if isinstance(cmd_arg, (ast.JoinedStr, ast.BinOp)):
+                            violations.append(
+                                ASTViolation(
+                                    file_path=file_path,
+                                    line_number=node.lineno,
+                                    rule_id="command_injection",
+                                    category="seguranca",
+                                    message="Injeção de comando do sistema: subprocess com shell=True e comando interpolado dinamicamente.",
+                                    snippet=cls._get_snippet(lines, node.lineno),
+                                )
+                            )
+
+                # os.system / os.popen com interpolação
+                elif func_name in ("system", "popen") and node.args:
+                    cmd_arg = node.args[0]
+                    if isinstance(cmd_arg, (ast.JoinedStr, ast.BinOp)):
+                        violations.append(
+                            ASTViolation(
+                                file_path=file_path,
+                                line_number=node.lineno,
+                                rule_id="command_injection",
+                                category="seguranca",
+                                message=f"Injeção de comando do sistema: chamada '{func_name}' com comando concatenado/interpolado.",
+                                snippet=cls._get_snippet(lines, node.lineno),
+                            )
+                        )
+
+        return violations
+
+    @classmethod
+    def _detect_insecure_deserialization(
+        cls, tree: ast.AST, lines: List[str], file_path: str
+    ) -> List[ASTViolation]:
+        """Detecta deserialização insegura que permite Execução Remota de Código (RCE)."""
+        violations: List[ASTViolation] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func_name = ""
+                module_name = ""
+                if isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+                    if isinstance(node.func.value, ast.Name):
+                        module_name = node.func.value.id
+
+                # pickle.loads / pickle.load
+                if module_name == "pickle" and func_name in ("loads", "load"):
+                    violations.append(
+                        ASTViolation(
+                            file_path=file_path,
+                            line_number=node.lineno,
+                            rule_id="insecure_deserialization",
+                            category="seguranca",
+                            message=f"Deserialização insegura com pickle.{func_name} (risco de RCE).",
+                            snippet=cls._get_snippet(lines, node.lineno),
+                        )
+                    )
+
+                # yaml.load sem SafeLoader
+                elif module_name == "yaml" and func_name == "load":
+                    has_safe_loader = any(
+                        kw.arg == "Loader" and "safe" in getattr(kw.value, "id", "").lower()
+                        for kw in node.keywords
+                    )
+                    if not has_safe_loader:
+                        violations.append(
+                            ASTViolation(
+                                file_path=file_path,
+                                line_number=node.lineno,
+                                rule_id="insecure_deserialization",
+                                category="seguranca",
+                                message="yaml.load sem SafeLoader: risco de deserialização arbitrária.",
+                                snippet=cls._get_snippet(lines, node.lineno),
+                            )
+                        )
+
+        return violations
+
+    @classmethod
+    def _detect_dangerous_eval_exec(
+        cls, tree: ast.AST, lines: List[str], file_path: str
+    ) -> List[ASTViolation]:
+        """Detecta execução dinâmica arbitrária de código via eval/exec com entradas dinâmicas."""
+        violations: List[ASTViolation] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in ("eval", "exec") and node.args:
+                    arg = node.args[0]
+                    # Se não for uma constante literal fixa
+                    if not isinstance(arg, ast.Constant):
+                        violations.append(
+                            ASTViolation(
+                                file_path=file_path,
+                                line_number=node.lineno,
+                                rule_id="dangerous_eval_exec",
+                                category="seguranca",
+                                message=f"Execução dinâmica perigosa de código via '{node.func.id}()' com argumento dinâmico.",
+                                snippet=cls._get_snippet(lines, node.lineno),
+                            )
+                        )
+
+        return violations
+
+    @classmethod
+    def _detect_insecure_ssl(
+        cls, tree: ast.AST, lines: List[str], file_path: str
+    ) -> List[ASTViolation]:
+        """Detecta desativação explícita de verificação de certificados SSL/TLS."""
+        violations: List[ASTViolation] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func_name = ""
+                if isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+                if func_name in ("get", "post", "put", "delete", "request", "patch"):
+                    has_verify_false = any(
+                        kw.arg == "verify" and isinstance(kw.value, ast.Constant) and kw.value.value is False
+                        for kw in node.keywords
+                    )
+                    if has_verify_false:
+                        violations.append(
+                            ASTViolation(
+                                file_path=file_path,
+                                line_number=node.lineno,
+                                rule_id="insecure_ssl_verify",
+                                category="seguranca",
+                                message=f"Desativação insegura de validação SSL (verify=False) na chamada '{func_name}'.",
+                                snippet=cls._get_snippet(lines, node.lineno),
+                            )
+                        )
+
+        return violations
+
 
     @classmethod
     def scan_workspace(cls, workspace_dir: str) -> List[ASTViolation]:

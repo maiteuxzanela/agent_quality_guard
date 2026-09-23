@@ -118,6 +118,60 @@ class TestNeedleASTGuard(unittest.TestCase):
         violations = NeedleASTGuard.scan_content(code, "tests/test_calc.py")
         self.assertEqual(len(violations), 0)
 
+    def test_detect_hardcoded_secrets(self):
+        code = (
+            "def setup_client():\n"
+            "    API_KEY = 'sk-proj-1234567890abcdef1234567890'\n"
+            "    return API_KEY\n"
+        )
+        violations = NeedleASTGuard.scan_content(code, "src/client.py")
+        self.assertTrue(len(violations) >= 1)
+        self.assertEqual(violations[0].rule_id, "hardcoded_secret")
+        self.assertEqual(violations[0].category, "seguranca")
+
+    def test_detect_command_injection(self):
+        code = (
+            "import subprocess\n"
+            "def run_user_cmd(cmd_input):\n"
+            "    return subprocess.run(f'echo {cmd_input}', shell=True, capture_output=True)\n"
+        )
+        violations = NeedleASTGuard.scan_content(code, "src/terminal.py")
+        self.assertTrue(len(violations) >= 1)
+        self.assertEqual(violations[0].rule_id, "command_injection")
+        self.assertEqual(violations[0].category, "seguranca")
+
+    def test_detect_insecure_deserialization(self):
+        code = (
+            "import pickle\n"
+            "def load_payload(raw_bytes):\n"
+            "    return pickle.loads(raw_bytes)\n"
+        )
+        violations = NeedleASTGuard.scan_content(code, "src/serializer.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].rule_id, "insecure_deserialization")
+        self.assertEqual(violations[0].category, "seguranca")
+
+    def test_detect_dangerous_eval(self):
+        code = (
+            "def compute_calc(user_expr):\n"
+            "    return eval(user_expr)\n"
+        )
+        violations = NeedleASTGuard.scan_content(code, "src/calculator.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].rule_id, "dangerous_eval_exec")
+        self.assertEqual(violations[0].category, "seguranca")
+
+    def test_detect_insecure_ssl_verify(self):
+        code = (
+            "import requests\n"
+            "def fetch_data(url):\n"
+            "    return requests.get(url, verify=False)\n"
+        )
+        violations = NeedleASTGuard.scan_content(code, "src/network.py")
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0].rule_id, "insecure_ssl_verify")
+        self.assertEqual(violations[0].category, "seguranca")
+
 
 class TestNeedleASTGuardMCPIntegration(unittest.IsolatedAsyncioTestCase):
     """Garante que o openjev_score_and_diagnose no MCP Server reprova fail-fast."""
