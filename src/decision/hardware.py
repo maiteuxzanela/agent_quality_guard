@@ -101,14 +101,16 @@ def get_hardware_profile() -> HardwareProfile:
         free_mb = 0
         total_mb = 4096
 
-    # Na 1050 Ti (4GB): se VRAM livre for menor que 1GB, sugerir CPU fallback
-    if free_mb < 800:
+    # Na 1050 Ti (4GB): o modelo Laya ocupa ~1.6 GB. Exigimos pelo menos 2.2 GB livres
+    # para garantir que o compositor Wayland (COSMIC) e as janelas da IDE mantenham
+    # pelo menos 600-800 MB de VRAM dedicados para renderização sem glitches.
+    if free_mb < 2200:
         recommended_device = "cpu"
         recommended_dtype = "float32"
         recommended_max_length = 512
         logger.warning(
-            f"VRAM livre na GPU ({free_mb} MB) insuficiente para carregar modelo discriminativo. "
-            "Recomendando fallback para CPU."
+            f"VRAM livre na GPU ({free_mb} MB < 2200 MB) insuficiente para operar com segurança "
+            "sem asfixiar o compositor desktop. Ativando fallback seguro para CPU."
         )
     else:
         recommended_device = "cuda:0"
