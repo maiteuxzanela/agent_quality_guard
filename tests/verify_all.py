@@ -78,14 +78,17 @@ class TestHardware(unittest.TestCase):
 class TestToolsCatalog(unittest.TestCase):
     def test_all_tools_present(self):
         names = [t["function"]["name"] for t in TOOL_DEFINITIONS]
-        self.assertIn("needle3_relational_search", names)
-        self.assertIn("openjev_noul_guardrail", names)
-        self.assertIn("openjev_choice_route", names)
-        self.assertIn("openjev_score_evaluate", names)
+        self.assertIn("needle3_search", names)
+        self.assertIn("openjev_noul", names)
+        self.assertIn("openjev_choice", names)
+        self.assertNotIn("openjev_score_evaluate", names)
+        self.assertIn("openjev_score_and_diagnose", names)
+        self.assertIn("openjev_consulta", names)
 
     def test_get_tool(self):
-        tool = get_tool_definition("openjev_noul_guardrail")
+        tool = get_tool_definition("openjev_noul")
         self.assertEqual(tool["type"], "function")
+        self.assertNotIn("MANDATÓRIO", tool["function"]["description"])
 
 
 import json
@@ -145,7 +148,10 @@ class TestServerAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["error"], "OpenJevNotReadyError")
 
     async def test_failfast_score(self):
-        status_code, data = await asgi_request(self.app, "POST", "/v1/decision/score", json_body={"premise": "a", "rubric": "b"})
+        status_code, data = await asgi_request(
+            self.app, "POST", "/v1/decision/score",
+            json_body={"premise": "Pedido: a | Resultado: b"},
+        )
         self.assertEqual(status_code, 503)
         self.assertEqual(data["error"], "OpenJevNotReadyError")
 

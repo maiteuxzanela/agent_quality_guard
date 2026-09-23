@@ -19,6 +19,7 @@ from src.core.schemas import (
     ChoiceRequest,
     Needle3Query,
     NoulRequest,
+    RUBRIC_CATALOG,
     ScoreRequest,
 )
 from src.decision.engine import OpenJevEngine
@@ -139,9 +140,21 @@ async def cmd_score(args):
         sys.exit(2)
 
     engine = get_engine(args.model)
+    task_type = (args.task_type or "entrega").strip().lower()
+    if task_type not in RUBRIC_CATALOG:
+        options = ", ".join(sorted(RUBRIC_CATALOG))
+        print(f"Erro: --task-type inválido '{task_type}'. Opções: {options}.", file=sys.stderr)
+        sys.exit(2)
+    rubric = RUBRIC_CATALOG[task_type]
+    if args.rubric:
+        print(
+            "Aviso: --rubric é ignorado — a rubrica vem do catálogo fechado "
+            f"por --task-type ({task_type}).",
+            file=sys.stderr,
+        )
     req = ScoreRequest(
         premise=premise_content,
-        rubric=args.rubric,
+        rubric=rubric,
         min_score=args.min_score,
         max_score=args.max_score,
         threshold=args.threshold,
@@ -159,14 +172,21 @@ async def cmd_score(args):
     print(f"Veredito: {status_tag}")
     print(f"Nota Obtida: {resp.score:.2f} / {args.max_score:.1f} (Corte Mínimo: >= {args.threshold:.1f})")
     print(f"Nota Normalizada: {resp.normalized_score * 100:.1f}%")
-    print(f"Rubrica de Avaliação: '{args.rubric}'")
+    print(f"Rubrica de Avaliação: catalog:{task_type}")
+    if resp.score_margin is not None:
+        print(f"Margem: {resp.score_margin:+.2f} | Borderline: {resp.borderline}")
     print("=" * 70)
 
     if resp.passed is False:
         sys.exit(1)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Constrói o parser completo do CLI (sem executar parse_args).
+
+    Exposto para que os testes de regressão inspecionem os defaults REAIS
+    (modelo, thresholds) em vez de replicarem o parser num espelho.
+    """
     parser = argparse.ArgumentParser(
         prog="jev",
         description="CLI do Ecossistema JEV (Cactus Needle 3 + Open Jev Local na GTX 1050 Ti)",
@@ -189,8 +209,8 @@ def main():
     p_choice.add_argument(
         "--options",
         "-o",
-        default="alex_cto,ariel_brand,lumi_ux,sam_payments,cris_merchant,morgan_security,noa_growth,robin_qa",
-        help="Opções de subagentes separadas por vírgula",
+        required=True,
+        help="Opções formais de roteamento separadas por vírgula (obrigatório — sem roster hardcoded)",
     )
     p_choice.add_argument("--temperature", "-t", type=float, default=1.0, help="Temperatura do softmax")
     p_choice.add_argument("--model", default="convaiinnovations/laya", help="Modelo Open Jev (default: Laya)")
@@ -200,7 +220,7 @@ def main():
     p_noul = subparsers.add_parser("noul", help="Guardrail pré-ação crítica via noul")
     p_noul.add_argument("premise", help="Ação, comando ou modificação proposta")
     p_noul.add_argument("--hypothesis", "-y", required=True, help="Condição de segurança a validar")
-    p_noul.add_argument("--threshold", "-t", type=float, default=0.85, help="Limiar de aprovação (default: 0.85)")
+    p_noul.add_argument("--threshold", "-t", type=float, default=0.78, help="Limiar de aprovação calibrado Laya (default: 0.78)")
     p_noul.add_argument("--model", default="convaiinnovations/laya", help="Modelo Open Jev (default: Laya)")
     p_noul.add_argument("--json", action="store_true", help="Saída em formato JSON estruturado")
 
@@ -208,13 +228,25 @@ def main():
     p_score = subparsers.add_parser("score", help="Avaliação ordinal e nota de conformidade via score")
     p_score.add_argument("premise", nargs="?", default="", help="Conteúdo do artefato ou diff")
     p_score.add_argument("--file", "-f", help="Caminho do arquivo para avaliar")
-    p_score.add_argument("--rubric", "-r", required=True, help="Critérios de qualidade e rubrica")
+    p_score.add_argument(
+        "--rubric", "-r", default=None,
+        help="DEPRECIADO e ignorado — rubrica vem do catálogo fechado por --task-type",
+    )
+    p_score.add_argument(
+        "--task-type", default="entrega",
+        help="Chave do catálogo RUBRIC_CATALOG: entrega | auditoria | codigo_producao (default: entrega)",
+    )
     p_score.add_argument("--min-score", type=float, default=1.0, help="Nota mínima (default: 1.0)")
     p_score.add_argument("--max-score", type=float, default=5.0, help="Nota máxima (default: 5.0)")
-    p_score.add_argument("--threshold", "-t", type=float, default=4.0, help="Nota de corte para aprovação (default: 4.0)")
+    p_score.add_argument("--threshold", "-t", type=float, default=3.40, help="Nota de corte calibrada Laya (default: 3.40)")
     p_score.add_argument("--model", default="convaiinnovations/laya", help="Modelo Open Jev (default: Laya)")
     p_score.add_argument("--json", action="store_true", help="Saída em formato JSON estruturado")
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "needle":

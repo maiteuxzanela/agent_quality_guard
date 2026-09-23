@@ -28,7 +28,7 @@ class GuardrailInterceptor:
     def __init__(
         self,
         engine: OpenJevEngine,
-        default_threshold: float = 0.85,
+        default_threshold: float = 0.78,
     ):
         self.engine = engine
         self.default_threshold = default_threshold

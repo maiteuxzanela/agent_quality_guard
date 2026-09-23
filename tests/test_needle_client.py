@@ -9,7 +9,7 @@ from src.memory.needle_client import Needle3Client
 @pytest.mark.asyncio
 async def test_needle3_client_fails_fast_on_unreachable_host():
     # Endereço local inexistente para verificar falha de conexão sem mock
-    client = Needle3Client(api_endpoint="http://127.0.0.1:59999", timeout_seconds=1.0)
+    client = Needle3Client(mode="cloud", api_key="dummy_key", api_endpoint="http://127.0.0.1:59999", timeout_seconds=1.0)
     query = Needle3Query(query="Find authentication middleware")
 
     with pytest.raises(Needle3NotAvailableError) as exc_info:

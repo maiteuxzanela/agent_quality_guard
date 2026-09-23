@@ -6,6 +6,8 @@ from pydantic import ValidationError
 from src.core.schemas import (
     ChoiceRequest,
     ChoiceResponse,
+    ConsultaRequest,
+    ConsultaResponse,
     Needle3Query,
     Needle3Response,
     Needle3Snippet,
@@ -14,6 +16,18 @@ from src.core.schemas import (
     ScoreRequest,
     ScoreResponse,
 )
+
+
+def test_noul_request_default_threshold_is_calibrated_078():
+    """Default do schema deve ser o cut calibrado Laya (0.78), não o DeBERTa 0.5/0.85."""
+    req = NoulRequest(premise="cmd", hypothesis="safe")
+    assert req.threshold == 0.78
+
+
+def test_score_request_default_threshold_is_calibrated_340():
+    """Default do schema deve ser o corte calibrado Laya (3.40), não o DeBERTa 3.75."""
+    req = ScoreRequest(premise="Pedido: x | Resultado: y")
+    assert req.threshold == 3.40
 
 
 def test_noul_request_and_response():
@@ -52,6 +66,23 @@ def test_choice_request_valid():
     )
     assert len(req.options) == 4
     assert req.temperature == 0.8
+    assert req.instructions is None
+    assert req.criteria is None
+
+
+def test_choice_request_com_criteria_e_instructions():
+    """Choice de diagnóstico serve descriptions como criteria e instrução própria."""
+    req = ChoiceRequest(
+        premise="Score 2.1 reprovado",
+        options=["seguranca", "qualidade_de_testes"],
+        instructions="Which defect explains the failure?",
+        criteria={
+            "seguranca": "security: injection",
+            "qualidade_de_testes": "test quality",
+        },
+    )
+    assert req.instructions == "Which defect explains the failure?"
+    assert req.criteria["seguranca"] == "security: injection"
 
 
 def test_choice_request_duplicate_options():
@@ -117,3 +148,47 @@ def test_needle3_query_and_response():
     )
     assert len(resp.snippets) == 1
     assert resp.total_tokens == 120
+
+
+# ─── Consulta direta (indício textual, sem booleano de aprovação) ─────────────
+
+def test_consulta_request_and_response():
+    req = ConsultaRequest(
+        premise="def add(a, b): return a + b\nassert add(1, 2) == 3",
+        question="Este script funciona para somar dois inteiros?",
+    )
+    assert req.premise.startswith("def add")
+    assert "script" in req.question
+
+    res = ConsultaResponse(
+        indicio="Indício forte a favor de que a resposta é verdadeira (P=0.9100).",
+        probability=0.91,
+        confidence=0.82,
+        latency_ms=14.7,
+    )
+    dumped = res.model_dump()
+    assert "passed" not in dumped, (
+        "ConsultaResponse não pode expor booleano de aprovação — contrato de indício."
+    )
+    assert dumped["probability"] == 0.91
+
+
+def test_consulta_response_rejects_passed_field():
+    """Contrato extra='forbid': booleano de aprovação é rejeitado no schema."""
+    with pytest.raises(ValidationError):
+        ConsultaResponse.model_validate(
+            {
+                "indicio": "x",
+                "probability": 0.5,
+                "confidence": 0.0,
+                "latency_ms": 1.0,
+                "passed": True,
+            }
+        )
+
+
+def test_consulta_request_empty_fields_rejected():
+    with pytest.raises(ValidationError):
+        ConsultaRequest(premise="", question="funciona?")
+    with pytest.raises(ValidationError):
+        ConsultaRequest(premise="código x", question="")

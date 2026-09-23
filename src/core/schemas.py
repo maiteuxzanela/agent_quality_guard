@@ -5,7 +5,7 @@
 """
 
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ==============================================================================
@@ -57,10 +57,10 @@ class NoulRequest(BaseModel):
         description="Condição de segurança, regra de negócio ou predicado a validar (deve ser verdadeiro/falso)."
     )
     threshold: float = Field(
-        default=0.5,
+        default=0.78,
         ge=0.0,
         le=1.0,
-        description="Limiar de probabilidade mínima para considerar a condição verdadeira."
+        description="Limiar de probabilidade mínima para considerar a condição verdadeira (guardrail calibrado 0.78)."
     )
 
 
@@ -110,6 +110,20 @@ class ChoiceRequest(BaseModel):
         min_length=2,
         description="Lista de categorias ou subagentes disponíveis (ex.: backend, security, frontend, docs)."
     )
+    instructions: Optional[str] = Field(
+        default=None,
+        description=(
+            "Instrução específica do choice. Se None, usa o padrão de roteamento "
+            "('Which specialist agent should handle this task?')."
+        ),
+    )
+    criteria: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Mapa opção -> descrição descritiva servida ao modelo como critérios. "
+            "Se None, usa o próprio nome da opção como critério (comportamento legado)."
+        ),
+    )
     temperature: float = Field(
         default=1.0,
         gt=0.0,
@@ -148,8 +162,97 @@ class ChoiceResponse(BaseModel):
 
 
 # ==============================================================================
+# Schemas Open Jev: Consulta Direta (Indício Textual — sem booleano de aprovação)
+# ==============================================================================
+
+class ConsultaRequest(BaseModel):
+    """Requisição de consulta direta (ex.: 'esse script funciona?').
+
+    A resposta é um INDÍCIO, não um veredito. Reformular a premissa para
+    arrancar uma resposta pré-definida é premise gaming e está proibido
+    pela governança (AGENTS.md).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    premise: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Evidência objetiva: trecho do script, schema do banco, amostra de dados "
+            "ou estado real observado."
+        ),
+    )
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="Pergunta direta a ser respondida como indício textual.",
+    )
+
+
+class ConsultaResponse(BaseModel):
+    """Resposta tipada da consulta direta: indício textual SEM campo `passed`.
+
+    `extra='forbid'` garante contrato rígido — nunca haverá booleano de
+    aprovação que convide o agente a praticar premise gaming.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    indicio: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Indício textual derivado da probabilidade (ex.: 'Indício forte a favor...', "
+            "'Indício fraco contra...'). Não é veredito nem aprovação."
+        ),
+    )
+    probability: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Probabilidade calibrada da questão ser verdadeira dado o contexto.",
+    )
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Confiança da avaliação (|probabilidade - 0.5| * 2).",
+    )
+    latency_ms: float = Field(
+        ...,
+        ge=0.0,
+        description="Tempo de latência da inferência em milissegundos.",
+    )
+
+
+# ==============================================================================
 # Schemas Open Jev: Primitiva Score (Avaliação e Calibração Ordinal de Entrega)
 # ==============================================================================
+
+# Catálogo FECHADO de rubricas — única fonte de verdade (anti rubric gaming).
+# O MCP resolve por `task_type`; qualquer `rubric` livre do cliente é ignorada.
+RUBRIC_CATALOG: Dict[str, str] = {
+    "entrega": (
+        "Avalie a entrega técnica de 1.0 a 5.0 considerando fidelidade aos requisitos, "
+        "correção lógica, integridade do código sem mocks em produção, tratamento de exceções "
+        "e cobertura de testes reais automatizados."
+    ),
+    "auditoria": (
+        "Avalie a aderência da evidência determinística fornecida de 1.0 a 5.0 considerando "
+        "completude da evidência verificável (saídas de comando, arquivos, testes executados), "
+        "rigor analítico, ausência de afirmação sem respaldo factual e fidelidade ao código real do repositório."
+    ),
+    "codigo_producao": (
+        "Avalie o código para produção de 1.0 a 5.0 considerando ausência de mocks, stubs ou "
+        "artefatos de teste no caminho de produção, tratamento de exceções e fechamento de recursos, "
+        "sanitização de entrada, ausência de credenciais hardcoded e cobertura de testes reais."
+    ),
+}
+
+# Constantes do Critério Probabilístico de Aprovação na Fronteira (Borderline Mass Gate)
+BORDERLINE_HEALTHY_MIN_MASS: float = 0.85
+BORDERLINE_FLAWED_MAX_MASS: float = 0.12
+
+
 
 class ScoreRequest(BaseModel):
     """Requisição para avaliação de qualidade e conformidade contra uma rubrica."""
@@ -158,8 +261,8 @@ class ScoreRequest(BaseModel):
         description="O artefato produzido, diff de código, resposta ou plano a ser avaliado."
     )
     rubric: str = Field(
-        default="Avalie a resposta técnica de 1.0 a 5.0 considerando rigor analítico, clareza didática, fidelidade ao código real do repositório e atendimento aos comandos do usuário.",
-        description="Critérios de conformidade e rubrica de qualidade esperada."
+        default=RUBRIC_CATALOG["entrega"],
+        description="Critérios de conformidade e rubrica de qualidade esperada (via catálogo fechado no MCP)."
     )
     min_score: float = Field(
         default=1.0,
@@ -170,8 +273,8 @@ class ScoreRequest(BaseModel):
         description="Nota máxima da escala (ex.: 5.0)."
     )
     threshold: Optional[float] = Field(
-        default=3.75,
-        description="Nota mínima para aprovação (se fornecido, retorna se foi aprovado)."
+        default=3.40,
+        description="Nota mínima para aprovação (calibrado Laya 3.40; se fornecido, retorna se foi aprovado)."
     )
 
     @model_validator(mode="after")
@@ -209,148 +312,135 @@ class ScoreResponse(BaseModel):
         ge=0.0,
         description="Tempo de latência da inferência em milissegundos."
     )
+    score_margin: Optional[float] = Field(
+        default=None,
+        description="Margem de probabilidade em relação ao threshold: p_acima - p_abaixo em [-1.0, 1.0]."
+    )
+    borderline: Optional[bool] = Field(
+        default=None,
+        description="True quando ≥35% da massa probabilística está de cada lado do threshold (nota na fronteira)."
+    )
+    device: Optional[str] = Field(
+        default=None,
+        description=(
+            "Dispositivo efetivo da inferência (cuda:0/cpu). fp16 GPU × fp32 CPU "
+            "podem deslocar score/borderline perto do corte — observabilidade P3.4."
+        ),
+    )
+    dtype: Optional[str] = Field(
+        default=None,
+        description="dtype efetivo (float16/float32) — Pascal sem bfloat16; migração em OOM muda o numérico."
+    )
 
 
 # ==============================================================================
-# Schemas Open Jev: Score + Diagnose (Diagnóstico Flat — Choice único com 26 opções)
+# Schemas Open Jev: Score + Diagnóstico (Diagnóstico Flat — Choice único com 10 categorias)
 # ==============================================================================
-
-# Lista flat de todos os defeitos possíveis (choice único — sem hierarquia L1/L2)
+# ATENÇÃO de calibração (medido em golden set, ago/2026): o head do Laya só
+# discrimina bem com <= 10 opções (bucket de temperature "6-10"). Com >= 11
+# opções o modelo colapsa na opção-savor (precisão 1/4) — não reverter para
+# listas finas de defeitos sem revalidar tests/test_diagnosis_calibration.py.
+# Ordem: nulas em 1º e 6º (não na cauda) — head_max_len=192 não trunca
+# instructions nem descrições (gate: scripts/measure_diag_choice_tokens.py).
 DEFECT_OPTIONS: List[str] = [
-    # Falhas funcionais / lógicas
-    "erro_off_by_one",
-    "regra_de_negocio_incompleta",
-    "estado_mutavel_inconsistente",
-    "inversao_de_predicado",
-    # Robustez e limites
-    "falta_tratamento_nulo_ou_vazio",
-    "estouro_de_limites_numericos",
-    "falha_de_tratamento_de_excecoes",
-    "condicao_de_corrida_deadlock",
-    # Integridade e segurança
-    "injecao_e_sanitizacao",
-    "vazamento_de_recursos",
-    "credenciais_hardcoded",
-    "autorizacao_e_autenticacao_frouxa",
-    # Qualidade de testes
-    "ausencia_de_testes_unitarios",
-    "teste_tautologico_ou_falso_positivo",
-    "falta_cobertura_caminhos_de_erro",
-    "testes_nao_reprodutiveis_flaky",
-    # Contrato e acoplamento
-    "dependencia_ou_import_inexistente",
-    "incompatibilidade_de_assinatura",
-    "violacao_de_schema_de_dados",
-    "quebra_de_retrocompatibilidade",
-    # Ambiente, performance e escopo
-    "incompatibilidade_de_ambiente_ou_runtime",
-    "gargalo_de_performance_ou_complexidade",
-    "alucinacao_de_efeitos_colaterais_externos",
-    "desvio_de_escopo_ou_overengineering",
-    "inconsistencia_estilistica_ou_linting_estrito",
-    "stub_ou_mock_em_producao",
+    "sem_defeito_identificavel",
+    "logica_ou_regra",
+    "robustez_excecoes_recursos",
+    "seguranca",
+    "qualidade_de_testes",
+    "evidencia_insuficiente",
+    "contrato_ambiente",
+    "performance_escopo_estilo",
+    "mock_stub_em_producao",
+    "documentacao_configuracao",
 ]
 
-# Descrições de cada defeito para feedback legível ao agente
+# Instrução do choice de diagnóstico — distinta do texto de roteamento de subagentes.
+# Serve DEFECT_DESCRIPTIONS como critérios via ChoiceRequest.criteria.
+# Wordings neutras ("Classify…") mediram 2/4 no golden de defeitos (ago/2026);
+# a formulação com pressuposto de falha calibrada 3/4 — manter até revalidar.
+# TEXT CURTO DE PROPÓSITO: o álibi das nulas deve caber nas ~35 tok que sobram
+# em head_max_len=192 após as 10 opções — não alongar sem re-medir tokens.
+DIAG_CHOICE_INSTRUCTIONS = (
+    "Audit code artifact for defects. If compliant, select sem_defeito_identificavel. "
+    "Weak evidence: evidencia_insuficiente. Use descriptions."
+)
+
+# Descrições de cada categoria para feedback legível ao agente E como critérios
+# do choice (ChoiceRequest.criteria). Textos EN calibrados no golden set —
+# alterações devem revalidar tests/test_diagnosis_calibration.py.
+# TEXTOS CURTOS OBRIGATÓRIOS: render "id: desc" + [MASK] deve somar ≤ 176 tok
+# em head_max_len=192 (sem per-option cut) e deixar ≥ 35 tok para instructions.
 DEFECT_DESCRIPTIONS: Dict[str, str] = {
-    # Falhas funcionais / lógicas
-    "erro_off_by_one": (
-        "Índices de loops, fatiamento ou intervalos desviados por um elemento (< em vez de <=)."
-    ),
-    "regra_de_negocio_incompleta": (
-        "O fluxo geral foi implementado, mas uma cláusula específica da especificação foi omitida."
-    ),
-    "estado_mutavel_inconsistente": (
-        "Efeitos colaterais indesejados, mutação acidental de parâmetros ou variáveis compartilhadas."
-    ),
-    "inversao_de_predicado": (
-        "Operadores booleanos invertidos (and/or, ! mal posicionado ou lógica de curto-circuito errada)."
-    ),
-    # Robustez e limites
-    "falta_tratamento_nulo_ou_vazio": (
-        "Código lança exceções com coleções vazias ou valores nulos (NullPointerError, AttributeError)."
-    ),
-    "estouro_de_limites_numericos": (
-        "Divisão por zero, overflow de inteiros, perda de precisão em ponto flutuante ou datas inválidas."
-    ),
-    "falha_de_tratamento_de_excecoes": (
-        "Exceções silenciadas (swallowed) ou ausência de try/catch em operações de I/O e rede."
-    ),
-    "condicao_de_corrida_deadlock": (
-        "Falta de sincronização em concorrência, locks travados ou async/await mal utilizado."
-    ),
-    # Integridade e segurança
-    "injecao_e_sanitizacao": (
-        "Concatenação direta de parâmetros em SQL, shell ou HTML sem sanitização (CWE-89, CWE-79)."
-    ),
-    "vazamento_de_recursos": (
-        "Conexões de banco, file descriptors ou sockets não fechados após uso (with/try-finally ausente)."
-    ),
-    "credenciais_hardcoded": (
-        "Chaves de API, senhas, tokens ou URLs sensíveis inseridos diretamente no código-fonte."
-    ),
-    "autorizacao_e_autenticacao_frouxa": (
-        "Falta de validação de escopo, permissões ou tokens antes de executar ações restritas."
-    ),
-    # Qualidade de testes
-    "ausencia_de_testes_unitarios": (
-        "Nenhum arquivo ou função de teste foi fornecido na entrega."
-    ),
-    "teste_tautologico_ou_falso_positivo": (
-        "Testes que sempre passam por mocks excessivos ou asserções triviais (assert True)."
-    ),
-    "falta_cobertura_caminhos_de_erro": (
-        "Testes cobrem apenas o caminho feliz (happy path), sem verificar falhas esperadas."
-    ),
-    "testes_nao_reprodutiveis_flaky": (
-        "Testes dependem de ordem de execução, sleeps fixos ou estado externo não controlado."
-    ),
-    # Contrato e acoplamento
-    "dependencia_ou_import_inexistente": (
-        "O código importa pacotes ou funções alucinadas/não declaradas no ambiente do projeto."
-    ),
-    "incompatibilidade_de_assinatura": (
-        "Quantidade, nome ou tipo de argumentos e retornos divergem da interface esperada."
-    ),
-    "violacao_de_schema_de_dados": (
-        "Objeto de saída não segue o formato exigido (campos faltantes ou tipos errados em JSON/dicts)."
-    ),
-    "quebra_de_retrocompatibilidade": (
-        "Alterações que quebram contratos públicos existentes sem migração documentada."
-    ),
-    # Ambiente, performance e escopo
-    "incompatibilidade_de_ambiente_ou_runtime": (
-        "O código assume versão específica de linguagem (ex: Python 3.12+ em runtime 3.10), "
-        "SO específico (caminhos Windows em Linux) ou flags de compilação inexistentes."
-    ),
-    "gargalo_de_performance_ou_complexidade": (
-        "A solução funciona, mas possui complexidade algorítmica inaceitável (O(n²) ou O(2ⁿ) onde "
-        "cabia O(n)), consumo excessivo de memória ou gera time-out no runner de execução."
-    ),
-    "alucinacao_de_efeitos_colaterais_externos": (
-        "O código tenta acessar serviços externos indisponíveis, assume rede sempre acessível sem "
-        "retry/circuit-breaker, ou depende de variáveis de ambiente não declaradas nem documentadas."
-    ),
-    "desvio_de_escopo_ou_overengineering": (
-        "O agente implementou classes abstratas, design patterns complexos ou funcionalidades não "
-        "pedidas, introduzindo fragilidades desnecessárias (YAGNI — You Aren't Gonna Need It)."
-    ),
-    "inconsistencia_estilistica_ou_linting_estrito": (
-        "O código quebra pipelines de CI/CD por violações de formatação, docstrings obrigatórias, "
-        "naming conventions proibidas ou regras estritas de linter do repositório."
-    ),
-    "stub_ou_mock_em_producao": (
-        "Uso de dados mockados, retornos simulados (hardcoded) ou stubs dentro do código de "
-        "produção em vez da implementação real."
-    ),
+    "sem_defeito_identificavel": "no defect; borderline noise",
+    "logica_ou_regra": "wrong result, off-by-one rule",
+    "robustez_excecoes_recursos": "bare except, null, race, leak",
+    "seguranca": "injection, secrets, missing authz",
+    "qualidade_de_testes": "missing tests, no error path",
+    "evidencia_insuficiente": "cannot classify: no evidence",
+    "contrato_ambiente": "signature or schema mismatch",
+    "performance_escopo_estilo": "bottleneck, scope drift, lint",
+    "mock_stub_em_producao": "fake return in production",
+    "documentacao_configuracao": "docs or config wrong",
+}
+
+# Folhas (defeitos finos) candidatas de cada categoria — servem de dica para o
+# agente refinar a auto-correção após o choice de categoria.
+DEFECT_MEMBERS: Dict[str, List[str]] = {
+    "logica_ou_regra": [
+        "erro_off_by_one",
+        "regra_de_negocio_incompleta",
+        "estado_mutavel_inconsistente",
+        "inversao_de_predicado",
+    ],
+    "robustez_excecoes_recursos": [
+        "falha_de_tratamento_de_excecoes",
+        "falta_tratamento_nulo_ou_vazio",
+        "estouro_de_limites_numericos",
+        "condicao_de_corrida_deadlock",
+        "vazamento_de_recursos",
+    ],
+    "seguranca": [
+        "injecao_e_sanitizacao",
+        "credenciais_hardcoded",
+        "autorizacao_e_autenticacao_frouxa",
+    ],
+    "qualidade_de_testes": [
+        "ausencia_de_testes_unitarios",
+        "teste_tautologico_ou_falso_positivo",
+        "falta_cobertura_caminhos_de_erro",
+        "testes_nao_reprodutiveis_flaky",
+    ],
+    "contrato_ambiente": [
+        "dependencia_ou_import_inexistente",
+        "incompatibilidade_de_assinatura",
+        "violacao_de_schema_de_dados",
+        "quebra_de_retrocompatibilidade",
+        "incompatibilidade_de_ambiente_ou_runtime",
+    ],
+    "performance_escopo_estilo": [
+        "gargalo_de_performance_ou_complexidade",
+        "alucinacao_de_efeitos_colaterais_externos",
+        "desvio_de_escopo_ou_overengineering",
+        "inconsistencia_estilistica_ou_linting_estrito",
+    ],
+    "mock_stub_em_producao": [
+        "stub_ou_mock_em_producao",
+    ],
+    "documentacao_configuracao": [
+        "documentacao_ausente_ou_incorreta",
+        "configuracao_ou_governanca_incorreta",
+    ],
+    "sem_defeito_identificavel": [],
+    "evidencia_insuficiente": [],
 }
 
 
 class DiagnosisResult(BaseModel):
-    """Resultado do diagnóstico de defeito via choice único sobre 26 opções flat."""
+    """Resultado do diagnóstico de defeito via choice único sobre 10 categorias flat."""
     selected: str = Field(
         ...,
-        description="Defeito selecionado pelo Laya dentre as 26 opções da taxonomia flat.",
+        description="Categoria de defeito selecionada pelo Laya dentre as 10 opções da taxonomia flat.",
     )
     confidence: float = Field(
         ...,
@@ -360,11 +450,18 @@ class DiagnosisResult(BaseModel):
     )
     probabilities: Dict[str, float] = Field(
         default_factory=dict,
-        description="Distribuição completa de probabilidades sobre todas as 26 opções.",
+        description="Distribuição completa de probabilidades sobre todas as 10 opções.",
     )
     description: str = Field(
         ...,
-        description="Descrição legível do defeito identificado para feedback ao agente.",
+        description="Descrição legível da categoria identificada para feedback ao agente.",
+    )
+    candidate_defects: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Folhas (defeitos finos) candidatas da categoria selecionada "
+            "(DEFECT_MEMBERS) — dica para o agente refinar a auto-correção."
+        ),
     )
     diagnosis_latency_ms: float = Field(
         ...,
@@ -376,28 +473,74 @@ class DiagnosisResult(BaseModel):
 class ScoreDiagnoseResponse(BaseModel):
     """Resposta unificada: Score + Diagnóstico flat (quando score < threshold).
 
-    Se passed=True, o campo 'diagnosis' é None.
+    Se passed=True sem borderline, 'diagnosis' é None.
+    Se passed=True com approved_as_borderline=True, 'diagnosis' traz a categoria
+    nula eleita (sem_defeito_identificavel | evidencia_insuficiente).
     Se passed=False, 'diagnosis' contém o defeito identificado pelo choice único.
     """
     # --- Campos do Score (sempre presentes) ---
     score: float = Field(..., description="Nota contínua calculada pelo Laya (escala 1.0–5.0).")
     max_score: float = Field(default=5.0, description="Nota máxima da escala.")
     normalized_score: float = Field(..., ge=0.0, le=1.0, description="Nota normalizada [0.0, 1.0].")
-    passed: bool = Field(..., description="True se score >= threshold.")
+    passed: bool = Field(
+        ...,
+        description=(
+            "True se score >= threshold OU (borderline e diagnosis ∈ categorias nulas "
+            "sem_defeito_identificavel | evidencia_insuficiente)."
+        ),
+    )
     threshold: float = Field(..., description="Nota de corte configurada.")
     breakdown: Dict[str, float] = Field(default_factory=dict, description="Pesos por nível de qualidade.")
     score_latency_ms: float = Field(..., ge=0.0, description="Latência da inferência de score em ms.")
+    score_margin: Optional[float] = Field(
+        default=None,
+        description="Margem de probabilidade em relação ao threshold: p_acima - p_abaixo em [-1.0, 1.0].",
+    )
+    borderline: Optional[bool] = Field(
+        default=None,
+        description="True quando ≥35% da massa probabilística está de cada lado do threshold.",
+    )
+    task_type: Optional[str] = Field(
+        default=None,
+        description="Chave do catálogo fechado de rubricas usada (entrega | auditoria | codigo_producao).",
+    )
+    rubric_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Origem da rubrica aplicada, sempre 'catalog:<task_type>' — a rubrica livre "
+            "é ignorada pelo servidor (rubric gaming proibido)."
+        ),
+    )
 
-    # --- Diagnóstico (apenas quando passed=False) ---
+    # --- Diagnóstico ---
     diagnosis: Optional["DiagnosisResult"] = Field(
         default=None,
-        description="Defeito identificado pelo choice flat. Presente apenas quando passed=False.",
+        description=(
+            "Defeito identificado pelo choice flat. Presente quando score < threshold "
+            "(inclusive em borderline — o choice sempre roda nesse caminho)."
+        ),
+    )
+    diagnosis_suppressed: Optional[str] = Field(
+        default=None,
+        description=(
+            "DEPRECATED — a supressão em borderline foi removida: o choice sempre roda "
+            "quando score < threshold. Campo mantido apenas por compatibilidade."
+        ),
+    )
+    approved_as_borderline: bool = Field(
+        default=False,
+        description=(
+            "True quando score < threshold, borderline=true e o choice elegeu "
+            "categoria nula (sem_defeito_identificavel | evidencia_insuficiente) "
+            "com confidence >= NULL_CHOICE_MIN_CONFIDENCE (0.40) — entrega aprovada "
+            "como ruído de fronteira; divulgar score_margin (§4.7). Nula fraca não aprova."
+        ),
     )
 
     # --- Controle Anti-Gaming ---
     attempts: int = Field(default=1, description="Tentativas consecutivas sem aprovação.")
-    max_attempts: int = Field(default=10, description="Máximo antes da saída de emergência.")
-    emergency_exit_unlocked: bool = Field(default=False, description="True após 10 tentativas sem refatoração.")
+    max_attempts: int = Field(default=5, description="Máximo antes da saída de emergência (MAX_ATTEMPTS).")
+    emergency_exit_unlocked: bool = Field(default=False, description="True após MAX_ATTEMPTS tentativas sem refatoração.")
 
 
 # ==============================================================================
@@ -415,10 +558,10 @@ class Needle3Query(BaseModel):
         description="Filtro opcional de diretórios, pacotes ou arquivos-alvo."
     )
     max_tokens: int = Field(
-        default=1500,
+        default=1000,
         gt=0,
         le=4096,
-        description="Limite máximo estrito de tokens para o recorte retornado."
+        description="Limite máximo estrito de tokens para o recorte retornado (canônico 1000; faixa AGENTS 500–1500)."
     )
     relational_depth: int = Field(
         default=2,
@@ -450,3 +593,9 @@ class Needle3Response(BaseModel):
     snippets: List[Needle3Snippet] = Field(..., description="Lista de trechos cirúrgicos recuperados.")
     total_tokens: int = Field(..., ge=0, description="Total de tokens consumidos pelos trechos.")
     query_latency_ms: float = Field(..., ge=0.0, description="Latência da busca no Cactus Compute.")
+    token_savings_pct: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Percentual real de tokens economizados vs. indexar todos os blocos candidatos.",
+    )

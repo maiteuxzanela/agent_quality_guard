@@ -6,15 +6,13 @@ Utiliza a primitiva 'score' do Open Jev para quantificar a aderência de artefat
 import logging
 from typing import Optional
 
-from ..core.schemas import ScoreRequest, ScoreResponse
+from ..core.schemas import RUBRIC_CATALOG, ScoreRequest, ScoreResponse
 from ..decision.engine import OpenJevEngine
 
 logger = logging.getLogger("jev.orchestrator.evaluator")
 
-DEFAULT_CODE_RUBRIC = (
-    "Clean code architecture: strict type annotations, comprehensive error handling, "
-    "no memory leaks, adherence to project styling, and robust unit test coverage."
-)
+# Rubrica calibrada única: catálogo fechado (fonte de verdade única — anti rubric gaming).
+DEFAULT_CODE_RUBRIC = RUBRIC_CATALOG["entrega"]
 
 
 class DeliveryEvaluator:
@@ -23,7 +21,7 @@ class DeliveryEvaluator:
     def __init__(
         self,
         engine: OpenJevEngine,
-        default_pass_threshold: float = 4.0,
+        default_pass_threshold: float = 3.40,
         default_rubric: str = DEFAULT_CODE_RUBRIC,
     ):
         self.engine = engine
@@ -33,15 +31,15 @@ class DeliveryEvaluator:
     async def evaluate_delivery(
         self,
         artifact_content: str,
-        custom_rubric: Optional[str] = None,
         pass_threshold: Optional[float] = None,
         min_score: float = 1.0,
         max_score: float = 5.0,
     ) -> ScoreResponse:
         """Avalia a entrega produzida por um subagente.
         Retorna a nota e o veredito de aprovação. Lança exceção se a engine não estiver pronta.
+        Rubrica vem exclusivamente do catálogo fechado (custom_rubric removido — rubric gaming).
         """
-        rubric = custom_rubric or self.default_rubric
+        rubric = self.default_rubric
         threshold = pass_threshold if pass_threshold is not None else self.default_pass_threshold
 
         req = ScoreRequest(

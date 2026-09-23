@@ -34,13 +34,14 @@ logger = logging.getLogger("jev.engine")
 
 
 class OpenJevEngine:
-    """Wrapper discriminativo não-gerativo para o modelo Open Jev.
-    Otimizado para executar em único forward pass com gestão de VRAM na GTX 1050 Ti.
+    """Wrapper discriminativo não-gerativo para o motor Open Jev.
+    Por padrão utiliza o modelo Laya (convaiinnovations/laya) rodando localmente
+    na GPU GTX 1050 Ti com fallback seguro para CPU e calibração RLCD.
     """
 
     def __init__(
         self,
-        model_id_or_path: str = "com-kotobalabs/open-jev-deberta-v3-large",
+        model_id_or_path: str = "convaiinnovations/laya",
         device: Optional[str] = None,
         max_length: int = 1024,
         allow_cpu_fallback: bool = True,
@@ -55,6 +56,17 @@ class OpenJevEngine:
             self.target_device = device
         else:
             self.target_device = self.profile.recommended_device
+
+        # Backend Laya (padrão) vs Legado
+        self.is_laya = "laya" in model_id_or_path.lower()
+        self.laya_adapter: Any = None
+        if self.is_laya:
+            from .laya_adapter import LayaAdapter
+            self.laya_adapter = LayaAdapter(
+                checkpoint="english",
+                device=self.target_device,
+                allow_cpu_fallback=allow_cpu_fallback,
+            )
 
         self.model: Any = None
         self.tokenizer: Any = None
@@ -78,6 +90,19 @@ class OpenJevEngine:
 
         logger.info(f"Iniciando carregamento do modelo Open Jev: {self.model_id_or_path}")
         logger.info(f"Dispositivo alvo: {self.target_device} | Hardware: {self.profile.device_name}")
+
+        # Se for o modelo Laya, delega diretamente para o LayaAdapter
+        if self.is_laya and self.laya_adapter is not None:
+            try:
+                self.laya_adapter.load_model()
+                self.is_ready = self.laya_adapter.is_ready
+                self.target_device = self.laya_adapter._device or self.target_device
+                logger.info(f"Engine Laya inicializada com sucesso no dispositivo {self.target_device}!")
+                return
+            except Exception as e:
+                self.is_ready = False
+                clean_gpu_memory()
+                raise OpenJevNotReadyError(f"Falha ao inicializar o motor Laya: {e}") from e
 
         try:
             # Trava estrita contra bfloat16 na GTX 1050 Ti
@@ -177,6 +202,13 @@ class OpenJevEngine:
 
     def _ensure_ready(self) -> None:
         """Validação interna de disponibilidade. Sem mocks."""
+        if self.is_laya:
+            if not self.is_ready or self.laya_adapter is None or not self.laya_adapter.is_ready:
+                raise OpenJevNotReadyError(
+                    "A Engine Open Jev (Laya) não está pronta ou o modelo não foi carregado. "
+                    "Execute load_model() antes de invocar noul, choice ou score."
+                )
+            return
         if not self.is_ready or self.model is None or self.tokenizer is None:
             raise OpenJevNotReadyError(
                 "A Engine Open Jev não está pronta ou o modelo não foi carregado. "
@@ -186,6 +218,9 @@ class OpenJevEngine:
     async def evaluate_noul(self, request: NoulRequest) -> NoulResponse:
         """Avalia uma proposição lógica/booleana (Noul) em passagem única."""
         self._ensure_ready()
+        if self.is_laya:
+            return await self.laya_adapter.evaluate_noul(request)
+
         start_time = time.perf_counter()
 
         if getattr(self, "is_native_jev", False):
@@ -271,6 +306,9 @@ class OpenJevEngine:
     async def evaluate_choice(self, request: ChoiceRequest) -> ChoiceResponse:
         """Roteia para a melhor opção dentre as alternativas fornecidas (Choice)."""
         self._ensure_ready()
+        if self.is_laya:
+            return await self.laya_adapter.evaluate_choice(request)
+
         start_time = time.perf_counter()
 
         if getattr(self, "is_native_jev", False):
@@ -361,6 +399,9 @@ class OpenJevEngine:
     async def evaluate_score(self, request: ScoreRequest) -> ScoreResponse:
         """Avalia a conformidade de um artefato contra uma rubrica de qualidade (Score)."""
         self._ensure_ready()
+        if self.is_laya:
+            return await self.laya_adapter.evaluate_score(request)
+
         start_time = time.perf_counter()
 
         if getattr(self, "is_native_jev", False):

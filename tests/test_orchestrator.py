@@ -11,7 +11,7 @@ from src.orchestrator.router import SpecialistRouter
 
 def test_guardrail_critical_action_detection():
     engine = OpenJevEngine()
-    interceptor = GuardrailInterceptor(engine=engine, default_threshold=0.85)
+    interceptor = GuardrailInterceptor(engine=engine, default_threshold=0.78)
 
     assert interceptor.is_action_critical("run_shell_command") is True
     assert interceptor.is_action_critical("delete_file") is True

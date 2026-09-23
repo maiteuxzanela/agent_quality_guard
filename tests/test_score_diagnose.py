@@ -1,4 +1,4 @@
-"""Testes de integração para openjev_score_and_diagnose — Score + Choice flat (26 opções).
+"""Testes de integração para openjev_score_and_diagnose — Score + Choice flat (10 categorias).
 
 Todos os testes exercitam o engine Laya real (sem mock), conforme AGENTS.md §5.2.
 O modelo é carregado uma única vez por sessão via singleton do mcp_server.
@@ -78,7 +78,7 @@ class TestScoreAndDiagnoseIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_caminho_aprovado_sem_diagnostico(self):
         """threshold=1.0 garante que qualquer score real passa; diagnosis deve ser None."""
         result = await openjev_score_and_diagnose(
-            premise="Função add(a, b): return a + b. Teste: assert add(1, 2) == 3. Cobertura 100%.",
+            premise="Pedido do Prompt: implementar add(a, b). | Resultado Executado: função add(a, b): return a + b. Teste: assert add(1, 2) == 3. Cobertura 100%.",
             workspace=self.ws,
             threshold=1.0,
         )
@@ -93,10 +93,17 @@ class TestScoreAndDiagnoseIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["attempts"], 0)
         self.assertFalse(result["emergency_exit_unlocked"])
 
+        # Contrato Plano 2: margem de incerteza e origem da rubrica sempre presentes
+        self.assertIn("score_margin", result)
+        self.assertIn("borderline", result)
+        self.assertIsNotNone(result["score_margin"])
+        self.assertIsNotNone(result["borderline"])
+        self.assertEqual(result["task_type"], "entrega")
+
     async def test_caminho_reprovado_retorna_diagnostico_flat(self):
         """threshold=5.0 garante reprovação real; diagnosis deve conter um defeito válido."""
         result = await openjev_score_and_diagnose(
-            premise="Código entregue sem testes, sem tratamento de exceções, sem documentação.",
+            premise="Pedido do Prompt: entregar módulo. | Resultado Executado: código entregue sem testes, sem tratamento de exceções, sem documentação.",
             workspace=self.ws,
             threshold=5.0,
         )
@@ -106,7 +113,7 @@ class TestScoreAndDiagnoseIntegration(unittest.IsolatedAsyncioTestCase):
 
         diag = result["diagnosis"]
 
-        # Defeito selecionado deve ser uma das 26 opções válidas
+        # Defeito selecionado deve ser uma das 10 opções válidas
         self.assertIn(diag["selected"], DEFECT_OPTIONS)
 
         # Descrição deve existir no dicionário centralizado
@@ -114,7 +121,7 @@ class TestScoreAndDiagnoseIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diag["description"], DEFECT_DESCRIPTIONS[diag["selected"]])
         self.assertTrue(len(diag["description"]) > 10)
 
-        # Distribuição deve cobrir todas as 26 opções
+        # Distribuição deve cobrir todas as 10 opções
         self.assertEqual(len(diag["probabilities"]), len(DEFECT_OPTIONS))
         for defect in DEFECT_OPTIONS:
             self.assertIn(defect, diag["probabilities"])
@@ -128,7 +135,9 @@ class TestScoreAndDiagnoseIntegration(unittest.IsolatedAsyncioTestCase):
         for campo in ("score", "normalized_score", "threshold", "breakdown",
                       "score_latency_ms", "attempts", "max_attempts", "emergency_exit_unlocked"):
             self.assertIn(campo, result)
-        self.assertEqual(result["max_attempts"], 10)
+        self.assertEqual(result["max_attempts"], 5)
+        self.assertIn("approved_as_borderline", result)
+        self.assertFalse(result["approved_as_borderline"])
         self.assertIsInstance(result["score"], float)
         self.assertIsInstance(result["breakdown"], dict)
 
@@ -162,7 +171,7 @@ class TestAntiGamingIntegration(unittest.IsolatedAsyncioTestCase):
         }
 
         result = await openjev_score_and_diagnose(
-            premise="Tentativa sem alterar o código.",
+            premise="Pedido do Prompt: reavaliar entrega. | Resultado Executado: tentativa sem alterar o código.",
             workspace=self.ws,
         )
 
@@ -186,7 +195,7 @@ class TestAntiGamingIntegration(unittest.IsolatedAsyncioTestCase):
                        check=True, capture_output=True)
 
         result = await openjev_score_and_diagnose(
-            premise="Código com nova correção commitada.",
+            premise="Pedido do Prompt: corrigir defeito. | Resultado Executado: código com nova correção commitada.",
             workspace=self.ws,
             threshold=1.0,
         )
@@ -195,20 +204,20 @@ class TestAntiGamingIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIn("passed", result)
         self.assertTrue(result["passed"])
 
-    async def test_circuit_breaker_apos_10_tentativas(self):
-        """Saída de emergência deve ser ativada após 10 tentativas sem mudança."""
-        from src.mcp_server import _get_workspace_git_signature
+    async def test_circuit_breaker_apos_5_tentativas(self):
+        """Saída de emergência deve ser ativada após MAX_ATTEMPTS=5 tentativas sem mudança."""
+        from src.mcp_server import MAX_ATTEMPTS, _get_workspace_git_signature
         git_state_real = _get_workspace_git_signature(self.ws)
 
         _score_history[self.ws] = {
             "passed": False,
-            "attempts": 10,
+            "attempts": MAX_ATTEMPTS,
             "git_state": git_state_real,
             "last_score": 2.50,
         }
 
         result = await openjev_score_and_diagnose(
-            premise="Décima tentativa sem refatoração real.",
+            premise="Pedido do Prompt: refatorar módulo. | Resultado Executado: quinta tentativa sem refatoração real.",
             workspace=self.ws,
         )
 
@@ -219,12 +228,12 @@ class TestAntiGamingIntegration(unittest.IsolatedAsyncioTestCase):
 # ─── Integridade da Taxonomia Flat (sem I/O, sem engine) ─────────────────────
 
 class TestTaxonomiaFlatIntegridade(unittest.TestCase):
-    """Verifica que a taxonomia flat de 26 defeitos está corretamente definida.
+    """Verifica que a taxonomia flat de 10 categorias está corretamente definida.
     Sem I/O, sem rede, sem GPU — apenas lógica pura sobre os dicionários.
     """
 
-    def test_total_de_opcoes_e_26(self):
-        self.assertEqual(len(DEFECT_OPTIONS), 26)
+    def test_total_de_opcoes_e_10(self):
+        self.assertEqual(len(DEFECT_OPTIONS), 10)
 
     def test_todas_opcoes_tem_descricao(self):
         for defect in DEFECT_OPTIONS:
@@ -242,18 +251,48 @@ class TestTaxonomiaFlatIntegridade(unittest.TestCase):
         self.assertEqual(len(DEFECT_OPTIONS), len(set(DEFECT_OPTIONS)),
                          "DEFECT_OPTIONS contém entradas duplicadas.")
 
-    def test_novas_opcoes_presentes(self):
-        """Verifica que as 6 novas opções foram incluídas."""
-        novas = [
-            "incompatibilidade_de_ambiente_ou_runtime",
-            "gargalo_de_performance_ou_complexidade",
-            "alucinacao_de_efeitos_colaterais_externos",
-            "desvio_de_escopo_ou_overengineering",
-            "inconsistencia_estilistica_ou_linting_estrito",
-            "stub_ou_mock_em_producao",
+    def test_categorias_principais_presentes(self):
+        """Categorias essenciais cobrindo os domínios do pedido."""
+        essenciais = [
+            "logica_ou_regra",
+            "robustez_excecoes_recursos",
+            "seguranca",
+            "qualidade_de_testes",
+            "contrato_ambiente",
+            "performance_escopo_estilo",
+            "mock_stub_em_producao",
+            "documentacao_configuracao",
         ]
-        for opt in novas:
-            self.assertIn(opt, DEFECT_OPTIONS, f"Nova opção '{opt}' ausente de DEFECT_OPTIONS.")
+        for opt in essenciais:
+            self.assertIn(opt, DEFECT_OPTIONS, f"Categoria '{opt}' ausente de DEFECT_OPTIONS.")
+
+    def test_opcoes_nulas_presentes(self):
+        """2 saídas nulas (evidência não sustenta defeito / premissa insuficiente)."""
+        for opt in ("sem_defeito_identificavel", "evidencia_insuficiente"):
+            self.assertIn(opt, DEFECT_OPTIONS, f"Opção nula '{opt}' ausente de DEFECT_OPTIONS.")
+
+    def test_nulas_na_posicao_1_e_6(self):
+        """Nulas em 1º e 6º (índices 0 e 5) — não na cauda do choice."""
+        self.assertEqual(DEFECT_OPTIONS[0], "sem_defeito_identificavel")
+        self.assertEqual(DEFECT_OPTIONS[5], "evidencia_insuficiente")
+
+    def test_instructions_citam_as_nulas(self):
+        """Álibi das nulas deve estar no texto de instructions (não só nas descrições)."""
+        from src.core.schemas import DIAG_CHOICE_INSTRUCTIONS
+        self.assertIn("sem_defeito_identificavel", DIAG_CHOICE_INSTRUCTIONS)
+        self.assertIn("evidencia_insuficiente", DIAG_CHOICE_INSTRUCTIONS)
+        self.assertLess(len(DIAG_CHOICE_INSTRUCTIONS), 200)
+
+    def test_members_cobrem_folhas_sem_colisao(self):
+        """DEFECT_MEMBERS cobre as folhas de cada categoria sem sobreposição."""
+        from src.core.schemas import DEFECT_MEMBERS
+        self.assertEqual(set(DEFECT_MEMBERS), set(DEFECT_OPTIONS))
+        all_leaves = []
+        for cat, leaves in DEFECT_MEMBERS.items():
+            all_leaves.extend(leaves)
+        self.assertEqual(len(all_leaves), len(set(all_leaves)),
+                         "Folha duplicada entre categorias de DEFECT_MEMBERS.")
+        self.assertIn("stub_ou_mock_em_producao", DEFECT_MEMBERS["mock_stub_em_producao"])
 
     def test_tool_catalog_reflete_choice_flat(self):
         from src.core.tools import get_tool_definition
@@ -265,9 +304,30 @@ class TestTaxonomiaFlatIntegridade(unittest.TestCase):
         self.assertIn("workspace", params)
         # Garante que a descrição foi atualizada para choice flat
         desc = tool["function"]["description"]
-        self.assertIn("26", desc)
+        self.assertIn("10", desc)
         self.assertNotIn("L1", desc)
         self.assertNotIn("L2", desc)
+
+    def test_null_confidence_gate_constant(self):
+        """Gate da nula: 0.40 — nula fraca não resgata borderline."""
+        from src.mcp_server import NULL_CHOICE_MIN_CONFIDENCE, NULL_DEFECT_OPTIONS
+        self.assertEqual(NULL_CHOICE_MIN_CONFIDENCE, 0.40)
+        self.assertIn("sem_defeito_identificavel", NULL_DEFECT_OPTIONS)
+        self.assertIn("evidencia_insuficiente", NULL_DEFECT_OPTIONS)
+
+    def test_score_gate_shared_max_attempts(self):
+        """MAX_ATTEMPTS vem de score_gate (fonte única para MCP e FastAPI)."""
+        from src.core.score_gate import MAX_ATTEMPTS as gate_attempts
+        from src.mcp_server import MAX_ATTEMPTS as mcp_attempts
+        self.assertEqual(gate_attempts, 5)
+        self.assertEqual(mcp_attempts, gate_attempts)
+
+    def test_score_gate_validate_premise_patterns(self):
+        from src.core.score_gate import validate_score_premise
+        self.assertIsNone(validate_score_premise("Pedido: x | Resultado: y"))
+        self.assertIsNotNone(validate_score_premise("só prosa sem padrão"))
+        self.assertIsNotNone(validate_score_premise("Pedido: " + "x" * 1600 + " | Resultado: y"))
+        self.assertIsNotNone(validate_score_premise(""))
 
 
 # ─── Contrato Pydantic do novo DiagnosisResult (sem engine, sem I/O) ─────────
@@ -281,30 +341,22 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
         from src.core.schemas import DiagnosisResult
         probs = {d: round(1 / len(DEFECT_OPTIONS), 4) for d in DEFECT_OPTIONS}
         diag = DiagnosisResult(
-            selected="falta_cobertura_caminhos_de_erro",
+            selected="qualidade_de_testes",
             confidence=0.74,
             probabilities=probs,
-            description=DEFECT_DESCRIPTIONS["falta_cobertura_caminhos_de_erro"],
+            description=DEFECT_DESCRIPTIONS["qualidade_de_testes"],
             diagnosis_latency_ms=42.5,
         )
         dumped = diag.model_dump()
-        self.assertEqual(dumped["selected"], "falta_cobertura_caminhos_de_erro")
+        self.assertEqual(dumped["selected"], "qualidade_de_testes")
         self.assertAlmostEqual(dumped["confidence"], 0.74)
         self.assertEqual(len(dumped["probabilities"]), len(DEFECT_OPTIONS))
         self.assertTrue(len(dumped["description"]) > 10)
 
-    def test_diagnosis_result_nova_opcao_serializa(self):
-        """Verifica que as 6 novas opções são válidas no schema."""
+    def test_diagnosis_result_todas_categorias_serializam(self):
+        """Todas as 10 categorias são válidas no schema."""
         from src.core.schemas import DiagnosisResult
-        novas = [
-            "incompatibilidade_de_ambiente_ou_runtime",
-            "gargalo_de_performance_ou_complexidade",
-            "alucinacao_de_efeitos_colaterais_externos",
-            "desvio_de_escopo_ou_overengineering",
-            "inconsistencia_estilistica_ou_linting_estrito",
-            "stub_ou_mock_em_producao",
-        ]
-        for opt in novas:
+        for opt in DEFECT_OPTIONS:
             diag = DiagnosisResult(
                 selected=opt,
                 confidence=0.80,
@@ -321,43 +373,46 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
             score=4.10,
             normalized_score=0.775,
             passed=True,
-            threshold=3.60,
+            threshold=3.40,
             breakdown={"good quality": 0.6, "exceptional": 0.4},
             score_latency_ms=120.0,
             diagnosis=None,
             attempts=0,
-            max_attempts=10,
+            max_attempts=5,
             emergency_exit_unlocked=False,
         )
         dumped = resp.model_dump()
         self.assertTrue(dumped["passed"])
         self.assertIsNone(dumped["diagnosis"])
         self.assertEqual(dumped["attempts"], 0)
+        self.assertFalse(dumped["approved_as_borderline"])
 
     def test_score_diagnose_response_reprovado_com_diagnosis(self):
         from src.core.schemas import DiagnosisResult, ScoreDiagnoseResponse
         diag = DiagnosisResult(
-            selected="stub_ou_mock_em_producao",
+            selected="mock_stub_em_producao",
             confidence=0.65,
-            probabilities={"stub_ou_mock_em_producao": 0.65},
-            description=DEFECT_DESCRIPTIONS["stub_ou_mock_em_producao"],
+            probabilities={"mock_stub_em_producao": 0.65},
+            description=DEFECT_DESCRIPTIONS["mock_stub_em_producao"],
+            candidate_defects=["stub_ou_mock_em_producao"],
             diagnosis_latency_ms=33.1,
         )
         resp = ScoreDiagnoseResponse(
             score=2.80,
             normalized_score=0.45,
             passed=False,
-            threshold=3.60,
+            threshold=3.40,
             breakdown={"critical flaws": 0.3, "poor quality": 0.3, "acceptable": 0.4},
             score_latency_ms=98.0,
             diagnosis=diag,
             attempts=2,
-            max_attempts=10,
+            max_attempts=5,
             emergency_exit_unlocked=False,
         )
         dumped = resp.model_dump()
         self.assertFalse(dumped["passed"])
-        self.assertEqual(dumped["diagnosis"]["selected"], "stub_ou_mock_em_producao")
+        self.assertEqual(dumped["diagnosis"]["selected"], "mock_stub_em_producao")
+        self.assertEqual(dumped["diagnosis"]["candidate_defects"], ["stub_ou_mock_em_producao"])
         self.assertEqual(dumped["attempts"], 2)
 
     def test_diagnosis_result_rejeita_confidence_invalida(self):
@@ -379,15 +434,15 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("premise,descricao", [
     (
-        "Código sem nenhum arquivo de teste. Nenhuma função de assert. Zero coverage.",
+        "Pedido do Prompt: entregar suíte. | Resultado Executado: código sem nenhum arquivo de teste. Nenhuma função de assert. Zero coverage.",
         "ausencia_de_testes",
     ),
     (
-        "Função executa SQL via f-string com input do usuário sem sanitização.",
+        "Pedido do Prompt: entregar busca. | Resultado Executado: função executa SQL via f-string com input do usuário sem sanitização.",
         "injecao_sql",
     ),
     (
-        "API key hardcoded: API_KEY = 'sk-prod-abc123xyz' no código-fonte.",
+        "Pedido do Prompt: entregar cliente. | Resultado Executado: API key hardcoded: API_KEY = 'sk-prod-abc123xyz' no código-fonte.",
         "credencial_hardcoded",
     ),
 ])
@@ -409,7 +464,7 @@ async def test_diagnostico_flat_retorna_opcao_valida(premise, descricao):
     diag = result["diagnosis"]
 
     assert diag["selected"] in DEFECT_OPTIONS, (
-        f"[{descricao}] '{diag['selected']}' não é uma opção válida das 26 opções flat"
+        f"[{descricao}] '{diag['selected']}' não é uma opção válida das 10 opções flat"
     )
     assert diag["selected"] in DEFECT_DESCRIPTIONS, (
         f"[{descricao}] '{diag['selected']}' sem descrição em DEFECT_DESCRIPTIONS"

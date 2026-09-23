@@ -129,9 +129,96 @@ def create_app(
         response_model=ScoreResponse,
         summary="Avaliação Ordinal e Nota de Rubrica",
     )
-    async def evaluate_score(request: ScoreRequest) -> ScoreResponse:
-        """Pontua a qualidade e conformidade de uma entrega contra uma rubrica de avaliação."""
-        return await app.state.engine.evaluate_score(request)
+    async def evaluate_score(
+        request: ScoreRequest,
+        task_type: str = "entrega",
+        workspace: str = "",
+    ) -> ScoreResponse:
+        """Gate de entrega portado do MCP: premissa Pedido|Resultado, teto 1500,
+        rubrica só do catálogo fechado e anti-premise gaming + circuit breaker.
+
+        `request.rubric` livre é ignorado (rubric gaming). Resposta é ScoreResponse
+        (sem diagnosis flat — o choice de defeito vive só no MCP).
+        """
+        from src.core.score_gate import (
+            MAX_ATTEMPTS,
+            get_workspace_git_signature,
+            history_get,
+            history_increment_attempts,
+            history_set,
+            resolve_task_rubric,
+            validate_score_premise,
+        )
+
+        premise_error = validate_score_premise(request.premise)
+        if premise_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
+                if hasattr(status, "HTTP_422_UNPROCESSABLE_CONTENT")
+                else status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=premise_error,
+            )
+        resolved_rubric, rubric_error = resolve_task_rubric(task_type)
+        if rubric_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
+                if hasattr(status, "HTTP_422_UNPROCESSABLE_CONTENT")
+                else status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=rubric_error,
+            )
+        request.rubric = resolved_rubric
+
+        target_ws = workspace.strip() if workspace and workspace.strip() else "."
+        git_state = get_workspace_git_signature(target_ws)
+        hist = history_get(target_ws)
+        if hist and not hist.get("passed", True) and git_state and git_state == hist.get("git_state", ""):
+            attempts = hist.get("attempts", 1)
+            if attempts >= MAX_ATTEMPTS:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "emergency_exit_unlocked",
+                        "attempts": attempts,
+                        "max_attempts": MAX_ATTEMPTS,
+                        "message": "Saída de emergência desbloqueada — emitir Laudo de Inviabilidade Técnica.",
+                    },
+                )
+            history_increment_attempts(target_ws)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "no_change_since_last_rejection",
+                    "attempts": attempts,
+                    "max_attempts": MAX_ATTEMPTS,
+                    "message": "Nenhuma alteração no disco desde a última reprovação.",
+                },
+            )
+
+        resp = await app.state.engine.evaluate_score(request)
+
+        # Borderline Mass Gate (paridade com MCP): aprovação matemática se a distribuição é saudável
+        if not resp.passed and getattr(resp, "borderline", False) and getattr(resp, "breakdown", None):
+            from src.decision.laya_adapter import evaluate_borderline_mass_gate
+            if evaluate_borderline_mass_gate(resp.breakdown):
+                resp.passed = True
+                resp.approved_as_borderline = True
+
+        if resp.passed:
+            history_set(target_ws, {
+                "passed": True,
+                "attempts": 0,
+                "git_state": git_state,
+                "last_score": round(resp.score, 2),
+            })
+        else:
+            prev = hist.get("attempts", 0) if hist else 0
+            history_set(target_ws, {
+                "passed": False,
+                "attempts": prev + 1,
+                "git_state": git_state,
+                "last_score": round(resp.score, 2),
+            })
+        return resp
 
     @app.post(
         "/v1/decision/load",

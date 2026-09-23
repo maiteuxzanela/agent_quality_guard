@@ -1,0 +1,4359 @@
+{
+  "engine": "laya",
+  "noul_threshold": 0.78,
+  "score_threshold": 3.4,
+  "choice_options": [
+    "sem_mocks",
+    "apenas_em_testes",
+    "mocks_em_producao"
+  ],
+  "total_time_ms": 297288.48,
+  "projects": [
+    {
+      "project": "Faturamento",
+      "path": "/mnt/94CCB337CCB3130A/Faturamento",
+      "scrub": {
+        "total": 0,
+        "files_affected": 0,
+        "by_pattern": {},
+        "by_location": {}
+      },
+      "occurrences": [],
+      "needle_tokens": 954,
+      "needle_latency_ms": 52.03,
+      "choice_selected": "sem_mocks",
+      "choice_confidence": 0.627,
+      "choice_latency_ms": 353.02,
+      "noul_passed": true,
+      "noul_probability": 0.9562,
+      "noul_threshold": 0.78,
+      "noul_latency_ms": 922.54,
+      "score": 3.39,
+      "score_passed": false,
+      "score_threshold": 3.4,
+      "score_breakdown": {
+        "critical flaws": 0.048,
+        "poor quality": 0.1177,
+        "acceptable": 0.3368,
+        "good quality": 0.3872,
+        "exceptional": 0.1104
+      },
+      "score_latency_ms": 1644.37,
+      "diagnosis": {
+        "selected": "stub_ou_mock_em_producao",
+        "confidence": 0.9993,
+        "description": "Uso de dados mockados, retornos simulados (hardcoded) ou stubs dentro do código de produção em vez da implementação real."
+      },
+      "index": 1
+    },
+    {
+      "project": "JEZ Collections",
+      "path": "/mnt/94CCB337CCB3130A/JEZ collections",
+      "scrub": {
+        "total": 0,
+        "files_affected": 0,
+        "by_pattern": {},
+        "by_location": {}
+      },
+      "occurrences": [],
+      "needle_tokens": 1200,
+      "needle_latency_ms": 30.38,
+      "choice_selected": "sem_mocks",
+      "choice_confidence": 0.6258,
+      "choice_latency_ms": 342.85,
+      "noul_passed": true,
+      "noul_probability": 0.8767,
+      "noul_threshold": 0.78,
+      "noul_latency_ms": 898.55,
+      "score": 2.29,
+      "score_passed": false,
+      "score_threshold": 3.4,
+      "score_breakdown": {
+        "critical flaws": 0.3051,
+        "poor quality": 0.3573,
+        "acceptable": 0.136,
+        "good quality": 0.143,
+        "exceptional": 0.0585
+      },
+      "score_latency_ms": 1418.33,
+      "diagnosis": {
+        "selected": "stub_ou_mock_em_producao",
+        "confidence": 0.9994,
+        "description": "Uso de dados mockados, retornos simulados (hardcoded) ou stubs dentro do código de produção em vez da implementação real."
+      },
+      "index": 2
+    },
+    {
+      "project": "Predictera",
+      "path": "/mnt/94CCB337CCB3130A/predictera",
+      "scrub": {
+        "total": 1,
+        "files_affected": 1,
+        "by_pattern": {
+          "def_mock": 1
+        },
+        "by_location": {
+          "em_testes": 1
+        }
+      },
+      "occurrences": [
+        {
+          "file": "tests/test_scraper_betano.py",
+          "line": 163,
+          "pattern": "def_mock",
+          "text": "self.assertNotIn(\"def mock\", conteudo)",
+          "location": "em_testes"
+        }
+      ],
+      "needle_tokens": 790,
+      "needle_latency_ms": 247944.0,
+      "choice_selected": "apenas_em_testes",
+      "choice_confidence": 0.7857,
+      "choice_latency_ms": 3211.68,
+      "noul_passed": true,
+      "noul_probability": 0.8303,
+      "noul_threshold": 0.78,
+      "noul_latency_ms": 1589.06,
+      "score": 3.07,
+      "score_passed": false,
+      "score_threshold": 3.4,
+      "score_breakdown": {
+        "critical flaws": 0.1209,
+        "poor quality": 0.2003,
+        "acceptable": 0.2673,
+        "good quality": 0.3154,
+        "exceptional": 0.0962
+      },
+      "score_latency_ms": 1822.32,
+      "diagnosis": {
+        "selected": "stub_ou_mock_em_producao",
+        "confidence": 0.9989,
+        "description": "Uso de dados mockados, retornos simulados (hardcoded) ou stubs dentro do código de produção em vez da implementação real."
+      },
+      "index": 3
+    },
+    {
+      "project": "PanelaAndroid",
+      "path": "/home/maiteuxzanela/PanelaBuild/PanelaAndroid",
+      "scrub": {
+        "total": 597,
+        "files_affected": 34,
+        "by_pattern": {
+          "jest_mock": 585,
+          "mock_implementation": 12
+        },
+        "by_location": {
+          "em_testes": 549,
+          "em_producao": 48
+        }
+      },
+      "occurrences": [
+        {
+          "file": "App.test.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-font', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "loadAsync: jest.fn().mockResolvedValue(true)",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo-google-fonts/licorice', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 18,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-image-picker', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 19,
+          "pattern": "jest_mock",
+          "text": "launchImageLibraryAsync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 20,
+          "pattern": "jest_mock",
+          "text": "getMediaLibraryPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 24,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-camera', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 26,
+          "pattern": "jest_mock",
+          "text": "getCameraPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-navigation-bar', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 31,
+          "pattern": "jest_mock",
+          "text": "setVisibilityAsync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "getVisibilityAsync: jest.fn().mockResolvedValue('hidden')",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 36,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 37,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 38,
+          "pattern": "jest_mock",
+          "text": "query: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "where: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 40,
+          "pattern": "jest_mock",
+          "text": "getDocs: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 41,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 42,
+          "pattern": "jest_mock",
+          "text": "setDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 43,
+          "pattern": "jest_mock",
+          "text": "getDoc: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-firebase/crashlytics', () => () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 51,
+          "pattern": "jest_mock",
+          "text": "setCrashlyticsCollectionEnabled: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 55,
+          "pattern": "jest_mock",
+          "text": "const mockSalvarReceita = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 56,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/services/receitaService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 60,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 61,
+          "pattern": "jest_mock",
+          "text": "logScreenView: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 64,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/services/snapshotService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 65,
+          "pattern": "jest_mock",
+          "text": "downloadSnapshotBackground: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 66,
+          "pattern": "jest_mock",
+          "text": "obterReceitasMestre: jest.fn().mockResolvedValue([])",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 70,
+          "pattern": "jest_mock",
+          "text": "const mockSetCardapio = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 76,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/hooks/useUsuario', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 80,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/hooks/useIngredientes', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 84,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/hooks/useReceitas', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 85,
+          "pattern": "jest_mock",
+          "text": "useReceitas: () => ({ receitaExtraida: null, buscarReceitasPorIngredientes: jest.fn(), setFoto: jest.fn() })",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 88,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/hooks/useCardapio', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 93,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 102,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/screens/CriarScreen', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 118,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/components/TabBar/TabBar', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 132,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/screens/ExplorarScreen', () => 'ExplorarScreen');",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 133,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/screens/DespensaScreen', () => 'DespensaScreen');",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 134,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/screens/CardapioScreen', () => 'CardapioScreen');",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 135,
+          "pattern": "jest_mock",
+          "text": "jest.mock('./src/screens/PerfilScreen', () => 'PerfilScreen');",
+          "location": "em_testes"
+        },
+        {
+          "file": "App.test.js",
+          "line": 138,
+          "pattern": "jest_mock",
+          "text": "Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "__mocks__/fileMock.js",
+          "line": 1,
+          "pattern": "mock_implementation",
+          "text": "module.exports = 1;",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2/https', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/params', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "list: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "crashrate: { query: jest.fn() },",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "anrrate: { query: jest.fn() }",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "jest.mock('googleapis', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 35,
+          "pattern": "jest_mock",
+          "text": "GoogleAuth: jest.fn().mockImplementation(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 36,
+          "pattern": "jest_mock",
+          "text": "getClient: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "androidpublisher: jest.fn(() => mockPlayStore),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 40,
+          "pattern": "jest_mock",
+          "text": "playdeveloperreporting: jest.fn(() => mockReporting)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "download: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "getFiles: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 51,
+          "pattern": "jest_mock",
+          "text": "file: jest.fn(() => mockFile)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 55,
+          "pattern": "jest_mock",
+          "text": "bucket: jest.fn(() => mockBucket)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 58,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@google-cloud/storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 59,
+          "pattern": "jest_mock",
+          "text": "Storage: jest.fn().mockImplementation(() => mockStorage)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 62,
+          "pattern": "jest_mock",
+          "text": "const mockBigQueryQuery = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 64,
+          "pattern": "jest_mock",
+          "text": "getTables: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 68,
+          "pattern": "jest_mock",
+          "text": "getDatasets: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 69,
+          "pattern": "jest_mock",
+          "text": "dataset: jest.fn(() => mockDataset),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 73,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@google-cloud/bigquery', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 74,
+          "pattern": "jest_mock",
+          "text": "BigQuery: jest.fn().mockImplementation(() => mockBigQuery)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 78,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 79,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 80,
+          "pattern": "jest_mock",
+          "text": "get: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 81,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 82,
+          "pattern": "jest_mock",
+          "text": "add: jest.fn().mockResolvedValue({ id: 'doc123' }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 83,
+          "pattern": "jest_mock",
+          "text": "delete: jest.fn().mockResolvedValue(true)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 86,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-admin', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 87,
+          "pattern": "jest_mock",
+          "text": "initializeApp: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 88,
+          "pattern": "jest_mock",
+          "text": "credential: { applicationDefault: jest.fn() },",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 92,
+          "pattern": "jest_mock",
+          "text": "serverTimestamp: jest.fn(() => new Date()),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 93,
+          "pattern": "jest_mock",
+          "text": "increment: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 112,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 113,
+          "pattern": "jest_mock",
+          "text": "send: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 114,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 129,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 130,
+          "pattern": "jest_mock",
+          "text": "send: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 131,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 147,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 148,
+          "pattern": "jest_mock",
+          "text": "json: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 149,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 165,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 166,
+          "pattern": "jest_mock",
+          "text": "json: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 167,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 193,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 194,
+          "pattern": "jest_mock",
+          "text": "json: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 195,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 222,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 223,
+          "pattern": "jest_mock",
+          "text": "json: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 237,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 238,
+          "pattern": "jest_mock",
+          "text": "json: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 292,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/admin_integracoes.test.js",
+          "line": 293,
+          "pattern": "jest_mock",
+          "text": "json: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2/https', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 19,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 20,
+          "pattern": "jest_mock",
+          "text": "setGlobalOptions: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 23,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/params', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-admin', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 31,
+          "pattern": "jest_mock",
+          "text": "commit: jest.fn().mockResolvedValue()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 35,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 36,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 37,
+          "pattern": "jest_mock",
+          "text": "get: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 38,
+          "pattern": "jest_mock",
+          "text": "batch: jest.fn().mockReturnValue(mockBatch)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 45,
+          "pattern": "jest_mock",
+          "text": "initializeApp: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "credential: { applicationDefault: jest.fn() },",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/killSwitch.test.js",
+          "line": 49,
+          "pattern": "jest_mock",
+          "text": "FieldValue: { increment: jest.fn() }",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 2,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2/https', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 11,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "setGlobalOptions: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/params', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "commit: jest.fn().mockResolvedValue()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 25,
+          "pattern": "jest_mock",
+          "text": "const mockGet = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "const mockDoc = jest.fn().mockImplementation((key) => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn().mockImplementation((col) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 36,
+          "pattern": "jest_mock",
+          "text": "return { doc: jest.fn().mockReturnThis(), get: jest.fn() };",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 38,
+          "pattern": "jest_mock",
+          "text": "batch: jest.fn().mockReturnValue(mockBatch)",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 41,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-admin', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 42,
+          "pattern": "jest_mock",
+          "text": "initializeApp: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 43,
+          "pattern": "jest_mock",
+          "text": "credential: { applicationDefault: jest.fn() },",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "FieldValue: { increment: jest.fn(), arrayUnion: jest.fn(val => val) }",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 60,
+          "pattern": "mock_implementation",
+          "text": "mockDoc.mockImplementation((key) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/monitorarNovosIngredientes.test.js",
+          "line": 62,
+          "pattern": "jest_mock",
+          "text": "get: jest.fn().mockResolvedValue({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 2,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2/https', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 11,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/v2', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "setGlobalOptions: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-functions/params', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 20,
+          "pattern": "jest_mock",
+          "text": "get: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 24,
+          "pattern": "jest_mock",
+          "text": "const mockGet = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 25,
+          "pattern": "jest_mock",
+          "text": "const mockSet = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "runTransaction: jest.fn().mockImplementation(async (callback) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 37,
+          "pattern": "jest_mock",
+          "text": "const mockIncrement = jest.fn((val) => ({ type: 'increment', value: val }));",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase-admin', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 40,
+          "pattern": "jest_mock",
+          "text": "initializeApp: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 41,
+          "pattern": "jest_mock",
+          "text": "credential: { applicationDefault: jest.fn() },",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "const mockPaymentGet = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 52,
+          "pattern": "jest_mock",
+          "text": "jest.mock('mercadopago', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 54,
+          "pattern": "jest_mock",
+          "text": "MercadoPagoConfig: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 55,
+          "pattern": "jest_mock",
+          "text": "Payment: jest.fn().mockImplementation(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 76,
+          "pattern": "jest_mock",
+          "text": "status: jest.fn().mockReturnThis(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "functions/__tests__/webhookMercadoPago.test.js",
+          "line": 77,
+          "pattern": "jest_mock",
+          "text": "send: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "jest.config.js",
+          "line": 35,
+          "pattern": "mock_implementation",
+          "text": "'\\\\.(png|jpe?g|gif|svg|webp)$': '<rootDir>/__mocks__/fileMock.js',",
+          "location": "em_producao"
+        },
+        {
+          "file": "jest.config.js",
+          "line": 36,
+          "pattern": "mock_implementation",
+          "text": "'\\\\.(ttf|otf|woff|woff2)$': '<rootDir>/__mocks__/fileMock.js',",
+          "location": "em_producao"
+        },
+        {
+          "file": "jest.config.js",
+          "line": 37,
+          "pattern": "mock_implementation",
+          "text": "'\\\\.(mp4|mov)$': '<rootDir>/__mocks__/fileMock.js',",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 3,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => mockAsyncStorage);",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "global.XMLHttpRequest = jest.fn(() => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "open: jest.fn(),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "send: jest.fn(),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "setRequestHeader: jest.fn(),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "abort: jest.fn(),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 16,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native-view-shot', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 23,
+          "pattern": "jest_mock",
+          "text": "captureRef: jest.fn(() => Promise.resolve('mock-uri')),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-sharing', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "isAvailableAsync: jest.fn(() => Promise.resolve(true)),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "shareAsync: jest.fn(() => Promise.resolve()),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-file-system/legacy', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 34,
+          "pattern": "jest_mock",
+          "text": "downloadAsync: jest.fn(() => Promise.resolve({ status: 200 })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 35,
+          "pattern": "jest_mock",
+          "text": "readAsStringAsync: jest.fn(() => Promise.resolve('[]')),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 36,
+          "pattern": "jest_mock",
+          "text": "getInfoAsync: jest.fn(() => Promise.resolve({ exists: false })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-network', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 40,
+          "pattern": "jest_mock",
+          "text": "getNetworkStateAsync: jest.fn(() => Promise.resolve({ type: 'WIFI' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 44,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-camera', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 48,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-image-picker', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 49,
+          "pattern": "jest_mock",
+          "text": "launchImageLibraryAsync: jest.fn(() => Promise.resolve({ canceled: true, assets: [] })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "launchCameraAsync: jest.fn(() => Promise.resolve({ canceled: true, assets: [] })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 51,
+          "pattern": "jest_mock",
+          "text": "requestCameraPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 52,
+          "pattern": "jest_mock",
+          "text": "getCameraPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 53,
+          "pattern": "jest_mock",
+          "text": "getMediaLibraryPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 54,
+          "pattern": "jest_mock",
+          "text": "requestMediaLibraryPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 60,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-notifications', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 61,
+          "pattern": "jest_mock",
+          "text": "getPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 62,
+          "pattern": "jest_mock",
+          "text": "requestPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 63,
+          "pattern": "jest_mock",
+          "text": "cancelAllScheduledNotificationsAsync: jest.fn(() => Promise.resolve()),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 64,
+          "pattern": "jest_mock",
+          "text": "scheduleNotificationAsync: jest.fn(() => Promise.resolve()),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 65,
+          "pattern": "jest_mock",
+          "text": "setNotificationHandler: jest.fn(),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 72,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native-webview', () => {",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 79,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-navigation-bar', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 80,
+          "pattern": "jest_mock",
+          "text": "setVisibilityAsync: jest.fn(() => Promise.resolve()),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 83,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-firebase/app-check', () => {",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 84,
+          "pattern": "jest_mock",
+          "text": "return jest.fn(() => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 85,
+          "pattern": "jest_mock",
+          "text": "getToken: jest.fn(() => Promise.resolve({ token: 'mock-appcheck-token' })),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 89,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-store-review', () => ({",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 90,
+          "pattern": "jest_mock",
+          "text": "isAvailableAsync: jest.fn().mockResolvedValue(true),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 91,
+          "pattern": "jest_mock",
+          "text": "requestReview: jest.fn().mockResolvedValue(true),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 94,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-firebase/analytics', () => {",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 96,
+          "pattern": "jest_mock",
+          "text": "logEvent: jest.fn(() => Promise.resolve()),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 97,
+          "pattern": "jest_mock",
+          "text": "setAnalyticsCollectionEnabled: jest.fn(() => Promise.resolve()),",
+          "location": "em_producao"
+        },
+        {
+          "file": "jestSetup.js",
+          "line": 98,
+          "pattern": "jest_mock",
+          "text": "logScreenView: jest.fn(() => Promise.resolve()),",
+          "location": "em_producao"
+        },
+        {
+          "file": "scripts/__tests__/gerar_dicionario.test.js",
+          "line": 3,
+          "pattern": "jest_mock",
+          "text": "jest.mock('fs', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "scripts/__tests__/gerar_dicionario.test.js",
+          "line": 4,
+          "pattern": "jest_mock",
+          "text": "readFileSync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "scripts/__tests__/gerar_dicionario.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "writeFileSync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "scripts/__tests__/gerar_dicionario.test.js",
+          "line": 20,
+          "pattern": "mock_implementation",
+          "text": "fs.writeFileSync.mockImplementation((filePath, data) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 4,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/app', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "initializeApp: jest.fn(() => ({})),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/auth', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "initializeAuth: jest.fn(() => ({})),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "getReactNativePersistence: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 14,
+          "pattern": "jest_mock",
+          "text": "getFirestore: jest.fn(() => ({})),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 17,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 18,
+          "pattern": "jest_mock",
+          "text": "getStorage: jest.fn(() => ({})),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/app-check', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 23,
+          "pattern": "jest_mock",
+          "text": "initializeAppCheck: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 24,
+          "pattern": "jest_mock",
+          "text": "CustomProvider: jest.fn().mockImplementation(function (options) {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 31,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-firebase/app-check', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "const mockGetToken = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 33,
+          "pattern": "jest_mock",
+          "text": "const mockFn = jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/firebaseConfig.test.js",
+          "line": 118,
+          "pattern": "jest_mock",
+          "text": "const spyError = jest.spyOn(console, 'error').mockImplementation(() => {});",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/iosBootContract.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "configure: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/iosBootContract.test.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "hasPlayServices: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/iosBootContract.test.js",
+          "line": 23,
+          "pattern": "jest_mock",
+          "text": "signIn: jest.fn().mockResolvedValue({ idToken: 'test-token' }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/iosBootContract.test.js",
+          "line": 69,
+          "pattern": "jest_mock",
+          "text": "const spySetVisibility = jest.spyOn(NavigationBar, 'setVisibilityAsync');",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/__tests__/iosBootContract.test.js",
+          "line": 85,
+          "pattern": "jest_mock",
+          "text": "const setCameraAtiva = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/CompartilharCard/__tests__/CompartilharCard.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../../assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 16,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 33,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaBase} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaComCapa} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 66,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaComImagemString} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 77,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaComImagemObj} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 90,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaComGaleria} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 103,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaComAutor} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 117,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaMatch0} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 128,
+          "pattern": "jest_mock",
+          "text": "<ReceitaCard receita={receitaMatch50} onPress={jest.fn()} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 134,
+          "pattern": "jest_mock",
+          "text": "const mockOnPress = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 144,
+          "pattern": "jest_mock",
+          "text": "const mockToggleSalva = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCard/__tests__/ReceitaCard.test.js",
+          "line": 148,
+          "pattern": "jest_mock",
+          "text": "onPress={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/components/ReceitaCarousel/__tests__/ReceitaCarousel.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../theme/colors', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({ db: {} }));",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "getDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 14,
+          "pattern": "jest_mock",
+          "text": "getItem: jest.fn((key) => Promise.resolve(mockAsyncStorageStore[key] || null)),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "setItem: jest.fn((key, value) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "logAddToPantry: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 24,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 25,
+          "pattern": "jest_mock",
+          "text": "Alert: { alert: jest.fn() },",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 26,
+          "pattern": "jest_mock",
+          "text": "StyleSheet: { create: jest.fn((styles) => styles) },",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "Dimensions: { get: jest.fn(() => ({ width: 400, height: 800 })) },",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../contexts/AlertContext', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useIngredientes.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "useAlert: () => ({ showAlert: jest.fn() })",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "getItem: jest.fn((key) => Promise.resolve(mockAsyncStorageStore[key] || null)),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 14,
+          "pattern": "jest_mock",
+          "text": "setItem: jest.fn((key, value) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 20,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 26,
+          "pattern": "jest_mock",
+          "text": "const mockGetDoc = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "const mockGetDocs = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "const mockDoc = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "const mockCollection = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useRestricoes.test.js",
+          "line": 31,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useSugestoes.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useSugestoes.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "getItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useSugestoes.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "setItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useSugestoes.test.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../assets/dicionario_ingredientes.json', () => [",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "const mockShowAlert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../contexts/AlertContext', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/auth', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 16,
+          "pattern": "jest_mock",
+          "text": "getAuth: jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 19,
+          "pattern": "jest_mock",
+          "text": "getIdToken: jest.fn().mockResolvedValue('token')",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "getItem: jest.fn((key) => Promise.resolve(mockAsyncStorageStore[key] || null)),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "setItem: jest.fn((key, value) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 34,
+          "pattern": "jest_mock",
+          "text": "removeItem: jest.fn((key) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 38,
+          "pattern": "jest_mock",
+          "text": "getAllKeys: jest.fn(() => Promise.resolve(Object.keys(mockAsyncStorageStore))),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "multiRemove: jest.fn((keys) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 45,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/authService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "criarConta: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 47,
+          "pattern": "jest_mock",
+          "text": "signOutUser: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 48,
+          "pattern": "jest_mock",
+          "text": "onAuthChange: jest.fn((cb) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "return jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 52,
+          "pattern": "jest_mock",
+          "text": "fazerLogin: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 53,
+          "pattern": "jest_mock",
+          "text": "atualizarPerfilUsuario: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 54,
+          "pattern": "jest_mock",
+          "text": "excluirContaUsuario: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 55,
+          "pattern": "jest_mock",
+          "text": "signInWithGoogle: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 56,
+          "pattern": "jest_mock",
+          "text": "signInWithApple: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 59,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/hooks/__tests__/useUsuario.test.js",
+          "line": 60,
+          "pattern": "jest_mock",
+          "text": "logSignUp: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../utils/notificationHelper', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "obterConfigNotificacoes: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "salvarConfigNotificacoes: jest.fn().mockResolvedValue(undefined),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "agendarNotificacoesCardapio: jest.fn().mockResolvedValue(undefined),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 11,
+          "pattern": "jest_mock",
+          "text": "obterHorarioNotificacoes: jest.fn().mockResolvedValue({ hora: 8, minuto: 0 }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "salvarHorarioNotificacoes: jest.fn().mockResolvedValue(undefined),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 20,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/auth', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "getAuth: jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 24,
+          "pattern": "jest_mock",
+          "text": "getIdToken: jest.fn().mockResolvedValue('token')",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../hooks/useUsuario', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 33,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../hooks/useIngredientes', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 41,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 42,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 43,
+          "pattern": "jest_mock",
+          "text": "getDoc: jest.fn(() => Promise.resolve({ exists: () => false }))",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/snapshotService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 47,
+          "pattern": "jest_mock",
+          "text": "obterReceitasMestre: jest.fn(() => Promise.resolve([]))",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../components/ReceitaCarousel/ReceitaCarousel', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 55,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/receitaService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 56,
+          "pattern": "jest_mock",
+          "text": "anexarFotoGaleria: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 59,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 75,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 76,
+          "pattern": "jest_mock",
+          "text": "logSaveToMenu: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 77,
+          "pattern": "jest_mock",
+          "text": "logScreenView: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 78,
+          "pattern": "jest_mock",
+          "text": "logViewRecipe: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 79,
+          "pattern": "jest_mock",
+          "text": "logUploadPhoto: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 82,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../utils/reviewHelper', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 83,
+          "pattern": "jest_mock",
+          "text": "verificarEDispararAlertaAvaliacao: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 86,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../utils/calcularMatch', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 87,
+          "pattern": "jest_mock",
+          "text": "calcularMatch: jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 95,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 101,
+          "pattern": "jest_mock",
+          "text": "RN.Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 105,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native-keyboard-aware-scroll-view', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 124,
+          "pattern": "jest_mock",
+          "text": "const setCardapioMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 138,
+          "pattern": "jest_mock",
+          "text": "const setCardapioMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 182,
+          "pattern": "jest_mock",
+          "text": "const setCardapioMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 221,
+          "pattern": "jest_mock",
+          "text": "const setCardapioMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 319,
+          "pattern": "jest_mock",
+          "text": "Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 323,
+          "pattern": "jest_mock",
+          "text": "setCardapio={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 340,
+          "pattern": "jest_mock",
+          "text": "Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 345,
+          "pattern": "jest_mock",
+          "text": "setCardapio={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 363,
+          "pattern": "jest_mock",
+          "text": "setCardapio={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 414,
+          "pattern": "jest_mock",
+          "text": "setCardapio={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 444,
+          "pattern": "jest_mock",
+          "text": "setCardapio={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 477,
+          "pattern": "jest_mock",
+          "text": "Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 481,
+          "pattern": "jest_mock",
+          "text": "setCardapio={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 506,
+          "pattern": "jest_mock",
+          "text": "const mockSetCardapio = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 507,
+          "pattern": "jest_mock",
+          "text": "Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 566,
+          "pattern": "jest_mock",
+          "text": "setCardapio={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CardapioScreen.test.js",
+          "line": 580,
+          "pattern": "jest_mock",
+          "text": "const mockSetCardapio = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-camera', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 20,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-image-picker', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "launchImageLibraryAsync: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 24,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../contexts/AlertContext', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 25,
+          "pattern": "jest_mock",
+          "text": "useAlert: () => ({ showAlert: jest.fn() })",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 49,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "logScanRecipe: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 53,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../utils/cameraHelper', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 54,
+          "pattern": "jest_mock",
+          "text": "abrirCamera: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 55,
+          "pattern": "jest_mock",
+          "text": "escolherDaGaleria: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 56,
+          "pattern": "jest_mock",
+          "text": "capturarFoto: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 79,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/functions', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 80,
+          "pattern": "jest_mock",
+          "text": "getFunctions: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.e2e.test.js",
+          "line": 81,
+          "pattern": "jest_mock",
+          "text": "httpsCallable: jest.fn(() => async () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "logScanRecipe: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 33,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 38,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 43,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-camera', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-image-picker', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 47,
+          "pattern": "jest_mock",
+          "text": "launchImageLibraryAsync: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "const mockShowAlert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 51,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../contexts/AlertContext', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 55,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native-keyboard-aware-scroll-view', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 57,
+          "pattern": "jest_mock",
+          "text": "const fn = jest.fn(({ children, ...props }) => (",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 63,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/receitaService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 64,
+          "pattern": "jest_mock",
+          "text": "salvarReceita: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 67,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../utils/cameraHelper', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 68,
+          "pattern": "jest_mock",
+          "text": "abrirCamera: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 69,
+          "pattern": "jest_mock",
+          "text": "capturarFoto: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 97,
+          "pattern": "jest_mock",
+          "text": "const mockEscolher = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 119,
+          "pattern": "jest_mock",
+          "text": "const mockSetFoto = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 120,
+          "pattern": "jest_mock",
+          "text": "const mockSetReceita = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 159,
+          "pattern": "jest_mock",
+          "text": "const mockSetFoto = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 160,
+          "pattern": "jest_mock",
+          "text": "const mockSetReceitaExtraida = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 168,
+          "pattern": "jest_mock",
+          "text": "const mockOnSalvar = jest.fn().mockResolvedValueOnce({ sucesso: true });",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 186,
+          "pattern": "jest_mock",
+          "text": "const mockOnSalvar = jest.fn().mockResolvedValueOnce({ sucesso: false, erro: 'Erro do Firebase' });",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 214,
+          "pattern": "jest_mock",
+          "text": "const mockSetReceita = jest.fn((val) => { currentReceita = val; });",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/CriarScreen.test.js",
+          "line": 398,
+          "pattern": "mock_implementation",
+          "text": "AsyncStorage.getItem.mockImplementation((key) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "showAlert: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "showConfirm: jest.fn((title, msg, options) => options.onConfirm()),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../contexts/AlertContext', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 16,
+          "pattern": "jest_mock",
+          "text": "getItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 17,
+          "pattern": "jest_mock",
+          "text": "setItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 18,
+          "pattern": "jest_mock",
+          "text": "removeItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 26,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 31,
+          "pattern": "jest_mock",
+          "text": "logSearchRecipes: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "logAddToShoppingList: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 35,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../hooks/useSugestoes', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native-keyboard-aware-scroll-view', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 54,
+          "pattern": "jest_mock",
+          "text": "setNovoNome: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 56,
+          "pattern": "jest_mock",
+          "text": "setNovaQtd: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 58,
+          "pattern": "jest_mock",
+          "text": "setModoAdicao: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 60,
+          "pattern": "jest_mock",
+          "text": "setMostrarForm: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 61,
+          "pattern": "jest_mock",
+          "text": "adicionarIngrediente: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 62,
+          "pattern": "jest_mock",
+          "text": "removerIngrediente: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 63,
+          "pattern": "jest_mock",
+          "text": "iniciarEdicao: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 64,
+          "pattern": "jest_mock",
+          "text": "alternarStatus: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 66,
+          "pattern": "jest_mock",
+          "text": "limparItens: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 74,
+          "pattern": "jest_mock",
+          "text": "buscarReceitas={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 76,
+          "pattern": "jest_mock",
+          "text": "onNavigateToExplorar={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 115,
+          "pattern": "jest_mock",
+          "text": "const removerMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 141,
+          "pattern": "jest_mock",
+          "text": "const setModoAdicaoMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 142,
+          "pattern": "jest_mock",
+          "text": "const setMostrarFormMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 156,
+          "pattern": "jest_mock",
+          "text": "const setModoAdicaoMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 157,
+          "pattern": "jest_mock",
+          "text": "const setMostrarFormMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 171,
+          "pattern": "jest_mock",
+          "text": "const limparItensMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/DespensaScreen.test.js",
+          "line": 192,
+          "pattern": "jest_mock",
+          "text": "const limparItensMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 11,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../hooks/useUsuario', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 25,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/analyticsService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 26,
+          "pattern": "jest_mock",
+          "text": "logViewRecipe: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "logUploadPhoto: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 35,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/receitaService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 36,
+          "pattern": "jest_mock",
+          "text": "anexarFotoGaleria: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../components/ReceitaCarousel/ReceitaCarousel', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 45,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../components/SearchBar/SearchBar', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 53,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../components/ReceitaCard/ReceitaCard', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 77,
+          "pattern": "jest_mock",
+          "text": "buscarReceitasPorNome: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 78,
+          "pattern": "jest_mock",
+          "text": "carregarMais: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 79,
+          "pattern": "jest_mock",
+          "text": "resetarParaMatch: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 82,
+          "pattern": "jest_mock",
+          "text": "const mockBuscarReceitas = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 83,
+          "pattern": "jest_mock",
+          "text": "const mockSetCardapio = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 105,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 130,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 156,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 171,
+          "pattern": "jest_mock",
+          "text": "const setOrdenacaoMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 206,
+          "pattern": "jest_mock",
+          "text": "const setOrdenacaoMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 207,
+          "pattern": "jest_mock",
+          "text": "const resetarParaMatchMock = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 264,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 287,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 312,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 345,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 381,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 409,
+          "pattern": "jest_mock",
+          "text": "buscarReceitasPorNome: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 410,
+          "pattern": "jest_mock",
+          "text": "carregarMais: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 411,
+          "pattern": "jest_mock",
+          "text": "resetarParaMatch: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 414,
+          "pattern": "jest_mock",
+          "text": "const mockSetCardapio = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 429,
+          "pattern": "jest_mock",
+          "text": "buscarReceitas={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 431,
+          "pattern": "jest_mock",
+          "text": "setOrdenacao={jest.fn()}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 457,
+          "pattern": "jest_mock",
+          "text": "Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 479,
+          "pattern": "jest_mock",
+          "text": "Alert.alert = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/ExplorarScreen.test.js",
+          "line": 509,
+          "pattern": "mock_implementation",
+          "text": "anexarFotoGaleria.mockImplementationOnce(",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../../assets/icones', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 23,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/snapshotService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 24,
+          "pattern": "jest_mock",
+          "text": "obterReceitasMestre: jest.fn().mockResolvedValue([",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 44,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-image-picker', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 45,
+          "pattern": "jest_mock",
+          "text": "launchImageLibraryAsync: jest.fn().mockResolvedValue({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 49,
+          "pattern": "jest_mock",
+          "text": "launchCameraAsync: jest.fn().mockResolvedValue({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 53,
+          "pattern": "jest_mock",
+          "text": "requestCameraPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 54,
+          "pattern": "jest_mock",
+          "text": "requestMediaLibraryPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 58,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@expo/vector-icons', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 63,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/feedbackService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 64,
+          "pattern": "jest_mock",
+          "text": "enviarSugestao: jest.fn().mockResolvedValue({ sucesso: true }),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 65,
+          "pattern": "jest_mock",
+          "text": "registrarReceitaSalva: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 66,
+          "pattern": "jest_mock",
+          "text": "relatarProblemaReceita: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 69,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../services/receitaService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 70,
+          "pattern": "jest_mock",
+          "text": "anexarFotoGaleria: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 73,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../utils/cameraHelper', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 74,
+          "pattern": "jest_mock",
+          "text": "abrirCamera: jest.fn((setCameraAtiva) => setCameraAtiva && setCameraAtiva(true)),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 75,
+          "pattern": "jest_mock",
+          "text": "capturarFoto: jest.fn((cameraRef, callback, setCameraAtiva) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 81,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 85,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/auth', () => ({ getAuth: jest.fn() }));",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 86,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({ doc: jest.fn(), setDoc: jest.fn() }));",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 87,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../contexts/AlertContext', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 88,
+          "pattern": "jest_mock",
+          "text": "useAlert: () => ({ showAlert: jest.fn() })",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 92,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native-keyboard-aware-scroll-view', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 111,
+          "pattern": "jest_mock",
+          "text": "atualizarPerfil: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 112,
+          "pattern": "jest_mock",
+          "text": "logout: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 117,
+          "pattern": "jest_mock",
+          "text": "<PerfilScreen navigation={{ goBack: jest.fn() }} usuarioHook={mockUsuarioHook} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 142,
+          "pattern": "jest_mock",
+          "text": "logout: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 147,
+          "pattern": "jest_mock",
+          "text": "<PerfilScreen navigation={{ goBack: jest.fn() }} usuarioHook={mockUsuarioHook} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 152,
+          "pattern": "jest_mock",
+          "text": "const spyLink = jest.spyOn(Linking, 'openURL').mockImplementation(() => Promise.resolve());",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 199,
+          "pattern": "jest_mock",
+          "text": "logout: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 204,
+          "pattern": "jest_mock",
+          "text": "<PerfilScreen navigation={{ goBack: jest.fn() }} usuarioHook={mockUsuarioHook} />",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 220,
+          "pattern": "jest_mock",
+          "text": "logout: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 228,
+          "pattern": "jest_mock",
+          "text": "navigation={{ goBack: jest.fn() }}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 247,
+          "pattern": "jest_mock",
+          "text": "navigation={{ goBack: jest.fn() }}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 274,
+          "pattern": "jest_mock",
+          "text": "const spyAlert = jest.spyOn(Alert, 'alert');",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/screens/__tests__/PerfilScreen.test.js",
+          "line": 278,
+          "pattern": "jest_mock",
+          "text": "navigation={{ goBack: jest.fn() }}",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/analyticsService.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "const mockLogEvent = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/analyticsService.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "const mockLogScreenView = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/analyticsService.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-firebase/analytics', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/analyticsService.test.js",
+          "line": 10,
+          "pattern": "jest_mock",
+          "text": "return jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 4,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({ app: {} }));",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/functions', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "const mockCallableFn = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "getFunctions: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "httpsCallable: jest.fn(() => mockCallableFn),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "global.fetch = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "blob: jest.fn().mockResolvedValue({}),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/apiService.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "json: jest.fn().mockResolvedValue({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 17,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/auth', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 26,
+          "pattern": "jest_mock",
+          "text": "getAuth: jest.fn(() => mockAuth),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "createUserWithEmailAndPassword: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "signInWithEmailAndPassword: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 29,
+          "pattern": "jest_mock",
+          "text": "updateProfile: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "signOut: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 31,
+          "pattern": "jest_mock",
+          "text": "onAuthStateChanged: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "GoogleAuthProvider: { credential: jest.fn() },",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 33,
+          "pattern": "jest_mock",
+          "text": "signInWithCredential: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 34,
+          "pattern": "jest_mock",
+          "text": "deleteUser: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "const mockBatchUpdate = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 40,
+          "pattern": "jest_mock",
+          "text": "const mockBatchCommit = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 42,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 43,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 44,
+          "pattern": "jest_mock",
+          "text": "setDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 45,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "query: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 47,
+          "pattern": "jest_mock",
+          "text": "where: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 48,
+          "pattern": "jest_mock",
+          "text": "getDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 49,
+          "pattern": "jest_mock",
+          "text": "getDocs: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 50,
+          "pattern": "jest_mock",
+          "text": "deleteDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 51,
+          "pattern": "jest_mock",
+          "text": "writeBatch: jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/authService.test.js",
+          "line": 124,
+          "pattern": "jest_mock",
+          "text": "const spyConsoleError = jest.spyOn(console, 'error').mockImplementation(() => {});",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 4,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "get: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "set: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 16,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 17,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 18,
+          "pattern": "jest_mock",
+          "text": "addDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 19,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 20,
+          "pattern": "jest_mock",
+          "text": "setDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 21,
+          "pattern": "jest_mock",
+          "text": "increment: jest.fn(val => `increment(${val})`),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/feedbackService.test.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "runTransaction: jest.fn((db, cb) => cb(mockTransaction))",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 11,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "setDoc: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 14,
+          "pattern": "jest_mock",
+          "text": "collection: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 15,
+          "pattern": "jest_mock",
+          "text": "getDocs: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 18,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../apiService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 19,
+          "pattern": "jest_mock",
+          "text": "padronizarReceita: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../snapshotService', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/receitaService.test.js",
+          "line": 23,
+          "pattern": "jest_mock",
+          "text": "obterReceitasMestre: jest.fn()",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-file-system/legacy', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "downloadAsync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 8,
+          "pattern": "jest_mock",
+          "text": "readAsStringAsync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 9,
+          "pattern": "jest_mock",
+          "text": "getInfoAsync: jest.fn(() => Promise.resolve({ exists: false })),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-network', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "getNetworkStateAsync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 28,
+          "pattern": "jest_mock",
+          "text": "const mockCallback = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "const mockCallback = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 48,
+          "pattern": "jest_mock",
+          "text": "const faultyListener = jest.fn(() => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 51,
+          "pattern": "jest_mock",
+          "text": "const healthyListener = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/services/__tests__/snapshotService.test.js",
+          "line": 74,
+          "pattern": "jest_mock",
+          "text": "const listener = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-camera', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "requestCameraPermissionsAsync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 14,
+          "pattern": "jest_mock",
+          "text": "alert: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 27,
+          "pattern": "jest_mock",
+          "text": "const setCameraAtiva = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 36,
+          "pattern": "jest_mock",
+          "text": "const setCameraAtiva = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 49,
+          "pattern": "jest_mock",
+          "text": "const setCameraAtiva = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 57,
+          "pattern": "jest_mock",
+          "text": "const mockTakePicture = jest.fn().mockResolvedValueOnce({ uri: 'mock-uri', base64: 'mock-base64' });",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 59,
+          "pattern": "jest_mock",
+          "text": "const setFoto = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 60,
+          "pattern": "jest_mock",
+          "text": "const setCameraAtiva = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 61,
+          "pattern": "jest_mock",
+          "text": "const setReceitaExtraida = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 72,
+          "pattern": "jest_mock",
+          "text": "const setFoto = jest.fn();",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/cameraHelper.test.js",
+          "line": 74,
+          "pattern": "jest_mock",
+          "text": "await capturarFoto(cameraRef, setFoto, jest.fn(), jest.fn());",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/matchHibridoHelper.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "const mockCalcularMatch = jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/notificationHelper.test.js",
+          "line": 5,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/notificationHelper.test.js",
+          "line": 6,
+          "pattern": "jest_mock",
+          "text": "getItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/notificationHelper.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "setItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/notificationHelper.test.js",
+          "line": 74,
+          "pattern": "mock_implementation",
+          "text": "AsyncStorage.getItem.mockImplementation(async (key) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/notificationHelper.test.js",
+          "line": 116,
+          "pattern": "mock_implementation",
+          "text": "AsyncStorage.getItem.mockImplementation(async (key) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 7,
+          "pattern": "jest_mock",
+          "text": "jest.mock('../../firebaseConfig', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 12,
+          "pattern": "jest_mock",
+          "text": "jest.mock('@react-native-async-storage/async-storage', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 13,
+          "pattern": "jest_mock",
+          "text": "getItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 14,
+          "pattern": "jest_mock",
+          "text": "setItem: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 17,
+          "pattern": "jest_mock",
+          "text": "jest.mock('react-native', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 19,
+          "pattern": "jest_mock",
+          "text": "alert: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 22,
+          "pattern": "jest_mock",
+          "text": "openURL: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 26,
+          "pattern": "jest_mock",
+          "text": "select: jest.fn((obj) => obj.android || obj.default),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 30,
+          "pattern": "jest_mock",
+          "text": "jest.mock('expo-store-review', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 31,
+          "pattern": "jest_mock",
+          "text": "isAvailableAsync: jest.fn(),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 32,
+          "pattern": "jest_mock",
+          "text": "requestReview: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 35,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/auth', () => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 39,
+          "pattern": "jest_mock",
+          "text": "getAuth: jest.fn(() => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 45,
+          "pattern": "jest_mock",
+          "text": "jest.mock('firebase/firestore', () => ({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 46,
+          "pattern": "jest_mock",
+          "text": "getFirestore: jest.fn(() => ({})),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 47,
+          "pattern": "jest_mock",
+          "text": "doc: jest.fn((db, col, id) => ({ path: `${col}/${id}` })),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 48,
+          "pattern": "jest_mock",
+          "text": "setDoc: jest.fn().mockResolvedValue(true),",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 49,
+          "pattern": "jest_mock",
+          "text": "getDoc: jest.fn().mockResolvedValue({",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 145,
+          "pattern": "mock_implementation",
+          "text": "AsyncStorage.getItem.mockImplementation(async (key) => {",
+          "location": "em_testes"
+        },
+        {
+          "file": "src/utils/__tests__/reviewHelper.test.js",
+          "line": 158,
+          "pattern": "mock_implementation",
+          "text": "AsyncStorage.getItem.mockImplementation(async (key) => {",
+          "location": "em_testes"
+        }
+      ],
+      "needle_tokens": 845,
+      "needle_latency_ms": 153.3,
+      "choice_selected": "mocks_em_producao",
+      "choice_confidence": 0.3913,
+      "choice_latency_ms": 1147.39,
+      "noul_passed": true,
+      "noul_probability": 0.9403,
+      "noul_threshold": 0.78,
+      "noul_latency_ms": 1724.09,
+      "score": 3.11,
+      "score_passed": false,
+      "score_threshold": 3.4,
+      "score_breakdown": {
+        "critical flaws": 0.0942,
+        "poor quality": 0.2066,
+        "acceptable": 0.3075,
+        "good quality": 0.2822,
+        "exceptional": 0.1096
+      },
+      "score_latency_ms": 1756.06,
+      "diagnosis": {
+        "selected": "stub_ou_mock_em_producao",
+        "confidence": 0.9997,
+        "description": "Uso de dados mockados, retornos simulados (hardcoded) ou stubs dentro do código de produção em vez da implementação real."
+      },
+      "index": 4
+    }
+  ]
+}

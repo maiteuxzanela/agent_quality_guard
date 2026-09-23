@@ -1,3 +1,6 @@
+# HISTORICAL — era DeBERTa (modelo deberta, noul 0.50/3.5, score 3.75).
+# NAO USAR em pipeline Laya. Ver scripts/audit_mocks.py (0.78/3.40).
+# Arquivado na auditoria P2 (2026).
 """Pipeline de Auditoria Automatizada do Panela de Sobra (PanelaAndroid).
 Executa o fluxo completo:
 1. Needle 3: Recuperação cirúrgica relacional de módulos e trechos críticos.

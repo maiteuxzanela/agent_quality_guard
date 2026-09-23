@@ -41,7 +41,7 @@ BENCHMARK_CASES = {
 STANDARD_RUBRIC = "Avalie a resposta técnica de 1.0 a 5.0 considerando rigor analítico, clareza didática, fidelidade ao código real do repositório e atendimento aos comandos do usuário."
 
 
-# ─── Benchmark DeBERTa-v3 (engine atual) ────────────────────────────────────
+# ─── Benchmark DeBERTa-v3 (HISTORICO — legado; pipeline atual é Laya) ────────
 
 async def benchmark_deberta():
     from src.decision.engine import OpenJevEngine

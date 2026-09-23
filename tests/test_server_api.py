@@ -47,10 +47,31 @@ def test_choice_endpoint_fails_fast_when_not_ready(client):
 
 def test_score_endpoint_fails_fast_when_not_ready(client):
     payload = {
-        "premise": "def add(a, b): return a + b",
+        "premise": "Pedido: def add. | Resultado Executado: função implementada.",
         "rubric": "Code quality rubric",
     }
     response = client.post("/v1/decision/score", json=payload)
     assert response.status_code == 503
     data = response.json()
     assert data["error"] == "OpenJevNotReadyError"
+
+
+def test_score_endpoint_rejects_bad_premise_before_engine(client):
+    """Gate portado: premissa sem Pedido|Resultado → 422 antes do fail-fast 503."""
+    payload = {"premise": "só prosa, sem padrão factual"}
+    response = client.post("/v1/decision/score", json=payload)
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "PREMISSA RECUSADA" in detail or "Pedido" in detail
+
+
+def test_score_endpoint_rejects_bad_task_type(client):
+    payload = {
+        "premise": "Pedido: x | Resultado: y",
+        "rubric": "livre que seria ignorada",
+    }
+    response = client.post(
+        "/v1/decision/score?task_type=inexistente", json=payload
+    )
+    assert response.status_code == 422
+    assert "TASK_TYPE" in response.json()["detail"]

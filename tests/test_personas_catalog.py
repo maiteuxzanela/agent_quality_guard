@@ -1,0 +1,86 @@
+"""Testes reais do catálogo de personas e subagentes do Projeto JEV (sem mocks)."""
+
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PERSONAS_DIR = REPO_ROOT / "personas"
+
+EXPECTED_PERSONA_FILES = {
+    "README.md",
+    "00_valerio_lead_architect.md",
+    "01_kael_ml_hardware.md",
+    "02_maya_ast_memory.md",
+    "03_tulio_mcp_api.md",
+    "04_clara_qa_governance.md",
+    "05_otavio_audit_bridge.md",
+}
+
+EXPECTED_SPECIALISTS = {
+    "kael_ml",
+    "maya_ast",
+    "tulio_mcp",
+    "clara_qa",
+    "otavio_bridge",
+}
+
+
+class TestPersonasCatalog(unittest.TestCase):
+    """Garante a integridade dos arquivos de personas e aderência aos contratos."""
+
+    def test_personas_directory_exists(self) -> None:
+        self.assertTrue(PERSONAS_DIR.is_dir(), f"Diretório não encontrado: {PERSONAS_DIR}")
+
+    def test_all_expected_persona_files_exist(self) -> None:
+        found_files = {p.name for p in PERSONAS_DIR.glob("*.md")}
+        missing = EXPECTED_PERSONA_FILES - found_files
+        self.assertFalse(missing, f"Arquivos de persona ausentes: {missing}")
+
+    def test_roster_size_within_laya_calibration_limit(self) -> None:
+        """O roster de subagentes especialistas deve ter <= 10 opções para o Laya."""
+        self.assertLessEqual(
+            len(EXPECTED_SPECIALISTS),
+            10,
+            "Roster de especialistas excede 10 opções (viola calibração de temperature do Laya).",
+        )
+        self.assertGreaterEqual(len(EXPECTED_SPECIALISTS), 2)
+
+    def test_orchestrator_persona_content(self) -> None:
+        valerio = PERSONAS_DIR / "00_valerio_lead_architect.md"
+        content = valerio.read_text(encoding="utf-8")
+        self.assertIn("Valério", content)
+        self.assertIn("Maiteux Zanela", content)
+        self.assertIn("openjev_choice", content)
+        self.assertIn("openjev_score_and_diagnose", content)
+
+    def test_specialists_personas_content(self) -> None:
+        for fname in EXPECTED_PERSONA_FILES - {"README.md", "00_valerio_lead_architect.md"}:
+            path = PERSONAS_DIR / fname
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("Valério", text, f"{fname} deve referenciar o Orquestrador Valério")
+            self.assertIn("Diretrizes e Guardrails", text, f"{fname} deve conter guardrails")
+
+    def test_agents_md_references_team_matrix(self) -> None:
+        agents_file = REPO_ROOT / "AGENTS.md"
+        text = agents_file.read_text(encoding="utf-8")
+        self.assertIn("Matriz da Equipe e Roteamento", text)
+        self.assertIn("Valério", text)
+        self.assertIn("@Kael", text)
+        self.assertIn("@Maya", text)
+        self.assertIn("@Túlio", text)
+        self.assertIn("@Clara", text)
+        self.assertIn("@Otávio", text)
+
+    def test_agents_md_references_relatorio_resumido(self) -> None:
+        agents_file = REPO_ROOT / "AGENTS.md"
+        text = agents_file.read_text(encoding="utf-8")
+        self.assertIn("Relatório Resumido de Validação de Entrega", text)
+        self.assertIn("**Status:**", text)
+        self.assertIn("**Tentativas:**", text)
+        self.assertIn("**Notas:**", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

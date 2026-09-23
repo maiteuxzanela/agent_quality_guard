@@ -3,8 +3,13 @@
 Disponibiliza Needle 3, Choice, Noul e Score via protocolo padrão MCP (stdio).
 """
 
+import asyncio
+import hashlib
+import logging
 import os
+import subprocess
 import sys
+import threading
 import time
 import warnings
 from pathlib import Path
@@ -20,32 +25,52 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 from mcp.server import MCPServer
 from src.core.schemas import (
+    BORDERLINE_FLAWED_MAX_MASS,
+    BORDERLINE_HEALTHY_MIN_MASS,
     ChoiceRequest,
+    ConsultaResponse,
     DEFECT_DESCRIPTIONS,
+    DEFECT_MEMBERS,
     DEFECT_OPTIONS,
+    DIAG_CHOICE_INSTRUCTIONS,
     DiagnosisResult,
     Needle3Query,
     NoulRequest,
+    RUBRIC_CATALOG,
     ScoreRequest,
     ScoreDiagnoseResponse,
 )
 from src.decision.engine import OpenJevEngine
+from src.decision.laya_adapter import evaluate_borderline_mass_gate
 from src.memory.local_needle import LocalNeedleEngine
+
+logger = logging.getLogger("jev.mcp")
 
 app = MCPServer("open-jev-server")
 
 _engine_instance: Optional[OpenJevEngine] = None
+_engine_lock = threading.Lock()
 
 
 def get_engine() -> OpenJevEngine:
+    """Singleton do motor; thread-safe (chamado via asyncio.to_thread)."""
     global _engine_instance
-    if _engine_instance is None:
-        _engine_instance = OpenJevEngine(
-            model_id_or_path="convaiinnovations/laya",
-            allow_cpu_fallback=True,
-        )
-        _engine_instance.load_model()
+    if _engine_instance is not None:
+        return _engine_instance
+    with _engine_lock:
+        if _engine_instance is None:
+            engine = OpenJevEngine(
+                model_id_or_path="convaiinnovations/laya",
+                allow_cpu_fallback=True,
+            )
+            engine.load_model()
+            _engine_instance = engine
     return _engine_instance
+
+
+async def _get_engine_async() -> OpenJevEngine:
+    """Carrega/busca o motor fora do event loop (load pesado não trava o MCP)."""
+    return await asyncio.to_thread(get_engine)
 
 
 @app.tool(
@@ -86,55 +111,49 @@ async def needle3_search(
             "content": s.content,
         })
 
-    return {
+    result = {
         "status": "success",
         "latency_ms": round(lat_ms, 2),
         "total_tokens": resp.total_tokens,
-        "token_savings_pct": getattr(resp, "token_savings_pct", 85.0),
+        "token_savings_pct": resp.token_savings_pct,
         "snippets_count": len(resp.snippets),
         "snippets": snippets_data,
     }
+    if needle.candidates_truncated:
+        result["candidates_truncated"] = True
+        result["candidates_found"] = needle.candidates_found
+        result["warning"] = (
+            f"Teto de candidatos atingido ({needle.candidates_found}). "
+            "Restringa `scope` para busca cirúrgica neste workspace."
+        )
+    return result
 
 
 @app.tool(
     name="openjev_choice",
-    description="Roteamento deterministico de subagente especialista usando Laya (RLCD Classifier) local na GPU GTX 1050 Ti.",
+    description=(
+        "Distribuicao probabilistica (Laya RLCD local) entre subagentes, ferramentas, skills, "
+        "arquivos ou caminhos — nao roteamento deterministico. GTX 1050 Ti / CPU com lock de predict."
+    ),
 )
 async def openjev_choice(
     premise: str,
-    options: Optional[List[str]] = None,
+    options: List[str],
     temperature: float = 1.0,
 ) -> dict:
-    """Calcula distribuicao de probabilidades entre subagentes ou caminhos."""
-    if not options:
-        # Detecta automaticamente o time pelo contexto da premissa ou diretório
-        premise_lower = premise.lower()
-        cwd_lower = os.getcwd().lower()
-        if "panela" in premise_lower or "panela" in cwd_lower or "react" in premise_lower or "mobile" in premise_lower:
-            options = [
-                "zelia_cto",
-                "erica_product_manager",
-                "ana_mobile_dev",
-                "bia_data_finops",
-                "carla_ui_ux",
-                "diana_qa_tests",
-                "iara_ios_engineer",
-                "cris_web_admin",
-                "helena_supervisora_aceite",
-            ]
-        else:
-            options = [
-                "alex_cto",
-                "ariel_brand",
-                "lumi_ux",
-                "sam_payments",
-                "cris_merchant",
-                "morgan_security",
-                "noa_growth",
-                "robin_qa",
-            ]
+    """Calcula distribuicao de probabilidades entre subagentes ou caminhos.
 
-    engine = get_engine()
+    `options` é obrigatório (assinatura compatível com ChoiceRequest, min_length=2).
+    """
+    if not options or len(options) < 2:
+        raise ValueError(
+            "openjev_choice exige 'options' com pelo menos 2 opções formais "
+            "(compatível com ChoiceRequest.min_length=2). Sem rosters hardcoded."
+        )
+    if not (0.0 < temperature <= 5.0):
+        raise ValueError("temperature deve estar em (0.0, 5.0] (limites de ChoiceRequest).")
+
+    engine = await _get_engine_async()
     req = ChoiceRequest(
         premise=premise,
         options=options,
@@ -160,7 +179,7 @@ async def openjev_noul(
     threshold: float = 0.78,
 ) -> dict:
     """Verifica se a premissa implica a hipotese de seguranca com probabilidade >= threshold."""
-    engine = get_engine()
+    engine = await _get_engine_async()
     req = NoulRequest(
         premise=premise,
         hypothesis=hypothesis,
@@ -177,135 +196,106 @@ async def openjev_noul(
     }
 
 
-DEFAULT_SCORE_RUBRIC = (
-    "Avalie a resposta técnica de 1.0 a 5.0 considerando rigor analítico, "
-    "clareza didática, fidelidade ao código real do repositório e atendimento aos comandos do usuário."
+@app.tool(
+    name="openjev_consulta",
+    description=(
+        "Consulta direta ('esse script funciona?', 'esse banco tem essa informação?') "
+        "retornando indício textual SEM booleano de aprovação. Postura: aceitar como "
+        "indício de algo a investigar; premise gaming proibido; indício desfavorável "
+        "exige investigação e alerta à usuária."
+    ),
+)
+async def openjev_consulta(premise: str, question: str) -> dict:
+    """Retorna indício textual (probability/confidence) — sem campo `passed`.
+
+    Usa a primitiva noul do motor por baixo, mas o contrato serializado é
+    ConsultaResponse (extra='forbid'): jamais expõe booleano de aprovação
+    que convide o agente a praticar premise gaming.
+    """
+    if not premise.strip() or not question.strip():
+        raise ValueError("openjev_consulta exige 'premise' e 'question' não vazios.")
+
+    engine = await _get_engine_async()
+    req = NoulRequest(
+        premise=premise,
+        hypothesis=question,
+        threshold=0.5,
+    )
+    resp = await engine.evaluate_noul(req)
+    prob = resp.probability
+
+    if prob >= 0.78:
+        forca = "forte a favor"
+    elif prob >= 0.5:
+        forca = "fraco a favor"
+    elif prob >= 0.22:
+        forca = "fraco contra"
+    else:
+        forca = "forte contra"
+
+    indicio = (
+        f"Indício {forca} de que a resposta à pergunta é verdadeira "
+        f"(P={prob:.4f}). Esta resposta é um INDÍCIO para investigação, não um "
+        "veredito nem aprovação: indício desfavorável exige investigar, consertar "
+        "o que precisar e alertar a usuária — nunca reformular a premissa para "
+        "inverter o resultado (premise gaming proibido)."
+    )
+
+    return ConsultaResponse(
+        indicio=indicio,
+        probability=round(prob, 4),
+        confidence=round(resp.confidence, 4),
+        latency_ms=round(resp.latency_ms, 2),
+    ).model_dump()
+
+
+DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["entrega"]
+
+# Teto rígido da premissa de score (anti-ruído: prosa longa distorce a nota).
+from src.core.score_gate import (  # noqa: E402
+    MAX_ATTEMPTS as _SCORE_GATE_MAX_ATTEMPTS,
+    SCORE_PREMISE_MAX_LEN,
+    get_workspace_git_signature as _score_gate_git_signature,
+    history_clear as _history_clear,
+    history_get as _history_get,
+    history_increment_attempts as _history_increment_attempts,
+    history_set as _history_set,
+    resolve_task_rubric as _resolve_task_rubric,
+    validate_score_premise as _validate_score_premise,
+    _score_history,
 )
 
-_score_history: Dict[str, dict] = {}
+MAX_ATTEMPTS = _SCORE_GATE_MAX_ATTEMPTS
 
 
 def _get_workspace_git_signature(workspace_dir: str) -> str:
-    """Calcula a assinatura do estado do workspace no Git para impedir reavaliações sem refatoração real."""
-    try:
-        import subprocess
-        res_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        head = res_head.stdout.strip() if res_head.returncode == 0 else "no_head"
-        res_status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        status = res_status.stdout.strip() if res_status.returncode == 0 else ""
-        return f"{head}:{status}"
-    except Exception:
-        pass
-    return ""
+    """Assinatura do workspace — delega a score_gate (HEAD + diff + untracked)."""
+    return _score_gate_git_signature(workspace_dir)
 
 
-@app.tool(
-    name="openjev_score",
-    description="Avaliacao ordinal de qualidade de codigo de 1.0 a 5.0 usando Laya com protecao anti-premise gaming e saida de emergencia.",
-)
-async def openjev_score(
-    premise: str,
-    workspace: str = "",
-    rubric: str = DEFAULT_SCORE_RUBRIC,
-    min_score: float = 1.0,
-    max_score: float = 5.0,
-    threshold: float = 3.60,
-) -> dict:
-    """Avalia conformidade qualitativa em escala continua com travamento anti-gaming e saida de emergencia."""
-    target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
-    current_git_state = _get_workspace_git_signature(target_workspace)
 
-    # Verificação Anti-Premise Gaming (Trava de Refatoração no Workspace)
-    hist = _score_history.get(target_workspace)
-    if hist and not hist.get("passed", True):
-        prev_state = hist.get("git_state", "")
-        attempts = hist.get("attempts", 1)
 
-        # Se o workspace não sofreu nenhuma alteração de arquivo desde a reprovação
-        if current_git_state == prev_state and current_git_state != "":
-            if attempts >= 10:
-                # Circuito Aberto: Saída de Emergência Desbloqueada
-                return {
-                    "score": hist.get("last_score", 0.0),
-                    "passed": False,
-                    "threshold": threshold,
-                    "attempts": attempts,
-                    "max_attempts": 10,
-                    "emergency_exit_unlocked": True,
-                    "message": (
-                        "🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA]: O limite de 10 tentativas consecutivas de "
-                        "refatoração sem aprovação foi atingido. O agente está autorizado a interromper o loop "
-                        "e responder ao usuário com um Laudo de Inviabilidade Técnica fundamentado, "
-                        "explicando a causa-raiz da impossibilidade e sugerindo alternativas viáveis."
-                    ),
-                }
-            else:
-                hist["attempts"] = attempts + 1
-                return {
-                    "error": (
-                        f"🚨 AVALIAÇÃO RECUSADA (Tentativa {attempts}/10): Nenhuma alteração real de código ou "
-                        "teste foi detectada no repositório desde a última reprovação. É proibido tentar passar no JEV "
-                        "apenas reescrevendo ou adjetivando a premissa. Refatore o código ou testes no disco antes de reavaliar. "
-                        "(Caso o pedido seja comprovadamente impossível, atinja 10 tentativas fundamentadas para desbloquear a Saída de Emergência)."
-                    ),
-                    "attempts": attempts,
-                    "max_attempts": 10,
-                    "emergency_exit_unlocked": False,
-                }
+# NOTA: a tool `openjev_score` foi expurgada (set/2026) — todo o fluxo de
+# score (validação de premissa, catálogo de rubricas, anti-premise gaming,
+# circuit breaker e rubric_source) vive exclusivamente em
+# `openjev_score_and_diagnose`, logo abaixo.
 
-    engine = get_engine()
-    req = ScoreRequest(
-        premise=premise,
-        rubric=rubric,
-        min_score=min_score,
-        max_score=max_score,
-        threshold=threshold,
-    )
-    resp = await engine.evaluate_score(req)
+# Circuit breaker (MAX_ATTEMPTS) vem de score_gate — fonte única.
 
-    # Atualiza histórico de tentativas do workspace
-    if resp.passed:
-        _score_history[target_workspace] = {
-            "passed": True,
-            "attempts": 0,
-            "git_state": current_git_state,
-            "last_score": round(resp.score, 2),
-        }
-    else:
-        prev_attempts = hist.get("attempts", 0) if hist else 0
-        _score_history[target_workspace] = {
-            "passed": False,
-            "attempts": prev_attempts + 1,
-            "git_state": current_git_state,
-            "last_score": round(resp.score, 2),
-        }
-
-    attempts_count = _score_history[target_workspace]["attempts"]
-    return {
-        "score": round(resp.score, 2),
-        "max_score": max_score,
-        "normalized_score": round(resp.normalized_score, 4),
-        "passed": resp.passed,
-        "threshold": threshold,
-        "attempts": attempts_count,
-        "max_attempts": 10,
-        "emergency_exit_unlocked": attempts_count >= 10,
-        "breakdown": resp.breakdown,
-        "latency_ms": round(resp.latency_ms, 2),
+# Categorias nulas do choice flat: o diagnóstico não aponta defeito concreto.
+# Em borderline, estas categorias aprovam a entrega (carve-out §4.4) SOMENTE
+# se a confiança do choice for >= NULL_CHOICE_MIN_CONFIDENCE (gate anti-FP:
+# nula fraca não deve resgatar entrega reprovada, ex.: injecao_sql).
+NULL_DEFECT_OPTIONS = frozenset(
+    {
+        "sem_defeito_identificavel",
+        "evidencia_insuficiente",
     }
+)
 
+# Confiança mínima do choice para a nula valer como aprovação borderline.
+# Alinhado a Router.min_confidence (0.40). FP medido (injecao → nula) teve ~0.216.
+NULL_CHOICE_MIN_CONFIDENCE = 0.40
 
 
 @app.tool(
@@ -313,64 +303,78 @@ async def openjev_score(
     description=(
         "Avaliacao de qualidade com diagnostico estruturado de defeito. "
         "Se score >= threshold: retorna aprovacao simples (diagnosis=null). "
-        "Se score < threshold: executa um choice unico sobre 26 possiveis defeitos flat e retorna "
-        "o defeito identificado com confianca, distribuicao de probabilidades e descricao legivel "
-        "para auto-correcao precisa pelo agente."
+        "Se score < threshold: executa um choice unico sobre 10 categorias de defeito flat "
+        "(calibrado — listas >= 11 opções degradam o head do Laya) e retorna a categoria "
+        "identificada com confianca, distribuicao, descricao legivel e candidate_defects "
+        "(folhas candidatas) para auto-correcao. "
+        "Se borderline=true, o choice AINDA roda: se selected for sem_defeito_identificavel "
+        "ou evidencia_insuficiente E confidence >= 0.40, passed=true com "
+        "approved_as_borderline=true (divulgar score_margin); nula fraca ou defeito "
+        "concreto => passed=false e exige correcao real "
+        "no disco. Circuit breaker apos 5 tentativas."
     ),
 )
 async def openjev_score_and_diagnose(
     premise: str,
     workspace: str = "",
-    rubric: str = DEFAULT_SCORE_RUBRIC,
+    task_type: str = "entrega",
+    rubric: str = "",
     min_score: float = 1.0,
     max_score: float = 5.0,
-    threshold: float = 3.60,
+    threshold: float = 3.40,
 ) -> dict:
-    """Executa Score + Diagnóstico via choice único flat sobre 26 defeitos possíveis."""
+    """Executa Score + Diagnóstico via choice único flat sobre 10 categorias de defeito."""
     # DEFECT_OPTIONS e DEFECT_DESCRIPTIONS importados no topo do módulo via src.core.schemas
+    premise_error = _validate_score_premise(premise)
+    if premise_error:
+        return {"error": premise_error, "premise_rejected": True, "diagnosis": None}
+    resolved_rubric, rubric_error = _resolve_task_rubric(task_type)
+    if rubric_error:
+        return {"error": rubric_error, "task_type_rejected": True, "diagnosis": None}
+    task_type_key = task_type.strip().lower()
 
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
     current_git_state = _get_workspace_git_signature(target_workspace)
 
-    # ── Anti-Premise Gaming ──────────────────────────────────────────────────
-    hist = _score_history.get(target_workspace)
+    # ── Anti-Premise Gaming (history sob lock: chamadas concorrentes) ────────
+    hist = _history_get(target_workspace)
     if hist and not hist.get("passed", True):
         prev_state = hist.get("git_state", "")
         attempts = hist.get("attempts", 1)
 
         if current_git_state == prev_state and current_git_state != "":
-            if attempts >= 10:
+            if attempts >= MAX_ATTEMPTS:
                 return {
                     "score": hist.get("last_score", 0.0),
                     "passed": False,
                     "threshold": threshold,
                     "attempts": attempts,
-                    "max_attempts": 10,
+                    "max_attempts": MAX_ATTEMPTS,
                     "emergency_exit_unlocked": True,
                     "diagnosis": None,
                     "message": (
-                        "🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA]: Limite de 10 tentativas atingido. "
+                        f"🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA]: Limite de {MAX_ATTEMPTS} tentativas atingido. "
                         "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
                     ),
                 }
             else:
-                hist["attempts"] = attempts + 1
+                _history_increment_attempts(target_workspace)
                 return {
                     "error": (
-                        f"🚨 AVALIAÇÃO RECUSADA (Tentativa {attempts}/10): Nenhuma alteração detectada "
+                        f"🚨 AVALIAÇÃO RECUSADA (Tentativa {attempts}/{MAX_ATTEMPTS}): Nenhuma alteração detectada "
                         "no repositório desde a última reprovação. Refatore o código antes de reavaliar."
                     ),
                     "attempts": attempts,
-                    "max_attempts": 10,
+                    "max_attempts": MAX_ATTEMPTS,
                     "emergency_exit_unlocked": False,
                 }
 
-    engine = get_engine()
+    engine = await _get_engine_async()
 
     # ── ETAPA 1: Score ───────────────────────────────────────────────────────
     score_req = ScoreRequest(
         premise=premise,
-        rubric=rubric,
+        rubric=resolved_rubric,
         min_score=min_score,
         max_score=max_score,
         threshold=threshold,
@@ -379,12 +383,12 @@ async def openjev_score_and_diagnose(
 
     # Atualiza histórico
     if score_resp.passed:
-        _score_history[target_workspace] = {
+        _history_set(target_workspace, {
             "passed": True,
             "attempts": 0,
             "git_state": current_git_state,
             "last_score": round(score_resp.score, 2),
-        }
+        })
         return ScoreDiagnoseResponse(
             score=round(score_resp.score, 2),
             max_score=max_score,
@@ -393,35 +397,68 @@ async def openjev_score_and_diagnose(
             threshold=threshold,
             breakdown=score_resp.breakdown,
             score_latency_ms=round(score_resp.latency_ms, 2),
+            score_margin=score_resp.score_margin,
+            borderline=score_resp.borderline,
+            task_type=task_type_key,
+            rubric_source=f"catalog:{task_type_key}",
             diagnosis=None,
+            approved_as_borderline=False,
             attempts=0,
-            max_attempts=10,
+            max_attempts=MAX_ATTEMPTS,
             emergency_exit_unlocked=False,
         ).model_dump()
 
-    # Score reprovado — atualiza tentativas
-    prev_attempts = hist.get("attempts", 0) if hist else 0
-    new_attempts = prev_attempts + 1
-    _score_history[target_workspace] = {
-        "passed": False,
-        "attempts": new_attempts,
-        "git_state": current_git_state,
-        "last_score": round(score_resp.score, 2),
-    }
+    # ── ETAPA 1.5: Borderline Mass Gate (Critério Probabilístico de Fronteira) ─
+    # Se o score contínuo caiu na fronteira (borderline=True) mas a distribuição
+    # de probabilidade concentra massa saudável >= 85% e massa de falhas <= 12%,
+    # a entrega é matematicamente aprovada sem viés léxico do choice.
+    if score_resp.borderline:
+        mass_approved, p_healthy, p_flawed = evaluate_borderline_mass_gate(
+            score_resp.breakdown,
+            healthy_min=BORDERLINE_HEALTHY_MIN_MASS,
+            flawed_max=BORDERLINE_FLAWED_MAX_MASS,
+        )
+        if mass_approved:
+            _history_set(target_workspace, {
+                "passed": True,
+                "attempts": 0,
+                "git_state": current_git_state,
+                "last_score": round(score_resp.score, 2),
+            })
+            return ScoreDiagnoseResponse(
+                score=round(score_resp.score, 2),
+                max_score=max_score,
+                normalized_score=round(score_resp.normalized_score, 4),
+                passed=True,
+                threshold=threshold,
+                breakdown=score_resp.breakdown,
+                score_latency_ms=round(score_resp.latency_ms, 2),
+                score_margin=score_resp.score_margin,
+                borderline=score_resp.borderline,
+                task_type=task_type_key,
+                rubric_source=f"catalog:{task_type_key}",
+                diagnosis=None,
+                approved_as_borderline=True,
+                attempts=0,
+                max_attempts=MAX_ATTEMPTS,
+                emergency_exit_unlocked=False,
+            ).model_dump()
 
-    # ── ETAPA 2: Choice único flat — 26 defeitos ──────────────────────────────
-    breakdown_str = ", ".join(
-        f"{k}: {v:.2f}" for k, v in score_resp.breakdown.items() if v > 0.05
-    )
+    # ── ETAPA 2: Choice de diagnóstico flat (10 categorias) ───────────────────
+    # Premissa cirúrgica: score + contexto factual neutro.
     diag_premise = (
         f"Código avaliado com score {score_resp.score:.2f}/{max_score} "
-        f"(reprovado, corte={threshold}). "
-        f"Distribuição: {breakdown_str}. "
+        f"(corte={threshold}, borderline={bool(score_resp.borderline)}). "
         f"Contexto do artefato: {premise[:500]}"
     )
 
     t_diag_start = time.perf_counter()
-    choice_req = ChoiceRequest(premise=diag_premise, options=DEFECT_OPTIONS)
+    choice_req = ChoiceRequest(
+        premise=diag_premise,
+        options=DEFECT_OPTIONS,
+        instructions=DIAG_CHOICE_INSTRUCTIONS,
+        criteria=DEFECT_DESCRIPTIONS,
+    )
     choice_resp = await engine.evaluate_choice(choice_req)
     diag_latency_ms = (time.perf_counter() - t_diag_start) * 1000.0
 
@@ -430,8 +467,51 @@ async def openjev_score_and_diagnose(
         confidence=round(choice_resp.top_confidence, 4),
         probabilities={k: round(v, 4) for k, v in choice_resp.probabilities.items()},
         description=DEFECT_DESCRIPTIONS.get(choice_resp.selected, ""),
+        candidate_defects=list(DEFECT_MEMBERS.get(choice_resp.selected, [])),
         diagnosis_latency_ms=round(diag_latency_ms, 2),
     )
+
+    # ── Carve-out §4.4: borderline + nula com confiança ≥ mínimo ⇒ APROVADO ─
+    # O Laya escolhe a categoria; o agente não pode "declarar" sem defeito.
+    # Gate: nula fraca (ex. conf 0.216 no FP de injecao) NÃO resgata borderline.
+    # Aprovação borderline zera o histórico (mesmo caminho de aprovação normal).
+    null_elected = diagnosis.selected in NULL_DEFECT_OPTIONS
+    null_conf_ok = diagnosis.confidence >= NULL_CHOICE_MIN_CONFIDENCE
+    if score_resp.borderline and null_elected and null_conf_ok:
+        _history_set(target_workspace, {
+            "passed": True,
+            "attempts": 0,
+            "git_state": current_git_state,
+            "last_score": round(score_resp.score, 2),
+        })
+        return ScoreDiagnoseResponse(
+            score=round(score_resp.score, 2),
+            max_score=max_score,
+            normalized_score=round(score_resp.normalized_score, 4),
+            passed=True,
+            threshold=threshold,
+            breakdown=score_resp.breakdown,
+            score_latency_ms=round(score_resp.latency_ms, 2),
+            score_margin=score_resp.score_margin,
+            borderline=score_resp.borderline,
+            task_type=task_type_key,
+            rubric_source=f"catalog:{task_type_key}",
+            diagnosis=diagnosis,
+            approved_as_borderline=True,
+            attempts=0,
+            max_attempts=MAX_ATTEMPTS,
+            emergency_exit_unlocked=False,
+        ).model_dump()
+
+    # Reprovação com defeito concreto, nula fraca ou não-borderline: tentativas.
+    prev_attempts = hist.get("attempts", 0) if hist else 0
+    new_attempts = prev_attempts + 1
+    _history_set(target_workspace, {
+        "passed": False,
+        "attempts": new_attempts,
+        "git_state": current_git_state,
+        "last_score": round(score_resp.score, 2),
+    })
 
     return ScoreDiagnoseResponse(
         score=round(score_resp.score, 2),
@@ -441,12 +521,28 @@ async def openjev_score_and_diagnose(
         threshold=threshold,
         breakdown=score_resp.breakdown,
         score_latency_ms=round(score_resp.latency_ms, 2),
+        score_margin=score_resp.score_margin,
+        borderline=score_resp.borderline,
+        task_type=task_type_key,
+        rubric_source=f"catalog:{task_type_key}",
         diagnosis=diagnosis,
+        approved_as_borderline=False,
         attempts=new_attempts,
-        max_attempts=10,
-        emergency_exit_unlocked=new_attempts >= 10,
+        max_attempts=MAX_ATTEMPTS,
+        emergency_exit_unlocked=new_attempts >= MAX_ATTEMPTS,
     ).model_dump()
 
 
 if __name__ == "__main__":
+    def _preload_engine() -> None:
+        try:
+            get_engine()
+            logger.info("Motor JEV pré-carregado no startup do MCP.")
+        except Exception as e:
+            logger.warning("Pré-load do motor JEV falhou (retry no 1º uso): %s", e)
+
+    # Pré-load em background: a 1ª tool call não paga o load de pesos na GPU/CPU.
+    # O get_engine é thread-safe; se o preload ainda estiver rodando, o await
+    # de to_thread espera o mesmo singleton sob o lock.
+    threading.Thread(target=_preload_engine, daemon=True, name="jev-engine-preload").start()
     app.run(transport="stdio")

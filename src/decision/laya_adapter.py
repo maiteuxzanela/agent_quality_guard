@@ -16,7 +16,10 @@ Baseado em benchmark: benchmarks/laya_vs_deberta_cpu_stage1.json
                       benchmarks/laya_gpu_stage2.json
 """
 
+import asyncio
 import logging
+import math
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -41,11 +44,112 @@ logger = logging.getLogger("jev.laya_adapter")
 #   score: DeBERTa=3.68,  Laya=3.15  → Δ=-0.53
 
 LAYA_NOUL_THRESHOLD_DEFAULT: float = 0.78   # vs 0.85 do DeBERTa
-LAYA_SCORE_THRESHOLD_DEFAULT: float = 3.60  # vs 3.75 do DeBERTa
+LAYA_SCORE_THRESHOLD_DEFAULT: float = 3.40  # vs 3.75 do DeBERTa
 
 # Mapeamento ordinais Laya (0–4) para escala JEV (1–5)
 # score_JEV = 1.0 + score_ordinal
 LAYA_ORDINAL_OFFSET: float = 1.0
+
+
+def map_score_ordinal(raw_ordinal: float, threshold: Optional[float]) -> tuple:
+    """Decisão pura de Score: ordinal Laya (0–4) → (score_JEV, normalizado, passed).
+
+    Único ponto de mapeamento da escala (regressão: 2.15 → 3.15, não 9.61).
+    `threshold=None` → `passed=None`. Função pura, sem I/O.
+    """
+    final_score = round(LAYA_ORDINAL_OFFSET + raw_ordinal, 2)
+    normalized = round(raw_ordinal / 4.0, 4)
+    passed = final_score >= threshold if threshold is not None else None
+    return final_score, normalized, passed
+
+
+def decide_noul(probability: float, threshold: float) -> tuple:
+    """Decisão pura de Noul: (probabilidade aparada, passed, confidence).
+
+    Aparna em [0.0, 1.0], `passed = prob >= threshold` (limiar inclusivo) e
+    `confidence = |prob - 0.5| * 2.0`. Função pura, sem I/O.
+    """
+    prob = max(0.0, min(1.0, probability))
+    passed = prob >= threshold
+    confidence = abs(prob - 0.5) * 2.0
+    return prob, passed, confidence
+
+
+def compute_score_uncertainty(
+    probabilities_by_ordinal: Dict[int, float],
+    threshold: float,
+    borderline_band: float = 0.35,
+) -> tuple:
+    """Incerteza pura do Score a partir da distribuição por bucket ordinal.
+
+    Bucket k (0–4) equivale a nota JEV 1+k (ex.: k=2 → 3.0). Retorna
+    (p_at_or_above, p_below, score_margin, borderline) onde
+    score_margin = p_at_or_above - p_below em [-1.0, 1.0] e borderline
+    marca a fronteira quando ambos os lados retêm massa ≥ borderline_band.
+    Função pura, sem I/O.
+    """
+    p_at = 0.0
+    p_below = 0.0
+    for ordinal, prob in probabilities_by_ordinal.items():
+        if (1.0 + float(ordinal)) >= threshold:
+            p_at += float(prob)
+        else:
+            p_below += float(prob)
+    total = p_at + p_below
+    if total > 0:
+        p_at /= total
+        p_below /= total
+    score_margin = round(p_at - p_below, 4)
+    borderline = p_below >= borderline_band and p_at >= borderline_band
+    return round(p_at, 4), round(p_below, 4), score_margin, borderline
+
+
+def evaluate_borderline_mass_gate(
+    breakdown: Dict[str, float],
+    healthy_min: float = 0.85,
+    flawed_max: float = 0.12,
+) -> tuple:
+    """Critério Probabilístico de Aprovação na Fronteira (Borderline Mass Gate).
+
+    Calcula a massa saudável (acceptable + good quality + exceptional) e a massa de falhas
+    (critical flaws + poor quality). Se p_healthy >= healthy_min e p_flawed <= flawed_max,
+    a entrega não tem defeitos relevantes e deve ser aprovada na fronteira.
+    Retorna (approved, p_healthy, p_flawed). Função pura, sem I/O.
+    """
+    p_healthy = (
+        float(breakdown.get("acceptable", 0.0))
+        + float(breakdown.get("good quality", 0.0))
+        + float(breakdown.get("exceptional", 0.0))
+    )
+    p_flawed = (
+        float(breakdown.get("critical flaws", 0.0))
+        + float(breakdown.get("poor quality", 0.0))
+    )
+    p_healthy = round(p_healthy, 4)
+    p_flawed = round(p_flawed, 4)
+    approved = p_healthy >= healthy_min and p_flawed <= flawed_max
+    return approved, p_healthy, p_flawed
+
+
+def finalize_choice(
+    probabilities: Dict[str, float],
+    temperature: float,
+    fallback_selected: str = "",
+    fallback_confidence: float = 0.0,
+) -> tuple:
+    """Decisão pura de Choice: temperatura + argmax sobre a distribuição.
+
+    Se `probabilities` for vazia, usa `fallback_selected`/`fallback_confidence`
+    (resposta bruta do agente). Retorna (selected, confidence, distribuição
+    arredondada). Função pura, sem I/O.
+    """
+    probs = dict(probabilities)
+    if not probs:
+        probs = {fallback_selected: round(float(fallback_confidence), 4)}
+    probs = LayaAdapter.apply_temperature(probs, temperature)
+    probs = {k: round(v, 4) for k, v in probs.items()}
+    selected = max(probs, key=probs.get)
+    return selected, probs[selected], probs
 
 # Checkpoints disponíveis por custo de VRAM
 LAYA_CHECKPOINTS = {
@@ -85,6 +189,27 @@ class LayaAdapter:
         resp = await adapter.evaluate_choice(request)
     """
 
+    @staticmethod
+    def apply_temperature(probabilities: Dict[str, float], temperature: float) -> Dict[str, float]:
+        """Escala probabilidades com temperatura (T→0 confirma, T>1 achata).
+
+        O parâmetro `temperature` da API ChoiceRequest não pode ser ignorado
+        no caminho Laya — era stub silencioso (aceito e descartado).
+        """
+        if not probabilities:
+            return probabilities
+        t = max(float(temperature), 1e-4)
+        if abs(t - 1.0) < 1e-9:
+            return probabilities
+        logs = {k: math.log(max(p, 1e-12)) for k, p in probabilities.items()}
+        scaled = {k: v / t for k, v in logs.items()}
+        m = max(scaled.values())
+        exps = {k: math.exp(v - m) for k, v in scaled.items()}
+        total = sum(exps.values())
+        if total <= 0.0:
+            return probabilities
+        return {k: v / total for k, v in exps.items()}
+
     def __init__(
         self,
         checkpoint: str = "english",
@@ -113,6 +238,9 @@ class LayaAdapter:
         self._allow_cpu_fallback = allow_cpu_fallback
         self._agent: Any = None
         self.is_ready = False
+        # Serializa inferência: o agente Laya não é reentrante e o predict
+        # roda em worker thread (asyncio.to_thread) para não travar o event loop.
+        self._predict_lock = threading.Lock()
 
         # Thresholds recalibrados
         self.noul_threshold = noul_threshold_override or LAYA_NOUL_THRESHOLD_DEFAULT
@@ -196,16 +324,18 @@ class LayaAdapter:
         }
 
         try:
-            res = self._agent.predict({"state": request.premise}, question)
-            prob = float(res["answers"]["is_true"]["noul"])
-            prob = max(0.0, min(1.0, prob))
+            def _predict() -> Any:
+                with self._predict_lock:
+                    return self._agent.predict({"state": request.premise}, question)
+
+            res = await asyncio.to_thread(_predict)
+            raw = float(res["answers"]["is_true"]["noul"])
+            prob, passed, confidence = decide_noul(raw, request.threshold)
 
             # Usa o threshold do request. O threshold recalibrado (self.noul_threshold)
             # serve como padrão apenas quando o chamador instancia o LayaAdapter
             # e não sobrescreve via request — documentado em LAYA_NOUL_THRESHOLD_DEFAULT.
             threshold = request.threshold
-            passed = prob >= threshold
-            confidence = abs(prob - 0.5) * 2.0
             latency_ms = (time.perf_counter() - start) * 1000.0
 
             return NoulResponse(
@@ -227,32 +357,51 @@ class LayaAdapter:
         self._ensure_ready()
         start = time.perf_counter()
 
-        # Constrói mapa de critérios para o Laya
-        # Se options for lista simples, usa o nome como critério (comportamento básico)
-        if isinstance(request.options, list):
+        # Critérios descritivos: usa o mapa do request quando presente
+        # (o diagnóstico serve DEFECT_DESCRIPTIONS); senão, o nome da opção.
+        if request.criteria:
+            criteria = {
+                opt: request.criteria.get(opt, opt) for opt in request.options
+            }
+        elif isinstance(request.options, list):
             criteria = {opt: opt for opt in request.options}
         else:
             criteria = dict(request.options)
 
+        instructions = (
+            request.instructions
+            or "Which specialist agent should handle this task?"
+        )
+
         question = {
             "routed_agent": {
                 "type": "choice",
-                "instructions": "Which specialist agent should handle this task?",
+                "instructions": instructions,
                 "criteria": criteria,
             }
         }
 
         try:
-            res = self._agent.predict({"task": request.premise}, question)
+            def _predict() -> Any:
+                with self._predict_lock:
+                    return self._agent.predict({"task": request.premise}, question)
+
+            res = await asyncio.to_thread(_predict)
             ans = res["answers"]["routed_agent"]
-            selected = ans["choice"]
-            confidence = float(ans.get("confidence", 0.0))
+            raw_confidence = float(ans.get("confidence", 0.0))
+            raw_choice = str(ans.get("choice", ""))
             probabilities = {
                 opt: round(float(p), 4)
                 for opt, p in ans.get("probabilities", {}).items()
             }
-            if not probabilities:
-                probabilities = {selected: round(confidence, 4)}
+
+            # Temperatura do request + argmax: função pura finalize_choice
+            selected, confidence, probabilities = finalize_choice(
+                probabilities,
+                request.temperature,
+                fallback_selected=raw_choice,
+                fallback_confidence=raw_confidence,
+            )
 
             latency_ms = (time.perf_counter() - start) * 1000.0
             return ChoiceResponse(
@@ -291,31 +440,45 @@ class LayaAdapter:
         }
 
         try:
-            res = self._agent.predict({"delivery": request.premise}, question)
+            def _predict() -> Any:
+                with self._predict_lock:
+                    return self._agent.predict({"delivery": request.premise}, question)
+
+            res = await asyncio.to_thread(_predict)
             ans = res["answers"]["quality"]
 
             raw_ordinal = float(ans["score"])  # 0.0 a 4.0
-            final_score = round(LAYA_ORDINAL_OFFSET + raw_ordinal, 2)  # 1.0 a 5.0
-            normalized = round(raw_ordinal / 4.0, 4)  # 0.0 a 1.0
 
             # Usa threshold recalibrado se não vier no request
             threshold = request.threshold
             if threshold is None:
                 threshold = self.score_threshold
-            passed = final_score >= threshold if threshold is not None else None
+            # Decisão pura: mapeamento 0–4 → 1–5 + normalização + passed
+            final_score, normalized, passed = map_score_ordinal(raw_ordinal, threshold)
 
+            probs_list = [float(p) for p in ans.get("probabilities", {}).values()]
             breakdown = {
-                labels: round(float(p), 4)
-                for labels, p in zip(criteria_labels, ans.get("probabilities", {}).values())
+                label: round(p, 4)
+                for label, p in zip(criteria_labels, probs_list)
             }
+            p_at, p_below, score_margin, borderline = compute_score_uncertainty(
+                dict(enumerate(probs_list)), threshold
+            )
 
             latency_ms = (time.perf_counter() - start) * 1000.0
+            agent = getattr(self, "_agent", None)
+            device_eff = str(getattr(agent, "device", self._device or "")) or None
+            dtype_eff = str(getattr(agent, "dtype", "") or "") or None
             return ScoreResponse(
                 score=final_score,
                 normalized_score=normalized,
                 passed=passed,
                 breakdown=breakdown,
                 latency_ms=round(latency_ms, 2),
+                score_margin=score_margin,
+                borderline=borderline,
+                device=device_eff,
+                dtype=dtype_eff,
             )
         except Exception as e:
             raise InferenceError(f"Erro na inferência 'score' do Laya: {e}") from e

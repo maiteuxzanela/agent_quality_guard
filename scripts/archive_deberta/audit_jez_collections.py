@@ -1,3 +1,6 @@
+# HISTORICAL — era DeBERTa (modelo deberta, noul 0.50/3.5, score 3.75).
+# NAO USAR em pipeline Laya. Ver scripts/audit_mocks.py (0.78/3.40).
+# Arquivado na auditoria P2 (2026).
 """Auditoria Arquitetural e de Governança de IA do Projeto JEZ Collections.
 Utiliza o Pipeline Tri-Camada (Needle 3 Local + Open Jev na GTX 1050 Ti + LLM)
 para avaliar código, estrutura e qualidade das instruções que direcionam as IAs.

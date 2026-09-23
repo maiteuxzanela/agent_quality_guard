@@ -8,10 +8,10 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "needle3_relational_search",
+            "name": "needle3_search",
             "description": (
-                "Aciona o motor Cactus Needle 3 para realizar busca cirúrgica, semântica e relacional "
-                "em bases de código, documentação densa ou logs extensos. "
+                "Aciona o motor Cactus Needle 3 para busca cirúrgica léxico-AST local "
+                "(grafo de dependências, não embeddings) em código, documentação densa ou logs. "
                 "Retorna trechos com preservação de relações de AST (chamadores, implementações, imports) "
                 "e controle estrito de janela de contexto (max_tokens)."
             ),
@@ -29,8 +29,8 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     },
                     "max_tokens": {
                         "type": "integer",
-                        "default": 1500,
-                        "description": "Teto máximo de tokens para o contexto retornado (evita sobrecarregar a LLM)."
+                        "default": 1000,
+                        "description": "Teto máximo de tokens para o contexto retornado (canônico 1000; evita sobrecarregar a LLM)."
                     },
                     "relational_depth": {
                         "type": "integer",
@@ -50,11 +50,12 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "openjev_noul_guardrail",
+            "name": "openjev_noul",
             "description": (
                 "Executa o modelo Open Jev local para avaliar uma condição lógica/booleana com probabilidade calibrada. "
-                "MANDATÓRIO: Deve ser acionada antes de qualquer chamada de ferramenta crítica/destrutiva "
-                "(ex: remoção de arquivos, modificação de infraestrutura, comandos shell de risco, commits em produção)."
+                "Uso OPCIONAL: a exigência de conferência de segurança pré-ação foi removida (anti premise gaming). "
+                "Se usada, reformular a premissa/hipótese para inverter o resultado é proibido; "
+                "resultado desfavorável exige mudança de atitude e alerta, não contornar a avaliação."
             ),
             "parameters": {
                 "type": "object",
@@ -69,8 +70,8 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     },
                     "threshold": {
                         "type": "number",
-                        "default": 0.85,
-                        "description": "Limiar mínimo de probabilidade para aprovação da ação (guardrail)."
+                        "default": 0.78,
+                        "description": "Limiar mínimo de probabilidade para aprovação da ação (guardrail calibrado 0.78)."
                     }
                 },
                 "required": ["premise", "hypothesis"]
@@ -80,10 +81,11 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "openjev_choice_route",
+            "name": "openjev_choice",
             "description": (
-                "Executa o modelo Open Jev local para determinar com máxima precisão e distribuição de probabilidade "
-                "qual subagente especialista deve assumir a execução de uma subtarefa complexa."
+                "Distribuição probabilística de escolha (Laya RLCD local) entre subagentes, "
+                "ferramentas, skills, arquivos ou caminhos — não é roteamento determinístico. "
+                "Retorna selected, confidence e probabilities para a Protocolo de Dúvida (§3)."
             ),
             "parameters": {
                 "type": "object",
@@ -110,64 +112,47 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "openjev_score_evaluate",
-            "description": (
-                "Executa o modelo Open Jev local para avaliar quantitativamente a qualidade de um artefato gerado "
-                "(código, refatoração, documentação, plano de testes) contra uma rubrica predefinida em escala ordinal."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "premise": {
-                        "type": "string",
-                        "description": "O conteúdo completo ou diff do código/artefato submetido para validação."
-                    },
-                    "rubric": {
-                        "type": "string",
-                        "description": "Critérios de aceitação, diretrizes de código limpo, cobertura de testes e regras arquiteturais."
-                    },
-                    "min_score": {
-                        "type": "number",
-                        "default": 1.0,
-                        "description": "Nota mínima da escala (padrão 1.0)."
-                    },
-                    "max_score": {
-                        "type": "number",
-                        "default": 5.0,
-                        "description": "Nota máxima da escala (padrão 5.0)."
-                    },
-                    "threshold": {
-                        "type": "number",
-                        "default": 4.0,
-                        "description": "Nota de corte para aprovação da entrega (se menor, o subagente deve refatorar)."
-                    }
-                },
-                "required": ["premise", "rubric"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "openjev_score_and_diagnose",
             "description": (
                 "Avalia a qualidade de um artefato técnico com score contínuo (1.0–5.0) e, "
-                "se a nota de corte não for atingida, executa um choice único sobre 26 possíveis "
-                "defeitos flat e retorna o defeito identificado com confiança, distribuição de "
-                "probabilidades completa e descrição legível para auto-correção precisa. "
-                "Use este tool como substituto completo do openjev_score_evaluate quando feedback "
-                "estruturado de auto-correção for necessário."
+                "se a nota de corte não for atingida, executa um choice único sobre 10 categorias "
+                "de defeito flat (calibrado) e retorna a categoria identificada com confiança, "
+                "distribuição de probabilidades, descrição legível e candidate_defects (folhas "
+                "candidatas) para auto-correção precisa. "
+                "Se borderline=true o choice ainda roda: categoria nula "
+                "(sem_defeito_identificavel | evidencia_insuficiente) ⇒ passed=true com "
+                "approved_as_borderline=true (divulgar score_margin); defeito concreto ⇒ "
+                "passed=false e correção real no disco. Circuit breaker após 5 tentativas. "
+                "Ferramenta única de score do pipeline (a tool openjev_score foi expurgada). "
+                "Premissa: padrão 'Pedido | Resultado', "
+                "máximo 1500 caracteres; rubrica via task_type do catálogo fechado; retorna "
+                "score_margin/borderline."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "premise": {
                         "type": "string",
-                        "description": "Pedido original concatenado com resultado executado (arquivos modificados, testes, commits).",
+                        "description": (
+                            "Pedido original concatenado com resultado executado (arquivos modificados, "
+                            "testes, commits), padrão factual 'Pedido do Prompt: ... | Resultado Executado: "
+                            "...', máximo 1500 caracteres."
+                        ),
+                    },
+                    "task_type": {
+                        "type": "string",
+                        "default": "entrega",
+                        "description": (
+                            "Chave do catálogo fechado RUBRIC_CATALOG: entrega (padrão), auditoria, "
+                            "codigo_producao. Rubrica livre é ignorada."
+                        ),
                     },
                     "rubric": {
                         "type": "string",
-                        "description": "Rubrica de avaliação. Padrão calibrado: critérios de rigor analítico, clareza e fidelidade ao repositório.",
+                        "description": (
+                            "DEPRECIADO e IGNORADO pelo servidor — a rubrica vem exclusivamente "
+                            "do catálogo fechado por task_type (rubric gaming proibido)."
+                        ),
                     },
                     "workspace": {
                         "type": "string",
@@ -177,14 +162,45 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "max_score": {"type": "number", "default": 5.0, "description": "Nota máxima da escala."},
                     "threshold": {
                         "type": "number",
-                        "default": 3.60,
+                        "default": 3.40,
                         "description": (
-                            "Nota de corte. Se score < threshold, dispara o choice flat de diagnóstico (26 opções). "
-                            "Padrão Laya calibrado: 3.60."
+                            "Nota de corte. Se score < threshold, dispara o choice flat de diagnóstico (10 categorias); "
+                            "borderline + categoria nula aprova (approved_as_borderline); borderline + defeito concreto "
+                            "reprova. Padrão Laya calibrado: 3.40."
                         ),
                     },
                 },
                 "required": ["premise"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "openjev_consulta",
+            "description": (
+                "Consulta direta ao Open Jev local (ex.: 'esse script funciona?', "
+                "'esse banco de dados tem essa informação?'). Recebe a evidência real e retorna "
+                "um indício textual (probability/confidence) SEM booleano de aprovação. "
+                "A resposta é indício para investigação, não veredito: premise gaming proibido; "
+                "indício desfavorável exige investigação e alerta à usuária."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "premise": {
+                        "type": "string",
+                        "description": (
+                            "Evidência objetiva: trecho do script, schema do banco, amostra de dados, "
+                            "estado real observado — nunca uma versão \"suavizada\" da realidade."
+                        ),
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "Pergunta direta a ser respondida como indício (ex.: 'Este script funciona?').",
+                    },
+                },
+                "required": ["premise", "question"],
             },
         },
     },
