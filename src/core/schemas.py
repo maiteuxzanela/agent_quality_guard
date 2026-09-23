@@ -4,7 +4,7 @@
 3. Execução & Orquestração
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -563,6 +563,10 @@ class ScoreDiagnoseResponse(BaseModel):
     attempts: int = Field(default=1, description="Tentativas consecutivas sem aprovação.")
     max_attempts: int = Field(default=5, description="Máximo antes da saída de emergência (MAX_ATTEMPTS).")
     emergency_exit_unlocked: bool = Field(default=False, description="True após MAX_ATTEMPTS tentativas sem refatoração.")
+
+    # --- Needle 3 AST Guardrail (Fail-Fast Determinístico) ---
+    ast_blocked: bool = Field(default=False, description="True se a entrega foi reprovada deterministamente pelo Needle 3 AST Guardrail.")
+    ast_violations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Violações determinísticas de AST detectadas pelo Needle 3.")
 
 
 # ==============================================================================

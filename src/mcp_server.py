@@ -46,6 +46,7 @@ from src.core.diff_inspector import extract_workspace_stages, format_stage_premi
 from src.decision.engine import OpenJevEngine
 from src.decision.laya_adapter import evaluate_borderline_mass_gate
 from src.memory.local_needle import LocalNeedleEngine
+from src.memory.needle_ast_guard import NeedleASTGuard
 
 logger = logging.getLogger("jev.mcp")
 
@@ -373,6 +374,62 @@ async def openjev_score_and_diagnose(
                     "max_attempts": MAX_ATTEMPTS,
                     "emergency_exit_unlocked": False,
                 }
+
+    # ── Camada 1: Needle 3 AST Guardrail (Fail-Fast Determinístico) ───────────
+    ast_violations = NeedleASTGuard.scan_workspace(target_workspace)
+    if ast_violations:
+        # Reprovação Imediata Fail-Fast — não gasta inferência GPU/CPU
+        top_violation = ast_violations[0]
+        violation_details = "; ".join(
+            f"[{v.rule_id}] {v.file_path}:{v.line_number} — {v.message}"
+            for v in ast_violations
+        )
+        logger.warning(f"🚨 [Needle 3 AST Guardrail] Violação determinística detectada: {violation_details}")
+
+        attempts = 1
+        if hist and not hist.get("passed", True):
+            attempts = hist.get("attempts", 1) + 1
+
+        _history_set(target_workspace, {
+            "passed": False,
+            "attempts": attempts,
+            "git_state": current_git_state,
+            "last_score": 1.0,
+        })
+
+        diag_res = DiagnosisResult(
+            selected=top_violation.category,
+            confidence=1.0,
+            probabilities={top_violation.category: 1.0},
+            description=f"🚨 [Needle 3 AST Block]: {top_violation.message} ({top_violation.file_path}:{top_violation.line_number})",
+            candidate_defects=list(DEFECT_MEMBERS.get(top_violation.category, [])),
+            diagnosis_latency_ms=0.0,
+        )
+
+        return ScoreDiagnoseResponse(
+            score=1.0,
+            max_score=max_score,
+            normalized_score=0.0,
+            passed=False,
+            threshold=threshold,
+            breakdown={"critical flaws": 1.0, "poor quality": 0.0, "acceptable": 0.0, "good quality": 0.0, "exceptional": 0.0},
+            score_latency_ms=0.0,
+            score_margin=-1.0,
+            borderline=False,
+            task_type=task_type_key,
+            rubric_source=f"catalog:{task_type_key}",
+            diagnosis=diag_res,
+            approved_as_borderline=False,
+            stages=[],
+            total_stages=0,
+            passed_stages=0,
+            failed_stages=len(ast_violations),
+            attempts=attempts,
+            max_attempts=MAX_ATTEMPTS,
+            emergency_exit_unlocked=(attempts >= MAX_ATTEMPTS),
+            ast_blocked=True,
+            ast_violations=[v.to_dict() for v in ast_violations],
+        ).model_dump()
 
     engine = await _get_engine_async()
 
