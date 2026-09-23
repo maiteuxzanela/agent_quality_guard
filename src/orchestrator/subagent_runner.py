@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -141,6 +142,14 @@ class SubagentRunner:
         # Estimativa de tokens do contexto inicial isolado:
         context_tokens = len(system_prompt.split()) + len(request.task.split())
 
+        # Execução especializada: Se for Kael e a tarefa solicitar diagnóstico de hardware / GPU
+        execution_report = ""
+        clean_task_lower = request.task.lower()
+        if "kael" in persona_name.lower() and any(
+            k in clean_task_lower for k in ("placa de vídeo", "placa de video", "gpu", "vram", "hardware", "temperatura", "pascal", "1050")
+        ):
+            execution_report = self._diagnose_gpu_hardware()
+
         # Captura os arquivos modificados no workspace após a tarefa
         diff_files = get_workspace_diff_files(target_workspace)
         files_modified = [
@@ -195,11 +204,19 @@ class SubagentRunner:
 
         elapsed_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
 
-        summary_text = (
-            f"Subagente '{persona_name}' executou tarefa técnica em contexto isolado. "
-            f"Arquivos inspecionados/alterados: {len(files_modified)}. "
-            f"Status de integridade AST: {'BLOQUEADO' if ast_blocked else 'LIMPO'}."
-        )
+        if execution_report:
+            summary_text = (
+                f"{execution_report}\n\n"
+                f"---\n"
+                f"Status de integridade AST: {'BLOQUEADO' if ast_blocked else 'LIMPO'}. "
+                f"Contexto isolado: {context_tokens} tokens."
+            )
+        else:
+            summary_text = (
+                f"Subagente '{persona_name}' executou tarefa técnica em contexto isolado. "
+                f"Arquivos inspecionados/alterados: {len(files_modified)}. "
+                f"Status de integridade AST: {'BLOQUEADO' if ast_blocked else 'LIMPO'}."
+            )
 
         return SpawnSubagentResponse(
             success=not ast_blocked,
@@ -214,3 +231,60 @@ class SubagentRunner:
             execution_time_ms=elapsed_ms,
             context_tokens_used=context_tokens,
         )
+
+    def _diagnose_gpu_hardware(self) -> str:
+        """Executa rotina diagnóstica real da GPU Pascal GTX 1050 Ti."""
+        lines = []
+        lines.append("### Relatório Técnico de Hardware — @Kael (ML & Pascal)")
+
+        # 1. nvidia-smi
+        try:
+            res = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=name,driver_version,temperature.gpu,utilization.gpu,memory.total,memory.used,memory.free,fan.speed",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            parts = [p.strip() for p in res.stdout.strip().split(",")]
+            if len(parts) >= 8:
+                lines.append(f"- **Dispositivo Físico:** {parts[0]}")
+                lines.append(f"- **Driver NVIDIA:** {parts[1]}")
+                lines.append(f"- **Temperatura da GPU:** {parts[2]}°C")
+                lines.append(f"- **Utilização da GPU:** {parts[3]}%")
+                lines.append(f"- **Velocidade da Ventoinha (Fan):** {parts[7]}%")
+                lines.append(f"- **VRAM Total:** {parts[4]} MiB")
+                lines.append(f"- **VRAM Alocada:** {parts[5]} MiB ({(float(parts[5])/float(parts[4]))*100:.1f}%)")
+                lines.append(f"- **VRAM Livre:** {parts[6]} MiB")
+        except Exception as e:
+            lines.append(f"- **nvidia-smi:** Erro ao consultar: {e}")
+
+        # 2. PyTorch & Profiling
+        try:
+            from ..decision.hardware import get_hardware_profile
+            prof = get_hardware_profile()
+            lines.append(f"- **Compute Capability:** {prof.compute_capability[0]}.{prof.compute_capability[1]} (Pascal GP107)")
+            lines.append(f"- **Suporte a bfloat16:** {'NATIVO' if prof.supports_bfloat16 else 'NÃO SUPORTADO (Bloqueio Ativo — Coerção para float16/float32)'}")
+            lines.append(f"- **Precisão Recomendada:** `{prof.recommended_dtype}`")
+            lines.append(f"- **Dispositivo Recomendado:** `{prof.recommended_device}`")
+        except Exception as e:
+            lines.append(f"- **Perfil de Hardware:** Erro ao carregar: {e}")
+
+        try:
+            import torch
+            if torch.cuda.is_available():
+                lines.append(f"- **PyTorch CUDA:** Ativo (CUDA {torch.version.cuda})")
+                lines.append(f"- **Dispositivo PyTorch:** {torch.cuda.get_device_name(0)}")
+                alloc = torch.cuda.memory_allocated(0) / (1024 * 1024)
+                reserv = torch.cuda.memory_reserved(0) / (1024 * 1024)
+                lines.append(f"- **Memória Alocada pelo PyTorch:** {alloc:.2f} MiB")
+                lines.append(f"- **Memória Reservada pelo PyTorch:** {reserv:.2f} MiB")
+            else:
+                lines.append("- **PyTorch CUDA:** Indisponível no processo.")
+        except Exception as e:
+            lines.append(f"- **PyTorch:** Erro: {e}")
+
+        return "\n".join(lines)
