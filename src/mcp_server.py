@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -734,6 +735,16 @@ async def openjev_score_and_diagnose(
 
 
 if __name__ == "__main__":
+    def _graceful_exit(signum, frame) -> None:
+        logger.info("Sinal %s recebido no servidor MCP, encerrando de forma limpa...", signum)
+        sys.exit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _graceful_exit)
+        signal.signal(signal.SIGINT, _graceful_exit)
+    except Exception:
+        pass
+
     def _preload_engine() -> None:
         try:
             get_engine()
