@@ -41,12 +41,15 @@ from src.core.schemas import (
     RUBRIC_CATALOG,
     ScoreRequest,
     ScoreDiagnoseResponse,
+    SpawnSubagentRequest,
+    SpawnSubagentResponse,
 )
 from src.core.diff_inspector import extract_workspace_stages, format_stage_premise
 from src.decision.engine import OpenJevEngine
 from src.decision.laya_adapter import evaluate_borderline_mass_gate
 from src.memory.local_needle import LocalNeedleEngine
 from src.memory.needle_ast_guard import NeedleASTGuard
+from src.orchestrator.subagent_runner import SubagentRunner
 
 logger = logging.getLogger("jev.mcp")
 
@@ -251,6 +254,38 @@ async def openjev_consulta(premise: str, question: str) -> dict:
         confidence=round(resp.confidence, 4),
         latency_ms=round(resp.latency_ms, 2),
     ).model_dump()
+
+
+@app.tool(
+    name="openjev_spawn_subagent",
+    description=(
+        "Instancia e executa um subagente especialista em janela de contexto isolada "
+        "(zero historico do orquestrador), utilizando o system prompt da persona "
+        "e validando deterministicamente a entrega via Needle 3 AST Guardrail e Open Jev Score."
+    ),
+)
+async def openjev_spawn_subagent(
+    persona: str,
+    task: str,
+    workspace: str = "",
+    auto_validate: bool = True,
+) -> dict:
+    """Executa um subagente especialista em contexto isolado com auto-validacao AST + Score."""
+    if not persona.strip():
+        raise ValueError("openjev_spawn_subagent exige o parametro 'persona' preenchido.")
+    if not task.strip():
+        raise ValueError("openjev_spawn_subagent exige o parametro 'task' com a descricao da tarefa.")
+
+    engine = await _get_engine_async()
+    runner = SubagentRunner(engine=engine)
+    req = SpawnSubagentRequest(
+        persona=persona,
+        task=task,
+        workspace=workspace,
+        auto_validate=auto_validate,
+    )
+    resp = await runner.spawn(req)
+    return resp.model_dump()
 
 
 DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["entrega"]

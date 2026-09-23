@@ -627,3 +627,43 @@ class Needle3Response(BaseModel):
         le=100.0,
         description="Percentual real de tokens economizados vs. indexar todos os blocos candidatos.",
     )
+
+
+# ==============================================================================
+# Schemas Subagentes Especialistas: Invocação com Contexto Isolado
+# ==============================================================================
+
+class SpawnSubagentRequest(BaseModel):
+    """Requisição para despacho e execução de subagente especialista em contexto limpo."""
+    persona: str = Field(
+        ...,
+        description="Identificador da persona especialista (ex: 'lumi', 'robin', 'kael', 'ariel', 'alex') ou caminho do arquivo."
+    )
+    task: str = Field(
+        ...,
+        description="Instrução cirúrgica e detalhada da tarefa técnica a ser executada pelo subagente."
+    )
+    workspace: Optional[str] = Field(
+        default=None,
+        description="Diretório absoluto da raiz do repositório alvo. Se omitido, assume o workspace corrente."
+    )
+    auto_validate: bool = Field(
+        default=True,
+        description="Se True, submete a entrega do subagente à auditoria fail-fast do Needle AST e ao Score JEV."
+    )
+
+
+class SpawnSubagentResponse(BaseModel):
+    """Resposta do subagente especialista após execução em janela de contexto isolada."""
+    success: bool = Field(..., description="Indica se o subagente completou a tarefa sem erros não tratados.")
+    persona: str = Field(..., description="Nome da persona executada.")
+    workspace: str = Field(..., description="Caminho do repositório onde a tarefa foi executada.")
+    summary: str = Field(..., description="Relatório resumido e factual da entrega produzida pelo subagente.")
+    files_modified: List[str] = Field(default_factory=list, description="Lista de arquivos modificados ou criados no repositório.")
+    ast_blocked: bool = Field(default=False, description="Indica se a entrega foi interceptada pelo Needle AST Guardrail.")
+    ast_violations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Violações detectadas pelo Needle AST se ast_blocked for True.")
+    score: Optional[float] = Field(default=None, description="Nota de conformidade atribuída pelo Open Jev Score (1.00 a 5.00).")
+    passed: Optional[bool] = Field(default=None, description="Status de aprovação no quality gate JEV (score >= 3.40).")
+    execution_time_ms: float = Field(..., ge=0.0, description="Tempo total de execução do subagente em milissegundos.")
+    context_tokens_used: int = Field(default=0, ge=0, description="Estimativa de tokens de contexto consumidos na janela isolada.")
+
