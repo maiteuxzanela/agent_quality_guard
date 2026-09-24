@@ -98,6 +98,7 @@ class TestPersonasCatalog(unittest.TestCase):
             self.assertIn("Nível 2", content, f"{ws} não define Nível 2")
             self.assertIn("Nível 3", content, f"{ws} não define Nível 3")
             self.assertIn("openjev_spawn_subagent", content, f"{ws} não formaliza openjev_spawn_subagent")
+            self.assertIn("nova_persona_especialista", content, f"{ws} não inclui 'nova_persona_especialista' no choice")
 
 
 

@@ -38,15 +38,21 @@ Para manter a integridade do motor sob alta demanda, os agentes seguem a governa
 
 Quando uma tarefa técnica exigir implementação (Nível 2), o Orquestrador Valério formula o roteamento em `openjev_choice` e despacha em contexto isolado via `openjev_spawn_subagent`:
 ```python
-# 1. Eleição formal do especialista via Laya RLCD
+# 1. Eleição formal do especialista via Laya RLCD (incluindo nova_persona_especialista)
 selected = openjev_choice(
     premise="Implementar novo endpoint de streaming no FastAPI",
-    options=["kael", "maya", "tulio", "clara", "otavio"]
+    options=["kael", "maya", "tulio", "clara", "otavio", "nova_persona_especialista"]
 )
 
 # 2. Despacho autônomo com contexto limpo (Hermes Agent)
+if selected == "nova_persona_especialista":
+    # Nível 3: Proposição de nova persona em personas/<nome>.md e registro no catálogo
+    persona_alvo = propor_e_criar_persona(...)
+else:
+    persona_alvo = selected
+
 result = openjev_spawn_subagent(
-    persona=selected,
+    persona=persona_alvo,
     task="Criar rota SSE em src/decision/server.py com testes unitários",
     workspace="/home/maiteuxzanela/projeto JEV",
     auto_validate=True

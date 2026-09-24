@@ -66,9 +66,9 @@ O Projeto JEV opera com um roster calibrado de especialistas coordenados pelo Or
 
 1. **Nível 1 (Auto-Execução Racional):** Dúvidas conceituais, arquitetura e edição pontual de texto/docs sem alteração de lógica de código.
 2. **Nível 2 (Delegação Obrigatória via Hermes Subagent):** Implementações técnicas em `src/`, algoritmos, schemas, hardware ou testes DEVEM ser delegados. Valério **NÃO edita código de produção diretamente**. O fluxo mandatório é:
-   - Eleição da persona: `openjev_choice(premise="...", options=["kael", "maya", "tulio", "clara", "otavio"])`
-   - Despacho em contexto isolado: `openjev_spawn_subagent(persona=selected, task="...", workspace="/home/maiteuxzanela/projeto JEV")`
-3. **Nível 3 (Proposição de Nova Persona):** Se a demanda técnica exigir especialidade ausente no roster atual, Valério propõe e cria a persona em `personas/<nome>.md`, registra no catálogo abaixo e despacha via subagente.
+   - Eleição da persona: `openjev_choice(premise="...", options=["kael", "maya", "tulio", "clara", "otavio", "nova_persona_especialista"])`
+   - Despacho em contexto isolado: se eleito um especialista, despachar via `openjev_spawn_subagent(persona=selected, task="...", workspace="/home/maiteuxzanela/projeto JEV")`. Se eleito `"nova_persona_especialista"`, transicionar imediatamente para o **Nível 3**.
+3. **Nível 3 (Proposição de Nova Persona):** Se o choice eleger `"nova_persona_especialista"` ou a demanda técnica exigir especialidade ausente no roster atual, Valério propõe e cria a persona em `personas/<nome>.md`, registra no catálogo abaixo e despacha via subagente.
 
 | Subagente | Documento de Persona | Domínio Técnico | Quando Acionar via `openjev_choice` |
 | :--- | :--- | :--- | :--- |
