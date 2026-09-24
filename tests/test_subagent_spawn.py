@@ -16,6 +16,7 @@ from src.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
 from src.mcp_server import openjev_spawn_subagent
 from src.orchestrator.subagent_runner import (
     SubagentRunner,
+    classify_execution_level,
     extract_system_prompt_from_markdown,
     resolve_persona_file,
 )
@@ -221,4 +222,21 @@ def test_three_levels_persona_resolution():
     # Persona inexistente aciona Nível 3 (proposição de nova persona)
     with pytest.raises(FileNotFoundError):
         resolve_persona_file("especialista_inexistente_xyz", jev_root)
+
+
+def test_classify_execution_level():
+    """Valida a categorização precisa dos Três Níveis de Execução."""
+    # Nível 1: Reflexivo, dúvidas conceituais, doc, git
+    assert classify_execution_level("Explicar a arquitetura tri-camada do JEV") == 1
+    assert classify_execution_level("Como funciona o cache do Firestore?") == 1
+    assert classify_execution_level("Atualizar notas de versao", target_files=["CHANGELOG.md"]) == 1
+    assert classify_execution_level("Inspecionar status do git") == 1
+
+    # Nível 2: Implementação técnica, código de produção, testes, APIs
+    assert classify_execution_level("Implementar novo endpoint de streaming no FastAPI") == 2
+    assert classify_execution_level("Criar componente de checkout acessivel") == 2
+    assert classify_execution_level("Corrigir bug de transacao no Firestore") == 2
+    assert classify_execution_level("Adicionar testes unitarios de regressao") == 2
+    assert classify_execution_level("Refatorar servico", target_files=["src/service.py"]) == 2
+
 
