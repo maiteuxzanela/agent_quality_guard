@@ -838,15 +838,42 @@ async def openjev_score_and_diagnose(
 
 
 if __name__ == "__main__":
+    import ctypes
+    import os
+
+    # ── Proteção contra processos órfãos (Linux PR_SET_PDEATHSIG) ───────────
+    # Garante que o Kernel envie SIGTERM no microssegundo em que a IDE / Language Server pai morrer
+    try:
+        PR_SET_PDEATHSIG = 1
+        libc = ctypes.CDLL("libc.so.6")
+        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+    except Exception as e:
+        logger.debug("prctl(PR_SET_PDEATHSIG) não suportado ou indisponível: %s", e)
+
     def _graceful_exit(signum, frame) -> None:
         logger.info("Sinal %s recebido no servidor MCP, encerrando de forma limpa...", signum)
-        sys.exit(0)
+        os._exit(0)
 
     try:
         signal.signal(signal.SIGTERM, _graceful_exit)
         signal.signal(signal.SIGINT, _graceful_exit)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, _graceful_exit)
     except Exception:
         pass
+
+    # Sentinela de ciclo de vida do pai: se o pai original morrer e o processo for adotado por PID 1
+    _initial_ppid = os.getppid()
+
+    def _parent_watchdog() -> None:
+        while True:
+            time.sleep(2.0)
+            current_ppid = os.getppid()
+            if current_ppid != _initial_ppid or current_ppid <= 1:
+                logger.warning("Processo pai da IDE (PID %s) foi encerrado. Finalizando servidor MCP...", _initial_ppid)
+                os._exit(0)
+
+    threading.Thread(target=_parent_watchdog, daemon=True, name="jev-parent-watchdog").start()
 
     def _preload_engine() -> None:
         try:
