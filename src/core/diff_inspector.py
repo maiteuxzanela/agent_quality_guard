@@ -9,6 +9,7 @@ e preservando a coerência sintática da avaliação.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import subprocess
@@ -16,13 +17,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-# Teto seguro de caracteres por etapa (1200 chars calibrado para o Golden Set; configurável via JEV_MAX_STAGE_CHARS)
-DEFAULT_MAX_STAGE_CHARS = int(os.getenv("JEV_MAX_STAGE_CHARS", "1200"))
+logger = logging.getLogger("diff_inspector")
+
+# Teto seguro de caracteres por etapa (4000 chars calibrado para janela de 1024 tok do Laya; configurável via JEV_MAX_STAGE_CHARS)
+DEFAULT_MAX_STAGE_CHARS = int(os.getenv("JEV_MAX_STAGE_CHARS", "4000"))
 
 # Extensões e caminhos ignorados na inspeção de diffs de código
 IGNORE_EXTENSIONS = {
     ".pyc", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
     ".zip", ".tar", ".gz", ".lock", ".bin", ".wasm", ".pdf",
+    ".md", ".markdown", ".txt", ".rst", ".json", ".yaml", ".yml", ".toml",
 }
 
 IGNORE_DIR_PARTS = {
@@ -82,16 +86,17 @@ def get_workspace_diff_files(workspace_dir: str) -> List[DiffFile]:
 
     diff_files_map: dict[str, str] = {}
     if diff_text.strip():
-        # Divide por arquivo: delimitador "diff --git a/path b/path"
-        raw_chunks = re.split(r"(?m)^diff --git a/.* b/(.*)$", diff_text)
-        # raw_chunks[0] é o preâmbulo (ou vazio); depois alternam (path, conteúdo do diff)
-        i = 1
-        while i < len(raw_chunks) - 1:
-            file_path = raw_chunks[i].strip()
-            patch_content = raw_chunks[i + 1]
+        # Divide por arquivo usando regex iterativa robusta contra cabeçalhos git diff
+        matches = list(re.finditer(r"(?m)^diff --git a/(?:.+?) b/(.+?)$", diff_text))
+        for idx, match in enumerate(matches):
+            file_path = match.group(1).strip()
+            if file_path.startswith('"') and file_path.endswith('"'):
+                file_path = file_path[1:-1]
+            start_idx = match.end()
+            end_idx = matches[idx + 1].start() if idx + 1 < len(matches) else len(diff_text)
+            patch_content = diff_text[start_idx:end_idx].strip()
             if not is_ignored_path(file_path):
-                diff_files_map[file_path] = patch_content.strip()
-            i += 2
+                diff_files_map[file_path] = patch_content
 
     # 2. Captura arquivos untracked (arquivos 100% novos que ainda não foram comitados)
     res_untracked = subprocess.run(
@@ -131,7 +136,7 @@ def get_workspace_diff_files(workspace_dir: str) -> List[DiffFile]:
         try:
             content = full_p.read_text(encoding="utf-8", errors="replace")
             # Converte em diff sintética de adição (+ linha)
-            synth_patch = "".join(f"+{ln}\n" for ln in content.splitlines())
+            synth_patch = "".join(f"+{ln}\n" for ln in content.splitlines(keepends=True))
             diff_files.append(
                 DiffFile(
                     path=u_path,
@@ -140,7 +145,8 @@ def get_workspace_diff_files(workspace_dir: str) -> List[DiffFile]:
                     is_binary=False,
                 )
             )
-        except Exception:
+        except Exception as err:
+            logger.debug(f"Aviso ao ler arquivo untracked {u_path}: {err}")
             continue
 
     # Ordena por caminho relativo
@@ -246,34 +252,86 @@ def partition_file_into_stages(
 ) -> List[DiffStage]:
     """Particiona o diff de um arquivo em etapas lógicas e sintaticamente íntegras.
 
-    - Se o diff couber em max_chars: retorna 1 etapa única.
-    - Se for maior: quebra preferencialmente por hunks ('@@ ... @@').
-    - Se um hunk ainda for maior que max_chars: quebra por linhas/blocos lógicos.
+    Estratégia de Consolidação e Empacotamento Ganancioso:
+    1. Se o diff total do arquivo couber dentro de `max_chars`, retorna uma etapa única
+       consolidando todos os hunks juntos para máxima coerência semântica.
+    2. Se o diff total exceder `max_chars`:
+       a) Decompõe o arquivo em unidades atômicas (hunks do Git ou subdivisões de blocos
+          sintáticos que respeitam `max_chars`).
+       b) Realiza empacotamento ganancioso (greedy packing) acumulando o maior número
+          possível de unidades contíguas por bloco, minimizando o total de etapas geradas
+          e preservando a visão coesa do arquivo.
     """
-    raw = diff_file.raw_diff.strip()
-    if not raw:
+    raw_content = diff_file.raw_diff.strip()
+    if not raw_content:
         return []
 
-    # Se cabe inteiro em uma etapa
-    if len(raw) <= max_chars:
-        raw_chunks = [raw]
-    else:
-        # Tenta separar por hunks do git
-        # Procura linhas começando com @@
-        hunk_split = re.split(r"(?m)(?=^@@\s+-\d+.*@@)", raw)
-        hunk_split = [h.strip() for h in hunk_split if h.strip()]
+    # Limiar elástico de tolerância suave para produção (15% sobre max_chars quando max_chars >= 1000)
+    soft_max_chars = int(max_chars * 1.15) if max_chars >= 1000 else max_chars
+    min_orphan_chars = max(1, min(400, int(max_chars * 0.15)))
+    max_absorb_unit = max(10, min(800, int(max_chars * 0.20)))
 
-        raw_chunks = []
+    # Caso 1: Todo o diff do arquivo cabe dentro do orçamento de caracteres elástico da etapa
+    if len(raw_content) <= soft_max_chars:
+        raw_chunks: List[str] = [raw_content]
+    else:
+        # Caso 2: O arquivo excede max_chars e requer particionamento estruturado
+        hunk_split = re.split(r"(?m)(?=^@@\s+-\d+.*@@)", raw_content)
+        hunk_split = [h.strip() for h in hunk_split if h.strip()]
+        if not hunk_split:
+            hunk_split = [raw_content]
+        elif len(hunk_split) > 1 and not hunk_split[0].startswith("@@"):
+            # O preâmbulo do Git (index, ---, +++) não é código executável isolado:
+            # anexa-o ao cabeçalho do primeiro hunk real com código
+            preamble = hunk_split.pop(0)
+            hunk_split[0] = f"{preamble}\n\n{hunk_split[0]}"
+
+        # Decompõe em unidades atômicas estritamente menores ou iguais a soft_max_chars
+        atomic_units: List[str] = []
         for hunk in hunk_split:
-            if len(hunk) <= max_chars:
-                raw_chunks.append(hunk)
+            if len(hunk) <= soft_max_chars:
+                atomic_units.append(hunk)
             else:
-                # Hunk muito grande: divide em fronteiras de blocos/linhas
                 sub_chunks = _split_hunk_at_block_boundary(hunk, max_chars)
-                raw_chunks.extend(sub_chunks)
+                # Previne que o último sub-chunk seja um fragmento anão/órfão
+                if len(sub_chunks) > 1 and len(sub_chunks[-1]) < min_orphan_chars:
+                    sub_chunks[-2] = f"{sub_chunks[-2]}\n\n{sub_chunks[-1]}"
+                    sub_chunks.pop()
+                atomic_units.extend(sub_chunks)
+
+        if not atomic_units:
+            atomic_units = [raw_content[:max_chars]]
+
+        # Empacotamento ganancioso de unidades atômicas contíguas com absorção elástica
+        raw_chunks = []
+        current_chunk_parts: List[str] = []
+        current_chunk_len = 0
+
+        for unit in atomic_units:
+            unit_len = len(unit)
+            separator_len = 2 if current_chunk_parts else 0  # "\n\n"
+            # Absorve se couber em max_chars OU se for unidade pequena que cabe em soft_max_chars
+            if current_chunk_parts and (current_chunk_len + separator_len + unit_len > max_chars):
+                if (current_chunk_len + separator_len + unit_len <= soft_max_chars) and (unit_len <= max_absorb_unit):
+                    current_chunk_parts.append(unit)
+                    current_chunk_len += separator_len + unit_len
+                else:
+                    raw_chunks.append("\n\n".join(current_chunk_parts))
+                    current_chunk_parts = [unit]
+                    current_chunk_len = unit_len
+            else:
+                current_chunk_parts.append(unit)
+                current_chunk_len += separator_len + unit_len
+
+        if current_chunk_parts:
+            # Se a sobra final for minúscula e já existir bloco anterior, funde para evitar fragmentos órfãos
+            if raw_chunks and current_chunk_len < min_orphan_chars:
+                raw_chunks[-1] = f"{raw_chunks[-1]}\n\n" + "\n\n".join(current_chunk_parts)
+            else:
+                raw_chunks.append("\n\n".join(current_chunk_parts))
 
     if not raw_chunks:
-        raw_chunks = [raw[:max_chars]]
+        raw_chunks = [raw_content[:max_chars]]
 
     total_parts = len(raw_chunks)
     stages: List[DiffStage] = []

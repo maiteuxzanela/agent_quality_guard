@@ -93,6 +93,32 @@ class TestHistoryLock(unittest.TestCase):
         got["attempts"] = 99
         self.assertEqual(history_get(ws)["attempts"], 0)
 
+    def test_history_and_stages_persist_when_ram_is_evicted(self):
+        """Valida que o estado em disco restaura tentativas e estágios mesmo se a memória do processo for esvaziada."""
+        from src.core.score_gate import _score_history, _stages_cache, stages_cache_get, stages_cache_set
+        ws = "/tmp/jev_persist_test_ws"
+        history_set(ws, {"passed": False, "attempts": 3, "git_state": "hash123", "last_score": 3.10})
+        stages_cache_set(ws, "stage_abc", {"score": 3.50, "passed": True})
+
+        # Simula morte do processo / evaporação da memória RAM
+        _score_history.clear()
+        _stages_cache.clear()
+
+        # O novo ciclo recupera fielmente do disco
+        recovered_hist = history_get(ws)
+        self.assertIsNotNone(recovered_hist)
+        self.assertEqual(recovered_hist["attempts"], 3)
+        self.assertEqual(recovered_hist["last_score"], 3.10)
+
+        recovered_stage = stages_cache_get(ws, "stage_abc")
+        self.assertIsNotNone(recovered_stage)
+        self.assertEqual(recovered_stage["score"], 3.50)
+        self.assertTrue(recovered_stage["passed"])
+
+        # Incremento em novo ciclo preserva a sequência (3 -> 4)
+        next_attempts = history_increment_attempts(ws)
+        self.assertEqual(next_attempts, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

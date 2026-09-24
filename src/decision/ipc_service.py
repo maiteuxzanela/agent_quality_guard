@@ -143,6 +143,19 @@ class OpenJevIPCServer:
                 req_obj = ConsultaRequest(**payload)
                 consulta_res = await self.engine.evaluate_consulta(req_obj)
                 resp = {"status": "ok", "data": consulta_res.model_dump()}
+            elif action == "score_and_diagnose":
+                from src.mcp_server import openjev_score_and_diagnose
+                premise = str(payload.get("premise", ""))
+                workspace = str(payload.get("workspace", ""))
+                task_type = str(payload.get("task_type", "entrega"))
+                threshold = float(payload.get("threshold", 3.40))
+                diag_res = await openjev_score_and_diagnose(
+                    premise=premise,
+                    workspace=workspace,
+                    task_type=task_type,
+                    threshold=threshold,
+                )
+                resp = {"status": "ok", "data": diag_res}
             else:
                 resp = {"status": "error", "error": f"Ação desconhecida: {action}"}
 

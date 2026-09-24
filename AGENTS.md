@@ -62,13 +62,7 @@ Ver `DEFECT_OPTIONS`, `DEFECT_DESCRIPTIONS` e `DEFECT_MEMBERS` em `src/core/sche
 > **Fundadora & Engenheira Líder:** [Maiteux Zanela](file:///home/maiteuxzanela/projeto%20JEV/AGENTS.md)  
 > **Diretório Oficial de Personas:** [personas/README.md](file:///home/maiteuxzanela/projeto%20JEV/personas/README.md)
 
-O Projeto JEV opera com um roster calibrado de especialistas coordenados pelo Orquestrador Valério. O orquestrador opera estritamente sob os **Três Níveis de Execução** (Global AGENTS.md §3.1):
-
-1. **Nível 1 (Auto-Execução Racional):** Dúvidas conceituais, arquitetura e edição pontual de texto/docs sem alteração de lógica de código.
-2. **Nível 2 (Delegação Obrigatória via Hermes Subagent):** Implementações técnicas em `src/`, algoritmos, schemas, hardware ou testes DEVEM ser delegados. Valério **NÃO edita código de produção diretamente**. O fluxo mandatório é:
-   - Eleição da persona: `openjev_choice(premise="...", options=["kael", "maya", "tulio", "clara", "otavio", "nova_persona_especialista"])`
-   - Despacho em contexto isolado: se eleito um especialista, despachar via `openjev_spawn_subagent(persona=selected, task="...", workspace="/home/maiteuxzanela/projeto JEV")`. Se eleito `"nova_persona_especialista"`, transicionar imediatamente para o **Nível 3**.
-3. **Nível 3 (Proposição de Nova Persona):** Se o choice eleger `"nova_persona_especialista"` ou a demanda técnica exigir especialidade ausente no roster atual, Valério propõe e cria a persona em `personas/<nome>.md`, registra no catálogo abaixo e despacha via subagente.
+O Projeto JEV opera com um roster calibrado de especialistas coordenados pelo Orquestrador Valério. O roteamento obrigatório está suspenso: Valério possui autonomia plena para desenvolver, planejar e refatorar diretamente, acionando os subagentes sob demanda ao longo do fluxo de trabalho quando o isolamento de contexto ou especialidade técnica pontual for conveniente via `openjev_spawn_subagent`.
 
 | Subagente | Documento de Persona | Domínio Técnico | Quando Acionar via `openjev_choice` |
 | :--- | :--- | :--- | :--- |
