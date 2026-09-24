@@ -192,3 +192,38 @@ def test_consulta_request_empty_fields_rejected():
         ConsultaRequest(premise="", question="funciona?")
     with pytest.raises(ValidationError):
         ConsultaRequest(premise="código x", question="")
+
+
+def test_spawn_subagent_request_and_response_schemas():
+    """Valida schemas de despacho de subagente com timeout opcional."""
+    from src.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
+
+    # Default timeout deve ser None (desativado)
+    req = SpawnSubagentRequest(
+        persona="juliana",
+        task="Desenvolver PWA médico",
+    )
+    assert req.timeout is None
+    assert req.auto_validate is True
+    assert req.persona == "juliana"
+
+    # Timeout customizado
+    req_with_timeout = SpawnSubagentRequest(
+        persona="juliana",
+        task="Desenvolver PWA médico",
+        timeout=180.0,
+    )
+    assert req_with_timeout.timeout == 180.0
+
+    # Response schema
+    resp = SpawnSubagentResponse(
+        success=True,
+        persona="juliana",
+        workspace="/mnt/Faturamento",
+        summary="Módulo implementado com sucesso",
+        execution_time_ms=1520.0,
+    )
+    assert resp.success is True
+    assert resp.ast_blocked is False
+    assert resp.files_modified == []
+
