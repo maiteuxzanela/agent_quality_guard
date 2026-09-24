@@ -379,14 +379,16 @@ class SubagentRunner:
             "--yolo",
         ]
 
-        # Verifica se há timeout definido explicitamente ou via variável de ambiente
+        # Verifica se há timeout definido explicitamente ou via variável de ambiente (JEV_SUBAGENT_TIMEOUT ou HERMES_TIMEOUT)
         effective_timeout = timeout
-        if effective_timeout is None and "JEV_SUBAGENT_TIMEOUT" in os.environ:
+        env_timeout_str = os.getenv("JEV_SUBAGENT_TIMEOUT") or os.getenv("HERMES_TIMEOUT")
+        if effective_timeout is None and env_timeout_str:
             try:
-                env_t = float(os.environ["JEV_SUBAGENT_TIMEOUT"])
+                env_t = float(env_timeout_str)
                 effective_timeout = env_t if env_t > 0 else None
             except ValueError:
                 pass
+
 
         timeout_desc = f"{effective_timeout}s" if effective_timeout and effective_timeout > 0 else "DESATIVADO"
         logger.info(f"Despachando tarefa para Hermes Agent: [{persona_name}] (timeout={timeout_desc})")
