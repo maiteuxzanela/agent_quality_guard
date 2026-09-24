@@ -208,14 +208,30 @@ def test_three_levels_persona_resolution():
     # Personas formais do JEV
     for p_name in ["valerio", "kael", "maya", "tulio", "clara", "otavio"]:
         name, prompt, path = resolve_persona_file(p_name, jev_root)
-        assert p_name in name
+        assert p_name in name.lower()
         assert len(prompt) > 20
         assert path.exists()
 
     # Personas formais do JEZ
     for p_name in ["alex", "lumi", "ariel", "sam", "cris", "morgan", "noa", "robin"]:
         name, prompt, path = resolve_persona_file(p_name, jez_root)
-        assert p_name in name
+        assert p_name in name.lower()
+        assert len(prompt) > 20
+        assert path.exists()
+
+    # Personas formais do Panela de Sobra (PanelaBuild)
+    panela_root = Path("/home/maiteuxzanela/PanelaBuild")
+    for p_name in ["zelia", "erica", "ana", "bia", "carla", "diana", "iara", "cris", "helena"]:
+        name, prompt, path = resolve_persona_file(p_name, panela_root)
+        assert p_name in name.lower()
+        assert len(prompt) > 20
+        assert path.exists()
+
+    # Personas formais do Faturamento
+    faturamento_root = Path("/mnt/94CCB337CCB3130A/Faturamento")
+    for p_name in ["cecilia", "beatriz", "camila", "daniela", "fernanda", "gabriela", "isabela", "juliana", "leticia"]:
+        name, prompt, path = resolve_persona_file(p_name, faturamento_root)
+        assert p_name in name.lower()
         assert len(prompt) > 20
         assert path.exists()
 
