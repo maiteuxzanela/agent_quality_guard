@@ -62,7 +62,13 @@ Ver `DEFECT_OPTIONS`, `DEFECT_DESCRIPTIONS` e `DEFECT_MEMBERS` em `src/core/sche
 > **Fundadora & Engenheira Líder:** [Maiteux Zanela](file:///home/maiteuxzanela/projeto%20JEV/AGENTS.md)  
 > **Diretório Oficial de Personas:** [personas/README.md](file:///home/maiteuxzanela/projeto%20JEV/personas/README.md)
 
-O Projeto JEV opera com um roster calibrado de especialistas coordenados pelo Orquestrador Valério. Toda delegação de subtarefa técnica com alternativas plausíveis deve ser roteada via `openjev_choice` (roster $\le 10$ opções):
+O Projeto JEV opera com um roster calibrado de especialistas coordenados pelo Orquestrador Valério. O orquestrador opera estritamente sob os **Três Níveis de Execução** (Global AGENTS.md §3.1):
+
+1. **Nível 1 (Auto-Execução Racional):** Dúvidas conceituais, arquitetura e edição pontual de texto/docs sem alteração de lógica de código.
+2. **Nível 2 (Delegação Obrigatória via Hermes Subagent):** Implementações técnicas em `src/`, algoritmos, schemas, hardware ou testes DEVEM ser delegados. Valério **NÃO edita código de produção diretamente**. O fluxo mandatório é:
+   - Eleição da persona: `openjev_choice(premise="...", options=["kael", "maya", "tulio", "clara", "otavio"])`
+   - Despacho em contexto isolado: `openjev_spawn_subagent(persona=selected, task="...", workspace="/home/maiteuxzanela/projeto JEV")`
+3. **Nível 3 (Proposição de Nova Persona):** Se a demanda técnica exigir especialidade ausente no roster atual, Valério propõe e cria a persona em `personas/<nome>.md`, registra no catálogo abaixo e despacha via subagente.
 
 | Subagente | Documento de Persona | Domínio Técnico | Quando Acionar via `openjev_choice` |
 | :--- | :--- | :--- | :--- |

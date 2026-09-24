@@ -175,5 +175,43 @@ class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
         self.assertLess(engine.candidates_found, MAX_CANDIDATE_FILES)
 
 
+    async def test_extract_js_indented_functions_and_classes(self):
+        """Verifica se o parser JS extrai funcoes indentadas, arrow functions e classes."""
+        with tempfile.TemporaryDirectory(prefix="jev_needle_js_") as tmp:
+            root = Path(tmp)
+            js_file = root / "app.js"
+            js_file.write_text(
+                "document.addEventListener('DOMContentLoaded', () => {\n"
+                "  const saveCatalog = (catalogList) => {\n"
+                "    localStorage.setItem('jez_catalog', JSON.stringify(catalogList));\n"
+                "  };\n"
+                "  function processOrder(orderId) {\n"
+                "    return orderId;\n"
+                "  }\n"
+                "  class OrderManager {\n"
+                "    constructor() {}\n"
+                "  }\n"
+                "});\n",
+                encoding="utf-8",
+            )
+            engine = LocalNeedleEngine(workspace_root=str(root))
+            blocks = engine._extract_js_blocks(js_file)
+            names = [b["name"] for b in blocks]
+            self.assertIn("saveCatalog", names)
+            self.assertIn("processOrder", names)
+            self.assertIn("OrderManager", names)
+
+            # Busca real pelo símbolo
+            query = Needle3Query(
+                query="saveCatalog",
+                workspace=str(root),
+                max_tokens=600,
+            )
+            resp = await engine.search(query)
+            self.assertGreater(len(resp.snippets), 0)
+            self.assertIn("saveCatalog", resp.snippets[0].content)
+
+
 if __name__ == "__main__":
     unittest.main()
+

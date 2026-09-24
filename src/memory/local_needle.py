@@ -119,9 +119,9 @@ class LocalNeedleEngine:
             lines = content.splitlines()
             rel_path = str(file_path.relative_to(self.workspace_root))
 
-            # Detecta declarações de funções, componentes React e hooks
+            # Detecta declarações de funções, componentes React, classes e hooks (incluindo indentados)
             pattern = re.compile(
-                r"^(?:export\s+)?(?:async\s+)?(?:function\s+([A-Za-z0-9_]+)|const\s+([A-Za-z0-9_]+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)",
+                r"^\s*(?:export\s+)?(?:async\s+)?(?:function\s+([A-Za-z0-9_]+)|(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=\s*(?:async\s*)?(?:function|\([^)]*\)|[A-Za-z0-9_]+|\(\))\s*=>?|class\s+([A-Za-z0-9_]+))",
                 re.MULTILINE,
             )
 
@@ -142,7 +142,7 @@ class LocalNeedleEngine:
                 return blocks
 
             for idx, match in enumerate(matches):
-                func_name = match.group(1) or match.group(2) or "anonymous"
+                func_name = match.group(1) or match.group(2) or match.group(3) or "anonymous"
                 start_pos = match.start()
                 start_line = content[:start_pos].count("\n") + 1
 

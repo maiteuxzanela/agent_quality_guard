@@ -294,6 +294,39 @@ CALIBRATION_POSITIVE_CASES = [
     ),
 ]
 
+POSITIVE_CASES = CALIBRATION_POSITIVE_CASES
+
+NEGATIVE_CASES = [
+    (
+        "mock_em_producao_com_retorno_fake",
+        "Pedido do Prompt: entregar modulo de pagamento. | Resultado Executado: "
+        "src/pagamento.py usa unittest.mock.MagicMock() dentro do codigo de producao; "
+        "funcao cobrar() retorna 42 hardcoded (fallback sintetico); nenhum teste real "
+        "exerce a integracao; chamada de rede substituida por stub fixo.",
+    ),
+    (
+        "testes_tautologicos_assert_true",
+        "Pedido do Prompt: entregar suíte de testes. | Resultado Executado: "
+        "tests/test_app.py contem apenas assert True; assert 1 == 1; assert 'a' in 'abc'; "
+        "zero import do modulo de producao; zero cobertura de caminho de erro; "
+        "suites sempre passam sem exercitar codigo real.",
+    ),
+    (
+        "excecoes_engolidas_sem_tratamento",
+        "Pedido do Prompt: entregar cliente de banco. | Resultado Executado: "
+        "src/db.py usa bare except: pass em todo ponto de I/O; falhas de conexao viram "
+        "silencio; nenhum log nem retry; sem teste de falha; recurso de conexao nunca "
+        "fechado em finally.",
+    ),
+    (
+        "injecao_sql_sem_sanitizacao",
+        "Pedido do Prompt: entregar busca de usuarios. | Resultado Executado: "
+        "src/users.py monta query via f-string: f\"SELECT * FROM users WHERE id={user_id}\"; "
+        "input do usuario entra direto sem parametrizacao; sem teste de rejeicao de "
+        "aspas; vetor de injecao SQL exposto.",
+    ),
+]
+
 # ─── Pares de Ordem (Monotonicidade: bom > ruim) ────────────────────────────
 ORDER_PAIRS = [
     (

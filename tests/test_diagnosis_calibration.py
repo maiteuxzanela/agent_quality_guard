@@ -44,7 +44,7 @@ EXPECTED_DEFECT = {
 }
 
 # Premissa com nota ~3.4 (positivo bugfix) para forçar fail+borderline em th=3.5
-BORDERLINE_PREMISE = dict(POSITIVE_CASES)["bugfix_off_by_one_com_regressao"]
+BORDERLINE_PREMISE = {case[0]: case[1] for case in POSITIVE_CASES}["bugfix_off_by_one_com_regressao"]
 
 
 def _ensure_engine_loaded():
