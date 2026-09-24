@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "open-jev": {
+      "command": "/home/maiteuxzanela/projeto JEV/.venv/bin/python",
+      "args": [
+        "/home/maiteuxzanela/projeto JEV/src/mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/home/maiteuxzanela/projeto JEV"
+      }
+    }
+  }
+}

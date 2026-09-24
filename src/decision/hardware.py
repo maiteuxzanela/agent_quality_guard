@@ -46,6 +46,25 @@ def sanitize_torch_dtype(requested_dtype: Any) -> Any:
     return requested_dtype
 
 
+import fcntl
+
+_GPU_LOCK_FD: Optional[Any] = None
+
+
+def try_acquire_gpu_lock() -> bool:
+    """Tenta adquirir lock exclusivo na GPU para evitar que múltiplos processos saturem os 4GB de VRAM."""
+    global _GPU_LOCK_FD
+    if _GPU_LOCK_FD is not None:
+        return True
+    try:
+        f = open("/tmp/openjev_gpu.lock", "w")
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _GPU_LOCK_FD = f
+        return True
+    except (BlockingIOError, OSError):
+        return False
+
+
 def get_hardware_profile() -> HardwareProfile:
     """Inspecciona o ambiente de execução e infere limites seguros de memória e precisão."""
     try:
@@ -78,7 +97,7 @@ def get_hardware_profile() -> HardwareProfile:
             supports_bfloat16=False,
             recommended_dtype="float32",
             recommended_device="cpu",
-            recommended_max_length=1024,
+            recommended_max_length=512,
         )
 
     device_name = torch.cuda.get_device_name(0)
@@ -101,13 +120,33 @@ def get_hardware_profile() -> HardwareProfile:
         free_mb = 0
         total_mb = 4096
 
+    # Trava de Concorrência da GPU: Uma GTX 1050 Ti (4GB) suporta apenas UMA instância do Laya na VRAM.
+    gpu_lock_acquired = try_acquire_gpu_lock()
+    if not gpu_lock_acquired:
+        logger.info(
+            "Outro processo já possui lock exclusivo da GPU GTX 1050 Ti. "
+            "Roteando esta instância de forma segura para CPU para preservar VRAM e estabilidade."
+        )
+        return HardwareProfile(
+            has_cuda=True,
+            device_name=device_name,
+            compute_capability=compute_capability,
+            is_pascal_or_older=is_pascal_or_older,
+            total_vram_mb=total_mb,
+            free_vram_mb=free_mb,
+            supports_bfloat16=supports_bfloat16,
+            recommended_dtype="float32",
+            recommended_device="cpu",
+            recommended_max_length=512,
+        )
+
     # Na 1050 Ti (4GB): o modelo Laya ocupa ~1.6 GB. Exigimos pelo menos 2.2 GB livres
     # para garantir que o compositor Wayland (COSMIC) e as janelas da IDE mantenham
     # pelo menos 600-800 MB de VRAM dedicados para renderização sem glitches.
     if free_mb < 2200:
         recommended_device = "cpu"
         recommended_dtype = "float32"
-        recommended_max_length = 1024
+        recommended_max_length = 512
         logger.warning(
             f"VRAM livre na GPU ({free_mb} MB < 2200 MB) insuficiente para operar com segurança "
             "sem asfixiar o compositor desktop. Ativando fallback seguro para CPU."
