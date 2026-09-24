@@ -651,6 +651,11 @@ class SpawnSubagentRequest(BaseModel):
         default=True,
         description="Se True, submete a entrega do subagente à auditoria fail-fast do Needle AST e ao Score JEV."
     )
+    timeout: Optional[float] = Field(
+        default=None,
+        description="Timeout em segundos para a execução do subagente. Se None ou <= 0, o timeout fica desativado."
+    )
+
 
 
 class SpawnSubagentResponse(BaseModel):

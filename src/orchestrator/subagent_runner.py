@@ -196,6 +196,7 @@ class SubagentRunner:
                     system_prompt=system_prompt,
                     task=request.task,
                     workspace=target_workspace,
+                    timeout=request.timeout,
                 )
                 if hermes_out:
                     execution_report = hermes_out
@@ -254,6 +255,13 @@ class SubagentRunner:
 
         elapsed_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
 
+        is_invocation_error = (
+            "[Hermes]: Timeout de execução atingido" in execution_report
+            or "[Hermes]: Falha na invocação" in execution_report
+        )
+        if is_invocation_error:
+            passed_val = False
+
         if execution_report:
             summary_text = (
                 f"{execution_report}\n\n"
@@ -269,7 +277,7 @@ class SubagentRunner:
             )
 
         return SpawnSubagentResponse(
-            success=not ast_blocked,
+            success=not ast_blocked and not is_invocation_error,
             persona=persona_name,
             workspace=str(target_workspace),
             summary=summary_text,
@@ -346,8 +354,13 @@ class SubagentRunner:
         system_prompt: str,
         task: str,
         workspace: Path,
+        timeout: Optional[float] = None,
     ) -> str:
-        """Executa a tarefa usando o Hermes Agent conectado ao DeepSeek Flash em contexto isolado."""
+        """Executa a tarefa usando o Hermes Agent em contexto isolado.
+
+        Se timeout for None ou <= 0, o timeout fica completamente desativado,
+        permitindo que tarefas complexas executem até a conclusão.
+        """
         prompt = (
             f"Você é o especialista [{persona_name}].\n"
             f"Diretrizes da Persona:\n{system_prompt}\n\n"
@@ -364,7 +377,17 @@ class SubagentRunner:
             "--yolo",
         ]
 
-        logger.info(f"Despachando tarefa para Hermes Agent (DeepSeek Flash): [{persona_name}]")
+        # Verifica se há timeout definido explicitamente ou via variável de ambiente
+        effective_timeout = timeout
+        if effective_timeout is None and "JEV_SUBAGENT_TIMEOUT" in os.environ:
+            try:
+                env_t = float(os.environ["JEV_SUBAGENT_TIMEOUT"])
+                effective_timeout = env_t if env_t > 0 else None
+            except ValueError:
+                pass
+
+        timeout_desc = f"{effective_timeout}s" if effective_timeout and effective_timeout > 0 else "DESATIVADO"
+        logger.info(f"Despachando tarefa para Hermes Agent: [{persona_name}] (timeout={timeout_desc})")
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -372,7 +395,13 @@ class SubagentRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90.0)
+
+            # Executa com timeout apenas se configurado e > 0
+            if effective_timeout is not None and effective_timeout > 0:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=effective_timeout)
+            else:
+                stdout, stderr = await proc.communicate()
+
             out_text = stdout.decode("utf-8", errors="replace").strip()
             err_text = stderr.decode("utf-8", errors="replace").strip()
 
@@ -386,8 +415,8 @@ class SubagentRunner:
                 proc.kill()
             except Exception:
                 pass
-            logger.warning("Hermes Agent atingiu timeout de 90s.")
-            return "[Hermes]: Timeout de execução atingido (90s)."
+            logger.warning(f"Hermes Agent atingiu timeout de {effective_timeout}s.")
+            return f"[Hermes]: Timeout de execução atingido ({effective_timeout}s)."
         except Exception as e:
             logger.warning(f"Erro ao invocar Hermes Agent: {e}")
             return f"[Hermes]: Falha na invocação: {e}"

@@ -269,6 +269,7 @@ async def openjev_spawn_subagent(
     task: str,
     workspace: str = "",
     auto_validate: bool = True,
+    timeout: Optional[float] = None,
 ) -> dict:
     """Executa um subagente especialista em contexto isolado com auto-validacao AST + Score."""
     if not persona.strip():
@@ -283,9 +284,11 @@ async def openjev_spawn_subagent(
         task=task,
         workspace=workspace,
         auto_validate=auto_validate,
+        timeout=timeout,
     )
     resp = await runner.spawn(req)
     return resp.model_dump()
+
 
 
 DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["entrega"]

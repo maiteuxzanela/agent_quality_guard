@@ -256,3 +256,33 @@ def test_classify_execution_level():
     assert classify_execution_level("Refatorar servico", target_files=["src/service.py"]) == 2
 
 
+@pytest.mark.asyncio
+async def test_subagent_timeout_configuration(temp_git_workspace: Path):
+    """Verifica que o timeout é desativado por padrão (None) e tratável quando configurado."""
+    req_default = SpawnSubagentRequest(
+        persona="lumi",
+        task="Tarefa rápida de verificação",
+        workspace=str(temp_git_workspace),
+    )
+    assert req_default.timeout is None
+
+    runner = SubagentRunner(engine=None)
+    # Cria script executável simples que dorme para testar timeout sem mocks
+    dummy_bin = temp_git_workspace / "fake_hermes.sh"
+    dummy_bin.write_text("#!/bin/sh\nsleep 2\n", encoding="utf-8")
+    dummy_bin.chmod(0o755)
+
+    res = await runner._execute_via_hermes(
+        hermes_bin=str(dummy_bin),
+        persona_name="lumi",
+        system_prompt="ROLE: teste",
+        task="teste de timeout",
+        workspace=temp_git_workspace,
+        timeout=0.05,
+    )
+    assert "Timeout de execução atingido" in res
+    assert "(0.05s)" in res
+
+
+
+
