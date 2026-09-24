@@ -261,6 +261,8 @@ class SubagentRunner:
         )
         if is_invocation_error:
             passed_val = False
+            logger.warning(f"Subagente [{persona_name}] finalizou com erro de execução: {execution_report.splitlines()[0]}")
+
 
         if execution_report:
             summary_text = (
