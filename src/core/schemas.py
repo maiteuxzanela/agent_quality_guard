@@ -5,7 +5,7 @@
 """
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ==============================================================================
@@ -585,6 +585,33 @@ class Needle3Query(BaseModel):
         default=None,
         description="Filtro opcional de diretórios, pacotes ou arquivos-alvo."
     )
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def coerce_scope_to_list(cls, v: Any) -> Optional[List[str]]:
+        """Permite que chamadores passem string única (ex: 'src/decision') ou lista de strings."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v_clean = v.strip()
+            if not v_clean:
+                return None
+            if "," in v_clean:
+                parts = [p.strip() for p in v_clean.split(",") if p.strip()]
+                return parts if parts else None
+            return [v_clean]
+        if isinstance(v, (list, tuple, set)):
+            items = []
+            for item in v:
+                item_str = str(item).strip()
+                if not item_str:
+                    continue
+                if "," in item_str:
+                    items.extend([p.strip() for p in item_str.split(",") if p.strip()])
+                else:
+                    items.append(item_str)
+            return items if items else None
+        return None
     max_tokens: int = Field(
         default=1000,
         gt=0,

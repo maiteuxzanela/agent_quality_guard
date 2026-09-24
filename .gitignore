@@ -7,3 +7,10 @@ __pycache__/
 htmlcov/
 *.egg-info/
 
+# Relatórios e artefatos de auditoria arquitetural
+*_audit_results.json
+*_audit_report.md
+projeto_jev_audit_results.json
+docs/projeto_jev_audit_report.md
+scripts/audit_*.py
+

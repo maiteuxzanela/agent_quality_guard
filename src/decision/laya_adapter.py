@@ -307,6 +307,14 @@ class LayaAdapter:
 
         model_target, subfolder_target = _resolve_checkpoint_target(self._checkpoint_key, cfg)
 
+        if target_device == "cpu":
+            try:
+                import torch
+                torch.set_num_threads(min(2, os.cpu_count() or 1))
+                logger.info("Execução em CPU detectada: limitando PyTorch para no máximo 2 threads para proteger a estabilidade do host.")
+            except Exception as thread_err:
+                logger.debug(f"Não foi possível ajustar limite de threads PyTorch: {thread_err}")
+
         try:
             self._agent = Agent(
                 model_target,
@@ -321,6 +329,11 @@ class LayaAdapter:
                     f"Falha ao carregar Laya na GPU ({gpu_err}). "
                     "Ativando fallback para CPU."
                 )
+                try:
+                    import torch
+                    torch.set_num_threads(min(2, os.cpu_count() or 1))
+                except Exception as thread_fallback_err:
+                    logger.debug(f"Não foi possível ajustar limite de threads no fallback: {thread_fallback_err}")
                 try:
                     self._agent = Agent(
                         model_target,

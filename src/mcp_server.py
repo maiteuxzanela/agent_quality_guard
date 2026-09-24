@@ -14,7 +14,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # Silencia avisos
 os.environ["PYTHONWARNINGS"] = "ignore"
@@ -59,6 +59,34 @@ _engine_instance: Optional[OpenJevEngine] = None
 _engine_lock = threading.Lock()
 
 
+_ipc_server: Any = None
+
+
+def _start_ipc_server_if_needed(engine: OpenJevEngine) -> None:
+    """Inicia o servidor IPC em background thread caso este processo detenha a GPU."""
+    global _ipc_server
+    if _ipc_server is not None:
+        return
+    # Não sobe IPC se estiver rodando em CPU fallback ou já for cliente IPC
+    if getattr(engine, "use_ipc", False) or getattr(engine, "target_device", "") == "cpu":
+        return
+    try:
+        from src.decision.ipc_service import OpenJevIPCServer
+        _ipc_server = OpenJevIPCServer(engine=engine)
+
+        def _run_ipc_loop():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_ipc_server.start())
+            loop.run_forever()
+
+        t = threading.Thread(target=_run_ipc_loop, daemon=True, name="jev-ipc-service")
+        t.start()
+        logger.info("Servidor IPC Open Jev iniciado em /tmp/openjev_ipc.sock para compartilhamento de GPU.")
+    except Exception as e:
+        logger.warning("Falha ao iniciar servidor IPC: %s", e)
+
+
 def get_engine() -> OpenJevEngine:
     """Singleton do motor; thread-safe (chamado via asyncio.to_thread)."""
     global _engine_instance
@@ -72,6 +100,7 @@ def get_engine() -> OpenJevEngine:
             )
             engine.load_model()
             _engine_instance = engine
+            _start_ipc_server_if_needed(_engine_instance)
     return _engine_instance
 
 
@@ -285,7 +314,7 @@ async def openjev_spawn_subagent(
     if not task.strip():
         raise ValueError("openjev_spawn_subagent exige o parametro 'task' com a descricao da tarefa.")
 
-    engine = await _get_engine_async()
+    engine = await _get_engine_async() if auto_validate else None
     runner = SubagentRunner(engine=engine)
     req = SpawnSubagentRequest(
         persona=persona,
@@ -852,6 +881,11 @@ if __name__ == "__main__":
 
     def _graceful_exit(signum, frame) -> None:
         logger.info("Sinal %s recebido no servidor MCP, encerrando de forma limpa...", signum)
+        if os.path.exists("/tmp/openjev_ipc.sock"):
+            try:
+                os.unlink("/tmp/openjev_ipc.sock")
+            except OSError as unlink_err:
+                logger.debug("Não foi possível desvincular socket IPC no encerramento: %s", unlink_err)
         os._exit(0)
 
     try:
@@ -859,8 +893,8 @@ if __name__ == "__main__":
         signal.signal(signal.SIGINT, _graceful_exit)
         if hasattr(signal, "SIGHUP"):
             signal.signal(signal.SIGHUP, _graceful_exit)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Sinais de terminação não puderam ser registrados: %s", e)
 
     # Sentinela de ciclo de vida do pai: se o pai original morrer e o processo for adotado por PID 1
     _initial_ppid = os.getppid()
@@ -877,8 +911,15 @@ if __name__ == "__main__":
 
     def _preload_engine() -> None:
         try:
+            from src.decision.hardware import try_acquire_gpu_lock
+            if not try_acquire_gpu_lock():
+                logger.info(
+                    "Instância secundária sem lock de GPU detectada. "
+                    "Pré-carregamento em CPU suprimido para economizar ~2.3 GB de RAM física."
+                )
+                return
             get_engine()
-            logger.info("Motor JEV pré-carregado no startup do MCP.")
+            logger.info("Motor JEV pré-carregado no startup do MCP com GPU alocada.")
         except Exception as e:
             logger.warning("Pré-load do motor JEV falhou (retry no 1º uso): %s", e)
 

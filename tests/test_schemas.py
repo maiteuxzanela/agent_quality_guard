@@ -227,3 +227,26 @@ def test_spawn_subagent_request_and_response_schemas():
     assert resp.ast_blocked is False
     assert resp.files_modified == []
 
+
+def test_needle3_query_scope_coercion():
+    """Verifica coerção transparente de string, list ou None no campo scope do Needle3Query."""
+    # String única vira lista
+    q1 = Needle3Query(query="def test", scope="src/decision")
+    assert q1.scope == ["src/decision"]
+
+    # String com vírgulas vira lista separada
+    q2 = Needle3Query(query="def test", scope="src/decision, src/memory")
+    assert q2.scope == ["src/decision", "src/memory"]
+
+    # Lista de strings permanece lista
+    q3 = Needle3Query(query="def test", scope=["src/core", "src/decision"])
+    assert q3.scope == ["src/core", "src/decision"]
+
+    # None permanece None
+    q4 = Needle3Query(query="def test", scope=None)
+    assert q4.scope is None
+
+    # String vazia vira None
+    q5 = Needle3Query(query="def test", scope="")
+    assert q5.scope is None
+

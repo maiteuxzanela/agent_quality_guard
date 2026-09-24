@@ -20,6 +20,7 @@ from ..core.schemas import (
     InferenceError,
     NoulRequest,
     NoulResponse,
+    OpenJevError,
     OpenJevNotReadyError,
     ScoreRequest,
     ScoreResponse,
@@ -37,6 +38,8 @@ class OpenJevEngine:
     """Wrapper discriminativo não-gerativo para o motor Open Jev.
     Por padrão utiliza o modelo Laya (convaiinnovations/laya) rodando localmente
     na GPU GTX 1050 Ti com fallback seguro para CPU e calibração RLCD.
+    Quando detecta um servidor IPC ativo (hospedado pelo processo primário com GPU),
+    conecta-se via Unix Domain Socket, economizando ~2.3 GB de RAM física e acelerando inferências.
     """
 
     def __init__(
@@ -50,6 +53,22 @@ class OpenJevEngine:
         self.max_length = max_length
         self.allow_cpu_fallback = allow_cpu_fallback
         self.profile = get_hardware_profile()
+
+        # Detecção de serviço IPC (processo secundário compartilhando GPU)
+        from .ipc_service import is_ipc_available
+        self.use_ipc = False
+        if (device is None or "ipc" in device) and is_ipc_available():
+            logger.info("Detectado servidor IPC ativo na GPU. Conectando via Unix Domain Socket...")
+            self.use_ipc = True
+            self.target_device = "ipc:gpu"
+            self.is_ready = True
+            self.is_laya = True
+            self.laya_adapter = None
+            self.model = None
+            self.tokenizer = None
+            self._native_jev = None
+            self._entailment_idx = 2
+            return
 
         # Determina o dispositivo alvo
         if device is not None:
@@ -78,6 +97,11 @@ class OpenJevEngine:
         """Carrega o modelo e tokenizador na memória com verificações de hardware.
         Lança exceção imediata caso PyTorch, Transformers ou os pesos não estejam disponíveis.
         """
+        if getattr(self, "use_ipc", False):
+            logger.info("OpenJevEngine operando via IPC. Carregamento local de pesos suprimido.")
+            self.is_ready = True
+            return
+
         try:
             import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -202,6 +226,13 @@ class OpenJevEngine:
 
     def _ensure_ready(self) -> None:
         """Validação interna de disponibilidade. Sem mocks."""
+        if getattr(self, "use_ipc", False):
+            from .ipc_service import is_ipc_available
+            if not is_ipc_available():
+                raise OpenJevNotReadyError(
+                    "Servidor IPC do Open Jev não está mais respondendo."
+                )
+            return
         if self.is_laya:
             if not self.is_ready or self.laya_adapter is None or not self.laya_adapter.is_ready:
                 raise OpenJevNotReadyError(
@@ -218,6 +249,11 @@ class OpenJevEngine:
     async def evaluate_noul(self, request: NoulRequest) -> NoulResponse:
         """Avalia uma proposição lógica/booleana (Noul) em passagem única."""
         self._ensure_ready()
+        if getattr(self, "use_ipc", False):
+            from .ipc_service import call_ipc_async
+            data = await call_ipc_async("noul", request.model_dump())
+            return NoulResponse(**data)
+
         if self.is_laya:
             return await self.laya_adapter.evaluate_noul(request)
 
@@ -306,6 +342,11 @@ class OpenJevEngine:
     async def evaluate_choice(self, request: ChoiceRequest) -> ChoiceResponse:
         """Roteia para a melhor opção dentre as alternativas fornecidas (Choice)."""
         self._ensure_ready()
+        if getattr(self, "use_ipc", False):
+            from .ipc_service import call_ipc_async
+            data = await call_ipc_async("choice", request.model_dump())
+            return ChoiceResponse(**data)
+
         if self.is_laya:
             return await self.laya_adapter.evaluate_choice(request)
 
@@ -399,6 +440,11 @@ class OpenJevEngine:
     async def evaluate_score(self, request: ScoreRequest) -> ScoreResponse:
         """Avalia a conformidade de um artefato contra uma rubrica de qualidade (Score)."""
         self._ensure_ready()
+        if getattr(self, "use_ipc", False):
+            from .ipc_service import call_ipc_async
+            data = await call_ipc_async("score", request.model_dump())
+            return ScoreResponse(**data)
+
         if self.is_laya:
             return await self.laya_adapter.evaluate_score(request)
 

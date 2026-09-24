@@ -285,5 +285,43 @@ async def test_subagent_timeout_configuration(temp_git_workspace: Path):
     assert "(0.05s)" in res
 
 
+@pytest.mark.asyncio
+async def test_hermes_args_and_workspace_jail(temp_git_workspace: Path):
+    """Verifica que o Hermes é invocado sem --yolo por padrão, com cwd correto e restrição de diretório no prompt."""
+    runner = SubagentRunner(engine=None)
 
+    # Script real que grava seus argumentos e diretório atual em arquivo
+    record_file = temp_git_workspace / "hermes_record.txt"
+    probe_bin = temp_git_workspace / "probe_hermes.sh"
+    probe_bin.write_text(
+        f"#!/bin/sh\n"
+        f"echo \"PWD: $(pwd)\" > \"{record_file}\"\n"
+        f"echo \"ARGS: $@\" >> \"{record_file}\"\n"
+        f"echo \"OK\"\n",
+        encoding="utf-8",
+    )
+    probe_bin.chmod(0o755)
 
+    res = await runner._execute_via_hermes(
+        hermes_bin=str(probe_bin),
+        persona_name="lumi",
+        system_prompt="ROLE: Frontend Dev",
+        task="Ajustar estilo CSS",
+        workspace=temp_git_workspace,
+        timeout=5.0,
+    )
+    assert res == "OK"
+
+    record_content = record_file.read_text(encoding="utf-8")
+    # 1. Garante que --yolo NÃO está presente nos argumentos por padrão
+    assert "--yolo" not in record_content
+
+    # 2. Garante que o CWD do processo é o workspace do projeto
+    assert f"PWD: {temp_git_workspace}" in record_content
+
+    # 3. Garante que --in workspace está presente
+    assert f"--in {temp_git_workspace}" in record_content
+
+    # 4. Garante que o prompt contém a cláusula explícita de confinamento
+    assert "Restrição de Escopo: Opere estritamente dentro de" in record_content
+    assert str(temp_git_workspace) in record_content

@@ -363,11 +363,13 @@ class SubagentRunner:
         Se timeout for None ou <= 0, o timeout fica completamente desativado,
         permitindo que tarefas complexas executem até a conclusão.
         """
+        workspace_resolved = str(workspace.resolve())
         prompt = (
             f"Você é o especialista [{persona_name}].\n"
             f"Diretrizes da Persona:\n{system_prompt}\n\n"
             f"MISSÃO TÉCNICA:\n{task}\n\n"
-            "Execute a missão no workspace e forneça um resumo conciso e factual do que foi implementado."
+            f"Restrição de Escopo: Opere estritamente dentro de {workspace_resolved}. "
+            "Forneça um resumo conciso e factual do que foi implementado."
         )
 
         cmd = [
@@ -375,9 +377,12 @@ class SubagentRunner:
             "-z",
             prompt,
             "--in",
-            str(workspace),
-            "--yolo",
+            workspace_resolved,
         ]
+
+        # Flag --yolo desativada por padrão; apenas habilitada se explicitamente solicitada
+        if os.getenv("JEV_HERMES_YOLO", "false").lower() in ("true", "1", "yes"):
+            cmd.append("--yolo")
 
         # Verifica se há timeout definido explicitamente ou via variável de ambiente (JEV_SUBAGENT_TIMEOUT ou HERMES_TIMEOUT)
         effective_timeout = timeout
@@ -386,16 +391,17 @@ class SubagentRunner:
             try:
                 env_t = float(env_timeout_str)
                 effective_timeout = env_t if env_t > 0 else None
-            except ValueError:
-                pass
+            except ValueError as env_err:
+                logger.debug(f"Valor inválido para variável de ambiente de timeout: {env_err}")
 
 
         timeout_desc = f"{effective_timeout}s" if effective_timeout and effective_timeout > 0 else "DESATIVADO"
-        logger.info(f"Despachando tarefa para Hermes Agent: [{persona_name}] (timeout={timeout_desc})")
+        logger.info(f"Despachando tarefa para Hermes Agent: [{persona_name}] (workspace={workspace_resolved}, timeout={timeout_desc})")
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                cwd=workspace_resolved,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -417,8 +423,8 @@ class SubagentRunner:
         except asyncio.TimeoutError:
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except Exception as kill_err:
+                logger.debug(f"Não foi possível encerrar processo Hermes após timeout: {kill_err}")
             logger.warning(f"Hermes Agent atingiu timeout de {effective_timeout}s.")
             return f"[Hermes]: Timeout de execução atingido ({effective_timeout}s)."
         except Exception as e:

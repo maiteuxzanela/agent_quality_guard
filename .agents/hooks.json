@@ -1,0 +1,11 @@
+{
+  "clara-qa-guard": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "/home/maiteuxzanela/projeto JEV/.venv/bin/python '/home/maiteuxzanela/projeto JEV/.agents/scripts/clara_guard.py'",
+        "timeout": 120
+      }
+    ]
+  }
+}
