@@ -34,11 +34,23 @@ Para manter a integridade do motor sob alta demanda, os agentes seguem a governa
 
 ---
 
-## 3. Roteamento Formal via Open Jev
+## 3. Roteamento Formal via Open Jev e Despacho de Subagentes
 
-Quando uma tarefa complexa exigir despacho a um especialista, o Orquestrador formula o roteamento em `openjev_choice`:
+Quando uma tarefa técnica exigir implementação (Nível 2), o Orquestrador Valério formula o roteamento em `openjev_choice` e despacha em contexto isolado via `openjev_spawn_subagent`:
 ```python
-# Exemplo de despacho de tarefa pelo Orquestrador Valério
-options = ["kael_ml", "maya_ast", "tulio_mcp", "clara_qa", "otavio_bridge"]
+# 1. Eleição formal do especialista via Laya RLCD
+selected = openjev_choice(
+    premise="Implementar novo endpoint de streaming no FastAPI",
+    options=["kael", "maya", "tulio", "clara", "otavio"]
+)
+
+# 2. Despacho autônomo com contexto limpo (Hermes Agent)
+result = openjev_spawn_subagent(
+    persona=selected,
+    task="Criar rota SSE em src/decision/server.py com testes unitários",
+    workspace="/home/maiteuxzanela/projeto JEV",
+    auto_validate=True
+)
 ```
-O agente eleito assume a titularidade da execução técnica, aplicando suas diretrizes especializadas.
+O especialista eleito assume a titularidade da execução técnica com contexto isolado, sem carregar o histórico de conversa do orquestrador, e o resultado é verificado deterministicamente antes do retorno.
+
