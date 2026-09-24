@@ -197,3 +197,28 @@ async def test_mcp_openjev_spawn_subagent_tool(temp_git_workspace: Path):
     assert res["success"] is True
     assert res["ast_blocked"] is False
     assert res["persona"] == "lumi_ui_ux_frontend"
+
+
+def test_three_levels_persona_resolution():
+    """Valida resolução de personas do Roster formal (Nível 2) e detecção de ausência (Nível 3)."""
+    jev_root = Path("/home/maiteuxzanela/projeto JEV")
+    jez_root = Path("/mnt/94CCB337CCB3130A/JEZ collections")
+
+    # Personas formais do JEV
+    for p_name in ["valerio", "kael", "maya", "tulio", "clara", "otavio"]:
+        name, prompt, path = resolve_persona_file(p_name, jev_root)
+        assert p_name in name
+        assert len(prompt) > 20
+        assert path.exists()
+
+    # Personas formais do JEZ
+    for p_name in ["alex", "lumi", "ariel", "sam", "cris", "morgan", "noa", "robin"]:
+        name, prompt, path = resolve_persona_file(p_name, jez_root)
+        assert p_name in name
+        assert len(prompt) > 20
+        assert path.exists()
+
+    # Persona inexistente aciona Nível 3 (proposição de nova persona)
+    with pytest.raises(FileNotFoundError):
+        resolve_persona_file("especialista_inexistente_xyz", jev_root)
+
