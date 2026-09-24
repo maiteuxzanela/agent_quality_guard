@@ -186,12 +186,13 @@ async def test_mcp_openjev_spawn_subagent_tool(temp_git_workspace: Path):
     with pytest.raises(ValueError, match="exige o parametro 'task'"):
         await openjev_spawn_subagent(persona="lumi", task="   ")
 
-    # Execução limpa
+    # Execução limpa com timeout desativado explicitamente
     res = await openjev_spawn_subagent(
         persona="lumi",
         task="Testar criação de componente limpo",
         workspace=str(temp_git_workspace),
         auto_validate=True,
+        timeout=None,
     )
 
     assert isinstance(res, dict)

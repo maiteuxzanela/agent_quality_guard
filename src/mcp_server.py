@@ -271,7 +271,15 @@ async def openjev_spawn_subagent(
     auto_validate: bool = True,
     timeout: Optional[float] = None,
 ) -> dict:
-    """Executa um subagente especialista em contexto isolado com auto-validacao AST + Score."""
+    """Executa um subagente especialista em contexto isolado com auto-validacao AST + Score.
+
+    Args:
+        persona: Identificador da persona especialista (ex: 'lumi', 'kael', 'juliana').
+        task: Descricao cirurgica e detalhada da tarefa tecnica a ser executada.
+        workspace: Diretorio absoluto do repositorio alvo (vazio assume o workspace corrente).
+        auto_validate: Se True, executa auditoria fail-fast do Needle AST e do Laya Score.
+        timeout: Limite de tempo em segundos. Se None ou <= 0, o timeout fica completamente desativado.
+    """
     if not persona.strip():
         raise ValueError("openjev_spawn_subagent exige o parametro 'persona' preenchido.")
     if not task.strip():
