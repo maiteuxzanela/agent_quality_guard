@@ -81,6 +81,25 @@ class TestPersonasCatalog(unittest.TestCase):
         self.assertIn("**Tentativas:**", text)
         self.assertIn("**Notas:**", text)
 
+    def test_ecosystem_agents_md_three_execution_levels(self) -> None:
+        """Garante que todos os workspaces do ecossistema formalizam os 3 Níveis e openjev_spawn_subagent."""
+        workspaces = [
+            Path("/home/maiteuxzanela/projeto JEV"),
+            Path("/mnt/94CCB337CCB3130A/JEZ collections"),
+            Path("/home/maiteuxzanela/PanelaBuild"),
+            Path("/mnt/94CCB337CCB3130A/Faturamento"),
+        ]
+        for ws in workspaces:
+            agents_md = ws / "AGENTS.md"
+            self.assertTrue(agents_md.is_file(), f"AGENTS.md não encontrado em {ws}")
+            content = agents_md.read_text(encoding="utf-8")
+            self.assertIn("Três Níveis de Execução", content, f"{ws} não formaliza os Três Níveis de Execução")
+            self.assertIn("Nível 1", content, f"{ws} não define Nível 1")
+            self.assertIn("Nível 2", content, f"{ws} não define Nível 2")
+            self.assertIn("Nível 3", content, f"{ws} não define Nível 3")
+            self.assertIn("openjev_spawn_subagent", content, f"{ws} não formaliza openjev_spawn_subagent")
+
+
 
 if __name__ == "__main__":
     unittest.main()
