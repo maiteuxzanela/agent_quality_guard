@@ -94,15 +94,18 @@ class TestCircuitBreakerAndAntiGaming(unittest.IsolatedAsyncioTestCase):
             "last_score": 3.20,
         }
 
-        # 5ª chamada: ainda bloqueada, incrementa para 5
+        # 5ª chamada sem mudança: incrementa para 5 e destrava a Saída de Emergência
+        # (Circuit Breaker Universal do working tree: limite atingido => desbloqueio
+        # imediato, mesmo sem alteração no disco).
         res5 = await openjev_score_and_diagnose(
             premise="Pedido do Prompt: refatorar módulo. | Resultado Executado: tentativa 5 sem refatoração.",
             workspace=self.ws,
             threshold=5.0,
         )
-        self.assertIn("error", res5)
+        self.assertNotIn("error", res5)
         self.assertEqual(_score_history[self.ws]["attempts"], MAX_ATTEMPTS)
-        self.assertIn(f"/{MAX_ATTEMPTS}", res5["error"])
+        self.assertTrue(res5.get("emergency_exit_unlocked"))
+        self.assertIn("SAÍDA DE EMERGÊNCIA DESBLOQUEADA", res5.get("message", ""))
 
         # 6ª chamada: desbloqueia o circuit breaker
         res_cb = await openjev_score_and_diagnose(

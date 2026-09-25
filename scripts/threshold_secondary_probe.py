@@ -1,17 +1,15 @@
-"""Fase 1 — Probe isolado: threshold de score 3.60 + aprovação secundária.
+"""Fase 1 — Probe isolado: threshold de score 3.60 (pós-remoção do choice).
 
 Não altera defaults do motor (LAYA_SCORE_THRESHOLD_DEFAULT / MCP continuam 3.40).
 Apenas invoca openjev_score_and_diagnose(..., threshold=3.60) nos 8 pares
 pos/neg do golden set (tests/test_score_calibration) com git real e engine Laya.
 
-    Critério de sucesso (usuária):
-      - Todo POSITIVO aprova: primário (score >= 3.60) OU secundário
-        (borderline=true AND diagnosis.selected ∈ NULL_DEFECT_OPTIONS
-         AND confidence >= NULL_CHOICE_MIN_CONFIDENCE=0.40).
-      - Todo NEGATIVO reprova: (não-borderline) OU (borderline AND choice
-        com defeito concreto) OU (borderline AND nula com conf < 0.40).
-        FP secundário (neg aprovado como borderline nula forte) zera o
-        experimento.
+    Critério de sucesso (pós set/2026 — sem choice, sem categorias nulas):
+      - Todo POSITIVO aprova (score >= 3.60 OU aprovação com ressalva quando
+        o Needle 3 não aponta nenhuma suspeita).
+      - Todo NEGATIVO reprova (score < 3.60 no caminho mono, ou suspeita
+        confirmada/não-resolvida no caminho AST).
+      - FP (negativo aprovado) zera o experimento.
 
 Saída: benchmarks/threshold_360_secondary_probe.json
 """
@@ -77,14 +75,14 @@ def _make_git_repo() -> str:
 
 
 async def _eval_case(ws: str, premise: str) -> dict:
-    from src.mcp_server import NULL_DEFECT_OPTIONS, _score_history, openjev_score_and_diagnose
+    from src.mcp_server import _score_history, openjev_score_and_diagnose
 
     _score_history.clear()
     result = await openjev_score_and_diagnose(
         premise=premise,
         workspace=ws,
         threshold=THRESHOLD,
-        task_type="entrega",
+        task_type="codigo_producao",
     )
     if "error" in result and result.get("premise_rejected"):
         raise RuntimeError(f"premise rejected: {result['error']}")
@@ -100,54 +98,35 @@ async def _eval_case(ws: str, premise: str) -> dict:
         "approved_as_borderline": result.get("approved_as_borderline", False),
         "diagnosis_selected": selected,
         "diagnosis_confidence": diagnosis.get("confidence"),
-        "is_null_choice": selected in NULL_DEFECT_OPTIONS if selected else False,
+        "diagnosis_present": bool(selected),
         "attempts": result.get("attempts"),
         "rubric_source": result.get("rubric_source"),
     }
 
 
 def _classify(kind: str, r: dict) -> dict:
-    """Avalia critério da usuária para um caso."""
+    """Avalia o critério pós-remoção do choice para um caso."""
     score = r.get("score")
     passed = bool(r.get("passed"))
-    borderline = bool(r.get("borderline"))
-    is_null = bool(r.get("is_null_choice"))
-    approved_bl = bool(r.get("approved_as_borderline"))
+    diagnosis_present = bool(r.get("diagnosis_present"))
 
     primary_pass = score is not None and score >= THRESHOLD
-    secondary_pass = (
-        (not primary_pass)
-        and borderline
-        and is_null
-        and approved_bl
-        and passed
-    )
+    caveat_pass = (not primary_pass) and passed and not diagnosis_present
 
     if kind == "pos":
-        ok = passed and (primary_pass or secondary_pass)
-        via = "primary" if primary_pass else ("secondary_null" if secondary_pass else "none")
+        ok = passed
+        via = "primary" if primary_pass else ("caveat" if caveat_pass else "none")
         failure = None if ok else (
-            f"FALSO NEGATIVO: score={score} borderline={borderline} "
-            f"selected={r.get('diagnosis_selected')} passed={passed}"
+            f"FALSO NEGATIVO: score={score} passed={passed} "
+            f"selected={r.get('diagnosis_selected')}"
         )
     else:
-        # Negativo: precisa reprovar. Caminho aceito: não-borderline OU choice concreta.
         ok = not passed
-        if ok:
-            if not borderline:
-                via = "reject_not_borderline"
-            elif not is_null:
-                via = "reject_concrete_choice"
-            else:
-                via = "reject_other"
-        else:
-            via = "FALSE_POSITIVE"
-            failure = (
-                f"FALSO POSITIVO SECUNDÁRIO: score={score} borderline={borderline} "
-                f"selected={r.get('diagnosis_selected')} approved_as_borderline={approved_bl}"
-            )
-        if ok:
-            failure = None
+        via = "reject" if ok else "FALSE_POSITIVE"
+        failure = None if ok else (
+            f"FALSO POSITIVO: score={score} passed={passed} "
+            f"selected={r.get('diagnosis_selected')}"
+        )
 
     return {
         "kind": kind,
@@ -193,7 +172,7 @@ async def main() -> int:
     false_pos = [r for r in neg if not r["ok"]]
 
     primary_pos = [r for r in pos if r["via"] == "primary"]
-    secondary_pos = [r for r in pos if r["via"] == "secondary_null"]
+    secondary_pos = [r for r in pos if r["via"] == "caveat"]
     primary_reject_neg = [
         r for r in neg if r.get("score") is not None and r["score"] >= THRESHOLD
     ]
@@ -207,13 +186,8 @@ async def main() -> int:
         "false_negatives": [r["name"] for r in false_neg],
         "false_positives": [r["name"] for r in false_pos],
         "primary_pass_pos": [r["name"] for r in primary_pos],
-        "secondary_null_pass_pos": [r["name"] for r in secondary_pos],
+        "caveat_pass_pos": [r["name"] for r in secondary_pos],
         "neg_score_ge_threshold": [r["name"] for r in primary_reject_neg],
-        "neg_borderline_null_approved": [
-            r["name"]
-            for r in neg
-            if r.get("approved_as_borderline") and r.get("is_null_choice")
-        ],
         "success": len(false_neg) == 0 and len(false_pos) == 0,
         "elapsed_s": round(time.time() - t0, 2),
     }
@@ -224,9 +198,8 @@ async def main() -> int:
             "threshold": THRESHOLD,
             "default_engine_threshold_unchanged": 3.40,
             "criterion": (
-                "all positives pass (primary score>=3.60 OR secondary borderline+null "
-                "choice with confidence>=0.40); all negatives fail (not borderline OR "
-                "concrete choice OR null with confidence<0.40)"
+                "all positives pass (score>=3.60 OR caveat approval with zero "
+                "structural suspicions); all negatives fail"
             ),
             "ts": time.time(),
             "elapsed_s": metrics["elapsed_s"],

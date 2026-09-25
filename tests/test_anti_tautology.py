@@ -62,8 +62,8 @@ class TestSuiteAntiTautologia(unittest.TestCase):
         self.assertGreaterEqual(len(NEGATIVE_CASES), 4)
         self.assertGreaterEqual(len(ORDER_PAIRS), 2)
         self.assertGreaterEqual(len(STABILITY_PAIRS), 2)
-        nomes_pos = {name for name, _ in POSITIVE_CASES}
-        nomes_neg = {name for name, _ in NEGATIVE_CASES}
+        nomes_pos = {name for name, *_ in POSITIVE_CASES}
+        nomes_neg = {name for name, *_ in NEGATIVE_CASES}
         self.assertTrue(nomes_pos.isdisjoint(nomes_neg))
 
 

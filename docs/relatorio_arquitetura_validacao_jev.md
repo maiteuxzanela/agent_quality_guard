@@ -5,6 +5,8 @@
 **Data:** 23 de Setembro de 2026  
 **Status do Validador:** Homologado e Operacional em Produção  
 
+> **Atualização (25 de Setembro de 2026):** o fluxo de diagnóstico descrito nas seções 3–4 (choice flat sobre 10 categorias com opções nulas `sem_defeito_identificavel`/`evidencia_insuficiente`) foi **substituído**: `openjev_score_and_diagnose` opera sem choice — AST Guardrail fail-fast → Screener Needle 3 → Noul (P ≥ 0.78) → Score Laya, sobre **8 categorias técnicas** (AGENTS.md §2, README §3). O restante do relatório (premissa `Pedido|Resultado`, rubrica fechada, thresholds 0.78/3.40, anti-gaming e circuit breaker) segue vigente.
+
 ---
 
 ## 1. Introdução: Por que Validar Entregas de Inteligência Artificial?

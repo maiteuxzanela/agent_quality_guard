@@ -3,12 +3,17 @@
 import pytest
 from starlette.testclient import TestClient
 
+from src.decision.engine import OpenJevEngine
 from src.decision.server import create_app
 
 
 @pytest.fixture
 def client():
-    app = create_app(auto_load_model=False)
+    # device explícito: sem auto-detecção IPC. Se o daemon openjev estiver
+    # ativo no ambiente, OpenJevEngine() padrão ficaria is_ready=True via
+    # socket e quebraria o cenário real "motor não carregado => 503".
+    engine = OpenJevEngine(device="cpu")
+    app = create_app(engine=engine, auto_load_model=False)
     return TestClient(app)
 
 

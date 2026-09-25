@@ -10,9 +10,11 @@ sinon/jest.fn/__mocks__; geral: Mock(/def mock/stub). Qualquer ocorrência
 conta igual — sem distinguir teste de produção na severidade (metadata
 'em_testes' vs 'em_producao' apenas informativa na saída).
 
-Se score < 3.40, dispara choice único sobre DEFECT_OPTIONS (10 categorias
-flat) — a categoria esperada aqui é mock_stub_em_producao
-(folha: stub_ou_mock_em_producao).
+Se score < 3.40 (reprovado pelo score), o PRÓPRIO SCRIPT — não a tool de
+score do MCP, cujo choice de diagnóstico foi removido — dispara
+`evaluate_choice` direto sobre DEFECT_OPTIONS (8 categorias técnicas);
+a categoria esperada aqui é qualidade_de_testes
+(folha: ausencia_de_testes_unitarios / teste_tautologico_ou_falso_positivo).
 """
 
 import asyncio
@@ -241,7 +243,7 @@ async def audit_target(engine: OpenJevEngine, needle: LocalNeedleEngine, target:
     print(f"  [Score] Nota: {score_resp.score:.2f} / 5.00 (corte {SCORE_THRESHOLD})")
     print(f"          Distribuição: {score_resp.breakdown}")
 
-    # 6. Diagnóstico flat (10 categorias) se reprovado
+    # 6. Diagnóstico flat (8 categorias) se reprovado
     diagnosis = None
     if score_resp.passed is False:
         scrub_head = (

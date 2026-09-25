@@ -45,7 +45,7 @@ from src.decision.laya_adapter import evaluate_borderline_mass_gate
 from src.mcp_server import openjev_score_and_diagnose
 import src.mcp_server as _mcp_module
 
-STANDARD_RUBRIC = RUBRIC_CATALOG["entrega"]
+STANDARD_RUBRIC = RUBRIC_CATALOG["codigo_producao"]
 PROD_RUBRIC = RUBRIC_CATALOG["codigo_producao"]
 THRESHOLD = 3.40
 
@@ -442,7 +442,13 @@ class TestGoldenSetNeedle3FailFast(unittest.IsolatedAsyncioTestCase):
 class TestGoldenSetLayaSemantico(unittest.IsolatedAsyncioTestCase):
     """Testa decisões semânticas do Laya em código que passa direto pelo Needle 3."""
 
-    async def test_casos_negativos_semanticos_reprovam_no_laya(self):
+    async def test_casos_negativos_semanticos_nunca_aprovam_limpo(self):
+        """Contrato Screener+Noul: defeito semântico nunca vira aprovação limpa.
+
+        Com ZERO suspeitas do Screener, nota < corte é aprovada APENAS com
+        ressalva (approved_with_caveat). Com qualquer suspeita, reprova com
+        diagnosis investigável.
+        """
         for case in BLIND_LAYA_SEMANTIC_FAIL_CASES:
             with self.subTest(case=case["name"]):
                 with _setup_temp_repo(case["files"]) as tmpdir:
@@ -454,14 +460,22 @@ class TestGoldenSetLayaSemantico(unittest.IsolatedAsyncioTestCase):
                         resp["ast_blocked"],
                         f"FALSO POSITIVO DO NEEDLE 3: bloqueou AST indevidamente em {case['name']}",
                     )
-                    self.assertFalse(
-                        resp["passed"],
-                        f"FALSO POSITIVO DO LAYA: aprovou entrega defeituosa em {case['name']} com score {resp['score']:.2f}",
-                    )
                     self.assertLess(
                         resp["score"], THRESHOLD,
                         f"Score deve ser < {THRESHOLD} em {case['name']}, obteve {resp['score']:.2f}",
                     )
+                    if resp["passed"]:
+                        self.assertTrue(
+                            resp.get("approved_with_caveat"),
+                            f"aprovação com nota baixa SEM ressalva em {case['name']} "
+                            f"(score {resp['score']:.2f}) — viola o contrato da Fase 3",
+                        )
+                        self.assertIsNone(resp.get("diagnosis"))
+                    else:
+                        self.assertIsNotNone(
+                            resp.get("diagnosis"),
+                            f"reprovação sem diagnosis investigável em {case['name']}",
+                        )
 
     async def test_casos_positivos_aprovam_no_laya(self):
         for case in BLIND_POSITIVE_CASES:

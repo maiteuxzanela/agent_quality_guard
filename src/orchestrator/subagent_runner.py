@@ -198,8 +198,7 @@ class SubagentRunner:
                     workspace=target_workspace,
                     timeout=request.timeout,
                 )
-                if hermes_out:
-                    execution_report = hermes_out
+                execution_report = hermes_out or ""
 
         # Captura os arquivos modificados no workspace após a tarefa
         diff_files = get_workspace_diff_files(target_workspace)
@@ -239,7 +238,7 @@ class SubagentRunner:
 
                     score_req = ScoreRequest(
                         premise=premise,
-                        rubric=RUBRIC_CATALOG["entrega"],
+                        rubric=RUBRIC_CATALOG["codigo_producao"],
                         threshold=3.40,
                     )
                     score_resp = await self.engine.evaluate_score(score_req)
@@ -386,7 +385,7 @@ class SubagentRunner:
 
         # Verifica se há timeout definido explicitamente ou via variável de ambiente (JEV_SUBAGENT_TIMEOUT ou HERMES_TIMEOUT)
         effective_timeout = timeout
-        env_timeout_str = os.getenv("JEV_SUBAGENT_TIMEOUT") or os.getenv("HERMES_TIMEOUT")
+        env_timeout_str = os.getenv("JEV_SUBAGENT_TIMEOUT", "") or os.getenv("HERMES_TIMEOUT", "")
         if effective_timeout is None and env_timeout_str:
             try:
                 env_t = float(env_timeout_str)

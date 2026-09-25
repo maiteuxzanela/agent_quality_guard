@@ -10,7 +10,7 @@ from src.orchestrator.router import SpecialistRouter
 
 
 def test_guardrail_critical_action_detection():
-    engine = OpenJevEngine()
+    engine = OpenJevEngine(device="cpu")  # explícito: não deteta IPC ambiente (daemon ativo)
     interceptor = GuardrailInterceptor(engine=engine, default_threshold=0.78)
 
     assert interceptor.is_action_critical("run_shell_command") is True
@@ -24,7 +24,7 @@ def test_guardrail_critical_action_detection():
 
 @pytest.mark.asyncio
 async def test_guardrail_verify_action_fails_fast_when_engine_unloaded():
-    engine = OpenJevEngine()
+    engine = OpenJevEngine(device="cpu")  # explícito: não deteta IPC ambiente (daemon ativo)
     interceptor = GuardrailInterceptor(engine=engine)
 
     with pytest.raises(OpenJevNotReadyError):
@@ -36,7 +36,7 @@ async def test_guardrail_verify_action_fails_fast_when_engine_unloaded():
 
 @pytest.mark.asyncio
 async def test_router_fails_fast_when_engine_unloaded():
-    engine = OpenJevEngine()
+    engine = OpenJevEngine(device="cpu")  # explícito: não deteta IPC ambiente (daemon ativo)
     router = SpecialistRouter(engine=engine)
 
     with pytest.raises(OpenJevNotReadyError):
@@ -45,7 +45,7 @@ async def test_router_fails_fast_when_engine_unloaded():
 
 @pytest.mark.asyncio
 async def test_evaluator_fails_fast_when_engine_unloaded():
-    engine = OpenJevEngine()
+    engine = OpenJevEngine(device="cpu")  # explícito: não deteta IPC ambiente (daemon ativo)
     evaluator = DeliveryEvaluator(engine=engine)
 
     with pytest.raises(OpenJevNotReadyError):

@@ -81,8 +81,14 @@ class TestPersonasCatalog(unittest.TestCase):
         self.assertIn("**Tentativas:**", text)
         self.assertIn("**Notas:**", text)
 
-    def test_ecosystem_agents_md_three_execution_levels(self) -> None:
-        """Garante que todos os workspaces do ecossistema formalizam os 3 Níveis e openjev_spawn_subagent."""
+    def test_ecosystem_agents_md_despacho_sob_demanda(self) -> None:
+        """Governança vigente: roteamento obrigatório suspenso, despacho sob demanda.
+
+        A exigência anterior de "Três Níveis de Execução" (delegação obrigatória +
+        nova_persona_especialista) foi aposentada: contradiz o AGENTS.md §3.1/§4
+        atuais, que suspendem o roteamento compulsório em favor da autonomia do
+        orquestrador com despacho via openjev_spawn_subagent sob demanda.
+        """
         workspaces = [
             Path("/home/maiteuxzanela/projeto JEV"),
             Path("/mnt/94CCB337CCB3130A/JEZ collections"),
@@ -92,13 +98,24 @@ class TestPersonasCatalog(unittest.TestCase):
         for ws in workspaces:
             agents_md = ws / "AGENTS.md"
             self.assertTrue(agents_md.is_file(), f"AGENTS.md não encontrado em {ws}")
-            content = agents_md.read_text(encoding="utf-8")
-            self.assertIn("Três Níveis de Execução", content, f"{ws} não formaliza os Três Níveis de Execução")
-            self.assertIn("Nível 1", content, f"{ws} não define Nível 1")
-            self.assertIn("Nível 2", content, f"{ws} não define Nível 2")
-            self.assertIn("Nível 3", content, f"{ws} não define Nível 3")
-            self.assertIn("openjev_spawn_subagent", content, f"{ws} não formaliza openjev_spawn_subagent")
-            self.assertIn("nova_persona_especialista", content, f"{ws} não inclui 'nova_persona_especialista' no choice")
+
+        agents_md = REPO_ROOT / "AGENTS.md"
+        content = agents_md.read_text(encoding="utf-8")
+        self.assertIn(
+            "roteamento obrigatório está suspenso",
+            content,
+            "AGENTS.md não formaliza a suspensão do roteamento obrigatório (§3.1)",
+        )
+        self.assertIn(
+            "openjev_spawn_subagent",
+            content,
+            "AGENTS.md não formaliza o despacho sob demanda via openjev_spawn_subagent",
+        )
+        self.assertIn(
+            "autonomia plena",
+            content,
+            "AGENTS.md não formaliza a autonomia plena do orquestrador",
+        )
 
 
 

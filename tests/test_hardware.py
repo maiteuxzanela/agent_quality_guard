@@ -53,8 +53,12 @@ def test_get_hardware_profile_returns_valid_object():
         # Regras de arquitetura documentadas
         assert profile.is_pascal_or_older is (major <= 6)
         assert profile.supports_bfloat16 is (major >= 8)
-        # Política de fallback por VRAM livre
-        if profile.free_vram_mb < 800:
+        # Política de fallback real do fonte (hardware.py):
+        # CPU se outro processo detém o lock exclusivo da GPU, ou se a VRAM
+        # livre ficou abaixo de 2200 MB (reserva para o compositor desktop).
+        from src.decision.hardware import try_acquire_gpu_lock
+        lock_owned = try_acquire_gpu_lock()
+        if not lock_owned or profile.free_vram_mb < 2200:
             assert profile.recommended_device == "cpu"
             assert profile.recommended_dtype == "float32"
             assert profile.recommended_max_length == 512

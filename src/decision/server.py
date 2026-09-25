@@ -27,6 +27,64 @@ from .hardware import get_hardware_profile
 logger = logging.getLogger("jev.server")
 
 
+def _unprocessable(detail: Any) -> HTTPException:
+    """422 canônico (evita repetir a checagem de compatibilidade do status code)."""
+    if hasattr(status, "HTTP_422_UNPROCESSABLE_CONTENT"):
+        code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    else:
+        code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    return HTTPException(status_code=code, detail=detail)
+
+
+def _block_if_unchanged(target_ws: str, git_state: str, hist: Optional[Dict]) -> None:
+    """Anti-premise gaming: reprovação sem mudança no disco => 409 (+breaker).
+
+    Pré-condições checadas em passos curtos (evita predicado encadeado denso):
+    histórico existe, última avaliação reprovada e assinatura git idêntica.
+    """
+    if not hist or hist.get("passed", True):
+        return
+    if not git_state or git_state != hist.get("git_state", ""):
+        return
+    attempts = hist.get("attempts", 1)
+
+    from src.core.score_gate import MAX_ATTEMPTS, history_increment_attempts
+
+    if attempts >= MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "emergency_exit_unlocked",
+                "attempts": attempts,
+                "max_attempts": MAX_ATTEMPTS,
+                "message": "Saída de emergência desbloqueada — emitir Laudo de Inviabilidade Técnica.",
+            },
+        )
+    history_increment_attempts(target_ws)
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "no_change_since_last_rejection",
+            "attempts": attempts,
+            "max_attempts": MAX_ATTEMPTS,
+            "message": "Nenhuma alteração no disco desde a última reprovação.",
+        },
+    )
+
+
+def _apply_borderline_mass_gate(resp: ScoreResponse) -> None:
+    """Paridade com MCP: aprovação matemática se borderline e distribuição saudável."""
+    if resp.passed or not getattr(resp, "borderline", False):
+        return
+    if not getattr(resp, "breakdown", None):
+        return
+    from src.decision.laya_adapter import evaluate_borderline_mass_gate
+
+    if evaluate_borderline_mass_gate(resp.breakdown):
+        resp.passed = True
+        resp.approved_as_borderline = True
+
+
 def create_app(
     engine: Optional[OpenJevEngine] = None,
     auto_load_model: bool = False,
@@ -138,13 +196,12 @@ def create_app(
         rubrica só do catálogo fechado e anti-premise gaming + circuit breaker.
 
         `request.rubric` livre é ignorado (rubric gaming). Resposta é ScoreResponse
-        (sem diagnosis flat — o choice de defeito vive só no MCP).
+        (sem diagnosis flat — o diagnóstico estruturado é exclusivo do MCP, via
+        Screener Needle 3 + Noul; choice de defeito removido em set/2026).
         """
         from src.core.score_gate import (
-            MAX_ATTEMPTS,
             get_workspace_git_signature,
             history_get,
-            history_increment_attempts,
             history_set,
             resolve_task_rubric,
             validate_score_premise,
@@ -152,56 +209,19 @@ def create_app(
 
         premise_error = validate_score_premise(request.premise)
         if premise_error:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
-                if hasattr(status, "HTTP_422_UNPROCESSABLE_CONTENT")
-                else status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=premise_error,
-            )
+            raise _unprocessable(premise_error)
         resolved_rubric, rubric_error = resolve_task_rubric(task_type)
         if rubric_error:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
-                if hasattr(status, "HTTP_422_UNPROCESSABLE_CONTENT")
-                else status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=rubric_error,
-            )
+            raise _unprocessable(rubric_error)
         request.rubric = resolved_rubric
 
         target_ws = workspace.strip() if workspace and workspace.strip() else "."
         git_state = get_workspace_git_signature(target_ws)
         hist = history_get(target_ws)
-        if hist and not hist.get("passed", True) and git_state and git_state == hist.get("git_state", ""):
-            attempts = hist.get("attempts", 1)
-            if attempts >= MAX_ATTEMPTS:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": "emergency_exit_unlocked",
-                        "attempts": attempts,
-                        "max_attempts": MAX_ATTEMPTS,
-                        "message": "Saída de emergência desbloqueada — emitir Laudo de Inviabilidade Técnica.",
-                    },
-                )
-            history_increment_attempts(target_ws)
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": "no_change_since_last_rejection",
-                    "attempts": attempts,
-                    "max_attempts": MAX_ATTEMPTS,
-                    "message": "Nenhuma alteração no disco desde a última reprovação.",
-                },
-            )
+        _block_if_unchanged(target_ws, git_state, hist)
 
         resp = await app.state.engine.evaluate_score(request)
-
-        # Borderline Mass Gate (paridade com MCP): aprovação matemática se a distribuição é saudável
-        if not resp.passed and getattr(resp, "borderline", False) and getattr(resp, "breakdown", None):
-            from src.decision.laya_adapter import evaluate_borderline_mass_gate
-            if evaluate_borderline_mass_gate(resp.breakdown):
-                resp.passed = True
-                resp.approved_as_borderline = True
+        _apply_borderline_mass_gate(resp)
 
         if resp.passed:
             history_set(target_ws, {

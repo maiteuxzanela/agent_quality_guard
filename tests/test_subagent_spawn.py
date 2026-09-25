@@ -162,7 +162,13 @@ async def test_subagent_runner_ast_guard_intercepts_sqli(temp_git_workspace: Pat
 
     req = SpawnSubagentRequest(
         persona="lumi",
-        task="Criar consulta de usuário no banco de dados",
+        # Tarefa de análise SOMENTE-TEXTO: o executor real (Hermes/LLM) não deve
+        # reescrever o arquivo — se limpar a f-string SQL, a violação some do diff
+        # e o teste fica não-determinístico contra o modelo.
+        task=(
+            "Analise o arquivo db.py e responda APENAS em texto se há risco de "
+            "SQL injection. NÃO altere nenhum arquivo do workspace."
+        ),
         workspace=str(temp_git_workspace),
         auto_validate=True,
     )

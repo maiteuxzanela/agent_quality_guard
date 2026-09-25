@@ -231,16 +231,6 @@ class ConsultaResponse(BaseModel):
 # Catálogo FECHADO de rubricas — única fonte de verdade (anti rubric gaming).
 # O MCP resolve por `task_type`; qualquer `rubric` livre do cliente é ignorada.
 RUBRIC_CATALOG: Dict[str, str] = {
-    "entrega": (
-        "Avalie a entrega técnica de 1.0 a 5.0 considerando fidelidade aos requisitos, "
-        "correção lógica, integridade do código sem mocks em produção, tratamento de exceções "
-        "e cobertura de testes reais automatizados."
-    ),
-    "auditoria": (
-        "Avalie a aderência da evidência determinística fornecida de 1.0 a 5.0 considerando "
-        "completude da evidência verificável (saídas de comando, arquivos, testes executados), "
-        "rigor analítico, ausência de afirmação sem respaldo factual e fidelidade ao código real do repositório."
-    ),
     "codigo_producao": (
         "Avalie o código para produção de 1.0 a 5.0 considerando ausência de mocks, stubs ou "
         "artefatos de teste no caminho de produção, tratamento de exceções e fechamento de recursos, "
@@ -261,7 +251,7 @@ class ScoreRequest(BaseModel):
         description="O artefato produzido, diff de código, resposta ou plano a ser avaliado."
     )
     rubric: str = Field(
-        default=RUBRIC_CATALOG["entrega"],
+        default=RUBRIC_CATALOG["codigo_producao"],
         description="Critérios de conformidade e rubrica de qualidade esperada (via catálogo fechado no MCP)."
     )
     min_score: float = Field(
@@ -320,6 +310,10 @@ class ScoreResponse(BaseModel):
         default=None,
         description="True quando ≥35% da massa probabilística está de cada lado do threshold (nota na fronteira)."
     )
+    approved_as_borderline: Optional[bool] = Field(
+        default=None,
+        description="True quando a entrega é aprovada na fronteira via Borderline Mass Gate."
+    )
     device: Optional[str] = Field(
         default=None,
         description=(
@@ -334,50 +328,41 @@ class ScoreResponse(BaseModel):
 
 
 # ==============================================================================
-# Schemas Open Jev: Score + Diagnóstico (Diagnóstico Flat — Choice único com 10 categorias)
+# Schemas Open Jev: Score + Diagnóstico (Screener Needle 3 + Noul — 8 categorias)
 # ==============================================================================
-# ATENÇÃO de calibração (medido em golden set, ago/2026): o head do Laya só
-# discrimina bem com <= 10 opções (bucket de temperature "6-10"). Com >= 11
-# opções o modelo colapsa na opção-savor (precisão 1/4) — não reverter para
-# listas finas de defeitos sem revalidar tests/test_diagnosis_calibration.py.
-# Ordem: nulas em 1º e 6º (não na cauda) — head_max_len=192 não trunca
-# instructions nem descrições (gate: scripts/measure_diag_choice_tokens.py).
+# NOTA (set/2026): o choice de diagnóstico flat foi removido do fluxo de score.
+# Quem aponta a categoria agora é o Screener estrutural (needle_defect_screener)
+# e quem a confirma/arbitra é o JEV Noul (P >= 0.78). Restam as 8 categorias
+# técnicas reais — as duas nulas saíram do universo de decisão.
+# Calibração histórica (ago/2026, ainda relevante para escolhas genéricas de
+# openjev_choice): o head do Laya discrimina bem com <= 10 opções; >= 11 opções
+# colapsam na opção-savor (precisão 1/4 no golden de defeitos).
 DEFECT_OPTIONS: List[str] = [
-    "sem_defeito_identificavel",
     "logica_ou_regra",
     "robustez_excecoes_recursos",
     "seguranca",
     "qualidade_de_testes",
-    "evidencia_insuficiente",
     "contrato_ambiente",
     "performance_escopo_estilo",
     "requisito_incompleto_ou_ausente",
     "documentacao_configuracao",
 ]
 
-# Instrução do choice de diagnóstico — distinta do texto de roteamento de subagentes.
-# Serve DEFECT_DESCRIPTIONS como critérios via ChoiceRequest.criteria.
-# Wordings neutras ("Classify…") mediram 2/4 no golden de defeitos (ago/2026);
-# a formulação com pressuposto de falha calibrada 3/4 — manter até revalidar.
-# TEXT CURTO DE PROPÓSITO: o álibi das nulas deve caber nas ~35 tok que sobram
-# em head_max_len=192 após as 10 opções — não alongar sem re-medir tokens.
+# Instrução do choice — usada apenas por ferramentas de auditoria externas que
+# ainda disparam evaluate_choice diretamente (ex.: scripts/audit_mocks.py).
+# Texto curto: render "id: desc" + instructions deve caber em head_max_len=192.
 DIAG_CHOICE_INSTRUCTIONS = (
-    "Audit code artifact for defects. If compliant, select sem_defeito_identificavel. "
-    "Weak evidence: evidencia_insuficiente. Use descriptions."
+    "Audit code artifact for defects. Use descriptions."
 )
 
 # Descrições de cada categoria para feedback legível ao agente E como critérios
-# do choice (ChoiceRequest.criteria). Textos EN calibrados no golden set —
-# alterações devem revalidar tests/test_diagnosis_calibration.py.
-# TEXTOS CURTOS OBRIGATÓRIOS: render "id: desc" + [MASK] deve somar ≤ 176 tok
-# em head_max_len=192 (sem per-option cut) e deixar ≥ 35 tok para instructions.
+# de ChoiceRequest.criteria. Textos EN curtos — alongar exige re-medir tokens
+# (scripts/measure_diag_choice_tokens.py).
 DEFECT_DESCRIPTIONS: Dict[str, str] = {
-    "sem_defeito_identificavel": "no defect; borderline noise",
     "logica_ou_regra": "wrong result, off-by-one rule",
     "robustez_excecoes_recursos": "bare except, null, race, leak",
     "seguranca": "injection, secrets, missing authz",
     "qualidade_de_testes": "missing tests, no error path",
-    "evidencia_insuficiente": "cannot classify: no evidence",
     "contrato_ambiente": "signature or schema mismatch",
     "performance_escopo_estilo": "bottleneck, scope drift, lint",
     "requisito_incompleto_ou_ausente": "missing requested feature",
@@ -385,7 +370,7 @@ DEFECT_DESCRIPTIONS: Dict[str, str] = {
 }
 
 # Folhas (defeitos finos) candidatas de cada categoria — servem de dica para o
-# agente refinar a auto-correção após o choice de categoria.
+# agente refinar a auto-correção após a categoria apontada pelo Noul.
 DEFECT_MEMBERS: Dict[str, List[str]] = {
     "logica_ou_regra": [
         "erro_off_by_one",
@@ -433,26 +418,24 @@ DEFECT_MEMBERS: Dict[str, List[str]] = {
         "documentacao_ausente_ou_incorreta",
         "configuracao_ou_governanca_incorreta",
     ],
-    "sem_defeito_identificavel": [],
-    "evidencia_insuficiente": [],
 }
 
 
 class DiagnosisResult(BaseModel):
-    """Resultado do diagnóstico de defeito via choice único sobre 10 categorias flat."""
+    """Resultado do diagnóstico de defeito via Screener Needle 3 + Noul (8 categorias)."""
     selected: str = Field(
         ...,
-        description="Categoria de defeito selecionada pelo Laya dentre as 10 opções da taxonomia flat.",
+        description="Categoria de defeito apontada pelo Screener e arbitrada pelo Noul (8 categorias).",
     )
     confidence: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="Probabilidade da opção vencedora (confiança do Laya na seleção).",
+        description="Probabilidade do Noul para a hipótese desta categoria (0.0–1.0).",
     )
     probabilities: Dict[str, float] = Field(
         default_factory=dict,
-        description="Distribuição completa de probabilidades sobre todas as 10 opções.",
+        description="Probabilidade por categoria — vencedora + demais suspeitas do Screener, quando houver.",
     )
     description: str = Field(
         ...,
@@ -468,7 +451,7 @@ class DiagnosisResult(BaseModel):
     diagnosis_latency_ms: float = Field(
         ...,
         ge=0.0,
-        description="Latência da chamada de choice em milissegundos.",
+        description="Latência da arbitragem (Noul/Screener) em milissegundos.",
     )
 
 
@@ -486,12 +469,16 @@ class DiffStageResult(BaseModel):
 
 
 class ScoreDiagnoseResponse(BaseModel):
-    """Resposta unificada: Score + Diagnóstico flat (quando score < threshold).
+    """Resposta unificada: Score + Diagnóstico via Screener Needle 3 + Noul.
 
-    Se passed=True sem borderline, 'diagnosis' é None.
-    Se passed=True com approved_as_borderline=True, 'diagnosis' traz a categoria
-    nula eleita (sem_defeito_identificavel | evidencia_insuficiente).
-    Se passed=False, 'diagnosis' contém o defeito identificado pelo choice único.
+    Se passed=True e diagnosis=None: aprovação plena (score >= threshold ou
+    zero suspeitas estruturais).
+    Se passed=True com approved_with_caveat=True: o Needle 3 não apontou
+    NENHUMA das 8 categorias e o score ficou abaixo do corte (residual).
+    Se passed=False com diagnosis: defeito confirmado pelo Noul (P >= 0.78)
+    OU suspeita não-resolvida com score < threshold (investigar mesmo com
+    Noul negativo).
+    Se passed=False com diagnosis=None: caminho mono (sem símbolos AST).
     """
     # --- Campos do Score (sempre presentes) ---
     score: float = Field(..., description="Nota contínua calculada pelo Laya (escala 1.0–5.0).")
@@ -500,8 +487,8 @@ class ScoreDiagnoseResponse(BaseModel):
     passed: bool = Field(
         ...,
         description=(
-            "True se score >= threshold OU (borderline e diagnosis ∈ categorias nulas "
-            "sem_defeito_identificavel | evidencia_insuficiente)."
+            "True se não há defeito confirmado pelo Noul E (score >= threshold "
+            "OU o Needle 3 não apontou nenhuma suspeita estrutural)."
         ),
     )
     threshold: float = Field(..., description="Nota de corte configurada.")
@@ -517,7 +504,7 @@ class ScoreDiagnoseResponse(BaseModel):
     )
     task_type: Optional[str] = Field(
         default=None,
-        description="Chave do catálogo fechado de rubricas usada (entrega | auditoria | codigo_producao).",
+        description="Chave do catálogo fechado de rubricas usada (atualmente: codigo_producao).",
     )
     rubric_source: Optional[str] = Field(
         default=None,
@@ -531,24 +518,20 @@ class ScoreDiagnoseResponse(BaseModel):
     diagnosis: Optional["DiagnosisResult"] = Field(
         default=None,
         description=(
-            "Defeito identificado pelo choice flat. Presente quando score < threshold "
-            "(inclusive em borderline — o choice sempre roda nesse caminho)."
+            "Defeito apontado pelo Screener Needle 3 e arbitrado pelo Noul. "
+            "Presente quando a entrega é reprovada (confirmado pelo Noul ou "
+            "suspeita não-resolvida com score < threshold)."
         ),
     )
     diagnosis_suppressed: Optional[str] = Field(
         default=None,
-        description=(
-            "DEPRECATED — a supressão em borderline foi removida: o choice sempre roda "
-            "quando score < threshold. Campo mantido apenas por compatibilidade."
-        ),
+        description="DEPRECATED — supressão de diagnóstico não existe mais. Campo mantido por compatibilidade.",
     )
     approved_as_borderline: bool = Field(
         default=False,
         description=(
-            "True quando score < threshold, borderline=true e o choice elegeu "
-            "categoria nula (sem_defeito_identificavel | evidencia_insuficiente) "
-            "com confidence >= NULL_CHOICE_MIN_CONFIDENCE (0.40) — entrega aprovada "
-            "como ruído de fronteira; divulgar score_margin (§4.7). Nula fraca não aprova."
+            "True quando a aprovação com ressalva na fronteira também passou pelo "
+            "Borderline Mass Gate (p_saudavel >= 0.85 e p_falhas <= 0.12)."
         ),
     )
 
@@ -565,6 +548,8 @@ class ScoreDiagnoseResponse(BaseModel):
     attempts: int = Field(default=1, description="Tentativas consecutivas sem aprovação.")
     max_attempts: int = Field(default=5, description="Máximo antes da saída de emergência (MAX_ATTEMPTS).")
     emergency_exit_unlocked: bool = Field(default=False, description="True após MAX_ATTEMPTS tentativas sem refatoração.")
+    message: Optional[str] = Field(default=None, description="Mensagem de status ou instrução de Circuit Breaker.")
+    approved_with_caveat: bool = Field(default=False, description="True quando o Needle 3 não apontou NENHUMA suspeita estrutural e a nota ficou abaixo do corte (aprovação com ressalva).")
 
     # --- Needle 3 AST Guardrail (Fail-Fast Determinístico) ---
     ast_blocked: bool = Field(default=False, description="True se a entrega foi reprovada deterministamente pelo Needle 3 AST Guardrail.")

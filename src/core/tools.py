@@ -114,15 +114,14 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "function": {
             "name": "openjev_score_and_diagnose",
             "description": (
-                "Avalia a qualidade de um artefato técnico com score contínuo (1.0–5.0) e, "
-                "se a nota de corte não for atingida, executa um choice único sobre 10 categorias "
-                "de defeito flat (calibrado) e retorna a categoria identificada com confiança, "
-                "distribuição de probabilidades, descrição legível e candidate_defects (folhas "
-                "candidatas) para auto-correção precisa. "
-                "Se borderline=true o choice ainda roda: categoria nula "
-                "(sem_defeito_identificavel | evidencia_insuficiente) ⇒ passed=true com "
-                "approved_as_borderline=true (divulgar score_margin); defeito concreto ⇒ "
-                "passed=false e correção real no disco. Circuit breaker após 5 tentativas. "
+                "Avalia a qualidade de um artefato técnico com score contínuo (1.0–5.0) usando "
+                "o Screener estrutural Needle 3 (8 categorias reais) arbitrado pelo JEV Noul "
+                "(P >= 0.78), sem choice. Sem suspeita estrutural: passed=true (score < corte "
+                "vira approved_with_caveat=true). Suspeita confirmada pelo Noul, ou suspeita "
+                "não-resolvida com score < corte: passed=false com diagnosis (categoria, arquivo, "
+                "linhas e candidate_defects) para auto-correção precisa — no segundo caso a "
+                "suspeita deve ser INVESTIGADA mesmo com Noul negativo. "
+                "Circuit breaker após 5 tentativas. "
                 "Ferramenta única de score do pipeline (a tool openjev_score foi expurgada). "
                 "Premissa: padrão 'Pedido | Resultado', "
                 "máximo 1500 caracteres; rubrica via task_type do catálogo fechado; retorna "
@@ -141,10 +140,10 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     },
                     "task_type": {
                         "type": "string",
-                        "default": "entrega",
+                        "default": "codigo_producao",
                         "description": (
-                            "Chave do catálogo fechado RUBRIC_CATALOG: entrega (padrão), auditoria, "
-                            "codigo_producao. Rubrica livre é ignorada."
+                            "Chave do catálogo fechado RUBRIC_CATALOG: codigo_producao (padrão único). "
+                            "Rubrica livre é ignorada."
                         ),
                     },
                     "rubric": {
@@ -164,10 +163,16 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "number",
                         "default": 3.40,
                         "description": (
-                            "Nota de corte. Se score < threshold, dispara o choice flat de diagnóstico (10 categorias); "
-                            "borderline + categoria nula aprova (approved_as_borderline); borderline + defeito concreto "
-                            "reprova. Padrão Laya calibrado: 3.40."
+                            "Nota de corte. Sem suspeita estrutural do Needle 3, score < threshold aprova "
+                            "com ressalva (approved_with_caveat); com suspeita (confirmada pelo Noul ou "
+                            "não-resolvida), score < threshold reprova e exige investigação. "
+                            "Padrão Laya calibrado: 3.40."
                         ),
+                    },
+                    "reset_history": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Se verdadeiro, zera o histórico de tentativas e cache para iniciar um ciclo limpo na Tentativa 1.",
                     },
                 },
                 "required": ["premise"],

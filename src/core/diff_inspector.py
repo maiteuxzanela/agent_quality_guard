@@ -22,16 +22,18 @@ logger = logging.getLogger("diff_inspector")
 # Teto seguro de caracteres por etapa (4000 chars calibrado para janela de 1024 tok do Laya; configurável via JEV_MAX_STAGE_CHARS)
 DEFAULT_MAX_STAGE_CHARS = int(os.getenv("JEV_MAX_STAGE_CHARS", "4000"))
 
-# Extensões e caminhos ignorados na inspeção de diffs de código
+# Extensões e caminhos ignorados na inspeção de diffs de código de produção
 IGNORE_EXTENSIONS = {
     ".pyc", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
     ".zip", ".tar", ".gz", ".lock", ".bin", ".wasm", ".pdf",
     ".md", ".markdown", ".txt", ".rst", ".json", ".yaml", ".yml", ".toml",
+    ".sh", ".bash",
 }
 
 IGNORE_DIR_PARTS = {
     ".git", "__pycache__", ".venv", "venv", "node_modules",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build",
+    ".agents", "scripts", "bin", "docs",
 }
 
 
@@ -64,6 +66,53 @@ def is_ignored_path(rel_path: str) -> bool:
     return any(part in IGNORE_DIR_PARTS for part in p.parts)
 
 
+def _commit_fallback_files(root: Path) -> List[DiffFile]:
+    """Fallback HEAD~1..HEAD quando a árvore de trabalho está 100% limpa.
+
+    Mantém o mesmo parsing por hunk do diff do commit, com profundidade de
+    condicional <= 2 (retornos antecipados e laço plano).
+    """
+    res_commit = subprocess.run(
+        ["git", "diff", "HEAD~1", "HEAD", "--no-color", "--no-ext-diff", "-U12"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=10,
+    )
+    if res_commit.returncode != 0 or not res_commit.stdout.strip():
+        res_commit = subprocess.run(
+            ["git", "diff", "HEAD~1", "HEAD", "--no-color", "--no-ext-diff"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+    if res_commit.returncode != 0 or not res_commit.stdout.strip():
+        return []
+    out: List[DiffFile] = []
+    matches = list(re.finditer(r"(?m)^diff --git a/(?:.+?) b/(.+?)$", res_commit.stdout))
+    for idx, match in enumerate(matches):
+        file_path = match.group(1).strip()
+        if file_path.startswith('"') and file_path.endswith('"'):
+            file_path = file_path[1:-1]
+        if is_ignored_path(file_path):
+            continue
+        start_idx = match.end()
+        end_idx = matches[idx + 1].start() if idx + 1 < len(matches) else len(res_commit.stdout)
+        patch_content = res_commit.stdout[start_idx:end_idx].strip()
+        out.append(
+            DiffFile(
+                path=file_path,
+                status="committed",
+                raw_diff=patch_content,
+                is_binary="Binary files" in patch_content,
+            )
+        )
+    return out
+
+
 def get_workspace_diff_files(workspace_dir: str) -> List[DiffFile]:
     """Extrai todas as alterações do repositório Git (staged, unstaged e untracked).
 
@@ -73,15 +122,24 @@ def get_workspace_diff_files(workspace_dir: str) -> List[DiffFile]:
     if not root.is_dir():
         return []
 
-    # 1. Captura diff de arquivos modificados / staged em relação a HEAD
+    # 1. Captura diff de arquivos modificados / staged em relação a HEAD com contexto cirúrgico (-U12)
     res_diff = subprocess.run(
-        ["git", "diff", "HEAD", "--no-color", "--no-ext-diff"],
+        ["git", "diff", "HEAD", "--no-color", "--no-ext-diff", "-U12"],
         cwd=str(root),
         capture_output=True,
         text=True,
         errors="replace",
         timeout=10,
     )
+    if res_diff.returncode != 0 or not res_diff.stdout.strip():
+        res_diff = subprocess.run(
+            ["git", "diff", "HEAD", "--no-color", "--no-ext-diff"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
     diff_text = res_diff.stdout if res_diff.returncode == 0 else ""
 
     diff_files_map: dict[str, str] = {}
@@ -135,8 +193,8 @@ def get_workspace_diff_files(workspace_dir: str) -> List[DiffFile]:
             continue
         try:
             content = full_p.read_text(encoding="utf-8", errors="replace")
-            # Converte em diff sintética de adição (+ linha)
-            synth_patch = "".join(f"+{ln}\n" for ln in content.splitlines(keepends=True))
+            # Converte em diff sintética de adição (+ linha) sem duplicação de quebra
+            synth_patch = "".join(f"+{ln}\n" for ln in content.splitlines())
             diff_files.append(
                 DiffFile(
                     path=u_path,
@@ -148,6 +206,12 @@ def get_workspace_diff_files(workspace_dir: str) -> List[DiffFile]:
         except Exception as err:
             logger.debug(f"Aviso ao ler arquivo untracked {u_path}: {err}")
             continue
+
+    # 3. Fallback para commit recente: se a arvore de trabalho estiver 100% limpa,
+    # inspeciona cirurgicamente as alteracoes reais do ultimo commit (HEAD~1..HEAD),
+    # impedindo a queda cega no caminho mono-etapa textual.
+    if not diff_files:
+        diff_files.extend(_commit_fallback_files(root))
 
     # Ordena por caminho relativo
     diff_files.sort(key=lambda x: x.path)
@@ -197,7 +261,7 @@ def _split_hunk_at_block_boundary(hunk_text: str, max_chars: int) -> List[str]:
     chunks: List[str] = []
     current_lines: List[str] = []
     current_len = 0
-    min_split_threshold = int(max_chars * 0.5)
+    min_split_threshold = int(max_chars * 0.85) if max_chars >= 1000 else int(max_chars * 0.50)
 
     idx = 0
     total_lines = len(lines)
@@ -376,15 +440,40 @@ def extract_workspace_stages(
 def format_stage_premise(user_premise: str, stage: DiffStage) -> str:
     """Monta a premissa de avaliação cirúrgica para o Laya.
 
-    Preserva a intenção do usuário (requisitos) e injeta o código real da etapa.
+    Preserva a intenção do usuário (requisitos) e o resultado executado factual,
+    injetando o código real da etapa dentro do teto seguro de 1500 caracteres
+    sem duplicações ou desperdício de tokens.
     """
-    # Extrai a seção do pedido do prompt se presente
-    pedido_match = re.search(r"(?i)pedido\s*(?:do\s*prompt)?\s*:\s*(.*?)(?=\s*\|\s*resultado|$)", user_premise, re.DOTALL)
+    pedido_match = re.search(
+        r"(?i)pedido\s*(?:do\s*prompt)?\s*:\s*(.*?)(?=\s*\|\s*resultado|$)",
+        user_premise,
+        re.DOTALL,
+    )
     pedido_text = pedido_match.group(1).strip() if pedido_match else user_premise[:250].strip()
 
-    # Monta a premissa direcionada
-    return (
-        f"Pedido: {pedido_text}\n\n"
-        f"Código alterado ({stage.file_path} - Bloco {stage.part_index}/{stage.total_parts}):\n"
-        f"{stage.content}"
+    resultado_match = re.search(
+        r"(?i)\|\s*resultado\s*(?:executado)?\s*:\s*(.*?)$",
+        user_premise,
+        re.DOTALL,
     )
+    resultado_text = resultado_match.group(1).strip() if resultado_match else ""
+    if resultado_text:
+        # Preserva o resumo factual (testes, status) fornecido pelo agente ou sniffer
+        resultado_summary = resultado_text.splitlines()[0][:200].strip()
+        prefix = (
+            f"Pedido: {pedido_text} | "
+            f"Resultado: {resultado_summary}\n"
+            f"Diff em {stage.file_path} (bloco {stage.part_index}/{stage.total_parts}):\n"
+        )
+    else:
+        prefix = (
+            f"Pedido: {pedido_text} | "
+            f"Resultado: Alteração em {stage.file_path} (bloco {stage.part_index}/{stage.total_parts}):\n"
+        )
+
+    # Teto seguro de 1480 caracteres (margem de 20 chars para 1500)
+    available_chars = max(300, 1480 - len(prefix))
+    stage_snippet = stage.content[:available_chars]
+
+    return f"{prefix}{stage_snippet}"
+

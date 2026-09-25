@@ -56,11 +56,8 @@ def measure(ins: str, options: list[str], descriptions: dict[str, str]) -> dict:
         tok, premise, q, max_len=max_len, head_max_len=head_max
     )
 
-    # null guidance must be in visible instructions
-    null_ok = (
-        "sem_defeito_identificavel" in ins_text
-        and "evidencia_insuficiente" in ins_text
-    )
+    # instructions must be fully visible (o álibi das nulas saiu em set/2026)
+    ins_full_visible = not ins_truncated
     # per-option: after cut (if any), does id:desc still show meaningful desc?
     option_details = []
     for i, o in enumerate(opts):
@@ -85,7 +82,7 @@ def measure(ins: str, options: list[str], descriptions: dict[str, str]) -> dict:
         "instructions_budget": ins_budget,
         "instructions_truncated": ins_truncated,
         "instructions_visible": ins_text,
-        "null_guidance_visible": null_ok,
+        "instructions_full_visible": ins_full_visible,
         "options_sum_tokens": total_opts,
         "opt_budget_before": head_max - total_opts,
         "options_cut": options_cut,
@@ -97,7 +94,7 @@ def measure(ins: str, options: list[str], descriptions: dict[str, str]) -> dict:
         "markers_ok": len(markers) == len(options),
         "passed": (
             not ins_truncated
-            and null_ok
+            and ins_full_visible
             and not options_cut
             and all(d["desc_fully_visible"] for d in option_details)
             and len(markers) == len(options)

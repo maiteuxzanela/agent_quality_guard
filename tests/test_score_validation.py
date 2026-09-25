@@ -82,18 +82,15 @@ class TestValidateScorePremise(unittest.TestCase):
 
 class TestRubricCatalog(unittest.TestCase):
 
-    def test_catalogo_tem_exatamente_as_tres_chaves(self):
+    def test_catalogo_tem_exatamente_a_chave_codigo_producao(self):
         self.assertEqual(
             set(RUBRIC_CATALOG.keys()),
-            {"entrega", "auditoria", "codigo_producao"},
+            {"codigo_producao"},
         )
 
-    def test_entrega_e_a_literal_calibrada(self):
-        self.assertEqual(RUBRIC_CATALOG["entrega"], STANDARD_ENTREGA)
-
-    def test_entradas_sao_distintas(self):
-        valores = list(RUBRIC_CATALOG.values())
-        self.assertEqual(len(valores), len(set(valores)))
+    def test_codigo_producao_e_a_literal_calibrada(self):
+        self.assertIn("ausência de mocks", RUBRIC_CATALOG["codigo_producao"])
+        self.assertIn("cobertura de testes reais", RUBRIC_CATALOG["codigo_producao"])
 
     def test_resolver_retorna_catalogo(self):
         for key in RUBRIC_CATALOG:
@@ -105,12 +102,18 @@ class TestRubricCatalog(unittest.TestCase):
         rubric, err = _resolve_task_rubric("nota_falsa_inflada")
         self.assertIsNone(rubric)
         self.assertIn("TASK_TYPE INVÁLIDO", err)
-        self.assertIn("entrega", err)
+        self.assertIn("codigo_producao", err)
 
-    def test_task_type_padrao_entrega(self):
+    def test_task_type_padrao_codigo_producao(self):
         rubric, err = _resolve_task_rubric("")
         self.assertIsNone(err)
-        self.assertEqual(rubric, RUBRIC_CATALOG["entrega"])
+        self.assertEqual(rubric, RUBRIC_CATALOG["codigo_producao"])
+
+    def test_chaves_legadas_mapeiam_para_codigo_producao(self):
+        for legacy in ("entrega", "auditoria"):
+            rubric, err = _resolve_task_rubric(legacy)
+            self.assertIsNone(err)
+            self.assertEqual(rubric, RUBRIC_CATALOG["codigo_producao"])
 
 
 # ─── C: margem de incerteza do score (função pura) ──────────────────────────
@@ -230,11 +233,61 @@ class TestScoreToolValidationIntegration(unittest.IsolatedAsyncioTestCase):
             threshold=1.0,
         )
         self.assertNotIn("error", res)
-        self.assertEqual(res["rubric_source"], "catalog:entrega")
-        self.assertEqual(res["task_type"], "entrega")
+        self.assertEqual(res["rubric_source"], "catalog:codigo_producao")
+        self.assertEqual(res["task_type"], "codigo_producao")
         self.assertIn("score_margin", res)
         self.assertIn("borderline", res)
         self.assertIsNotNone(res["score_margin"])
+
+    async def test_tentativas_bloqueiam_ao_atingir_max_attempts(self):
+        from src.core.score_gate import history_set, MAX_ATTEMPTS
+        # Simula ciclo anterior que bateu o limite de MAX_ATTEMPTS (5)
+        history_set(self.ws, {
+            "passed": False,
+            "attempts": MAX_ATTEMPTS,
+            "git_state": "stale_hash",
+            "last_score": 2.50,
+        })
+        # Nova chamada deve ser travada pelo Circuit Breaker incondicional
+        res = await openjev_score_and_diagnose(
+            premise=VALID_PREMISE,
+            workspace=self.ws,
+            threshold=5.0,
+        )
+        self.assertEqual(res.get("attempts"), MAX_ATTEMPTS)
+        self.assertTrue(res.get("emergency_exit_unlocked"))
+
+    async def test_reset_history_flag_zera_tentativas(self):
+        from src.core.score_gate import history_set
+        history_set(self.ws, {
+            "passed": False,
+            "attempts": 3,
+            "git_state": "some_hash",
+            "last_score": 2.80,
+        })
+        res = await openjev_score_and_diagnose(
+            premise=VALID_PREMISE,
+            workspace=self.ws,
+            threshold=5.0,
+            reset_history=True,
+        )
+        self.assertEqual(res.get("attempts"), 1)
+
+    def test_fallback_git_diff_head_recent_commit_quando_limpo(self):
+        from src.core.diff_inspector import get_workspace_diff_files
+        # Cria um segundo commit no repo temporário
+        code_file = Path(self.ws) / "calc.py"
+        code_file.write_text("def sub(a, b): return a - b\n", encoding="utf-8")
+        subprocess.run(["git", "-C", self.ws, "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.ws, "commit", "-m", "add calc"], check=True, capture_output=True)
+
+        # O working tree está 100% limpo!
+        # get_workspace_diff_files deve acionar fallback HEAD~1..HEAD
+        diff_files = get_workspace_diff_files(self.ws)
+        self.assertEqual(len(diff_files), 1)
+        self.assertEqual(diff_files[0].path, "calc.py")
+        self.assertEqual(diff_files[0].status, "committed")
+        self.assertIn("def sub(a, b): return a - b", diff_files[0].raw_diff)
 
 
 if __name__ == "__main__":

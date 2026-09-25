@@ -12,7 +12,7 @@ from ..decision.engine import OpenJevEngine
 logger = logging.getLogger("jev.orchestrator.evaluator")
 
 # Rubrica calibrada única: catálogo fechado (fonte de verdade única — anti rubric gaming).
-DEFAULT_CODE_RUBRIC = RUBRIC_CATALOG["entrega"]
+DEFAULT_CODE_RUBRIC = RUBRIC_CATALOG["codigo_producao"]
 
 
 class DeliveryEvaluator:

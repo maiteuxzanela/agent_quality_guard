@@ -175,7 +175,10 @@ def validate_score_premise(premise: str) -> Optional[str]:
 
 
 def resolve_task_rubric(task_type: str) -> tuple:
-    key = (task_type or "entrega").strip().lower()
+    key = (task_type or "codigo_producao").strip().lower()
+    # Mapeia chaves legadas transparentemente para codigo_producao
+    if key in ("entrega", "auditoria"):
+        key = "codigo_producao"
     if key not in RUBRIC_CATALOG:
         options = ", ".join(sorted(RUBRIC_CATALOG))
         return None, (

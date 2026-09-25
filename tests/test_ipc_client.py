@@ -16,6 +16,7 @@ from src.client.jev_ipc_client import (
 class TestJevIpcClient(unittest.TestCase):
     """Testa a conectividade e chamadas de protocolo contra o socket IPC ativo."""
 
+    @unittest.skipUnless(is_ipc_available(DEFAULT_SOCKET_PATH), "Servidor IPC Open Jev não está ativo em /tmp/openjev_ipc.sock")
     def test_ipc_is_available(self):
         """Valida se o socket /tmp/openjev_ipc.sock está ativo e respondendo."""
         self.assertTrue(
@@ -33,18 +34,21 @@ class TestJevIpcClient(unittest.TestCase):
             call_jev_ipc("ping", socket_path="/tmp/socket_que_nao_existe_12345.sock")
         self.assertIn("não está ativo", str(ctx.exception))
 
+    @unittest.skipUnless(is_ipc_available(DEFAULT_SOCKET_PATH), "Servidor IPC Open Jev não está ativo em /tmp/openjev_ipc.sock")
     def test_call_unknown_action_raises_runtime_error(self):
         """Ação desconhecida retorna status=error e levanta RuntimeError."""
         with self.assertRaises(RuntimeError) as ctx:
             call_jev_ipc("acao_inexistente_de_teste_xyz")
         self.assertIn("Ação desconhecida", str(ctx.exception))
 
+    @unittest.skipUnless(is_ipc_available(DEFAULT_SOCKET_PATH), "Servidor IPC Open Jev não está ativo em /tmp/openjev_ipc.sock")
     def test_ipc_ping_action(self):
         """Envia ping síncrono e valida resposta de status do daemon."""
         res = call_jev_ipc("ping")
         self.assertEqual(res.get("status"), "ok")
         self.assertIn("device", res)
 
+    @unittest.skipUnless(is_ipc_available(DEFAULT_SOCKET_PATH), "Servidor IPC Open Jev não está ativo em /tmp/openjev_ipc.sock")
     def test_request_score_and_diagnose_integration(self):
         """Valida que o cliente leve despacha a avaliação oficial e retorna estrutura ScoreDiagnoseResponse."""
         premise = (
@@ -55,6 +59,7 @@ class TestJevIpcClient(unittest.TestCase):
             premise=premise,
             workspace="/home/maiteuxzanela/projeto JEV",
             threshold=3.40,
+            reset_history=True,
         )
         self.assertIn("score", res)
         self.assertIn("passed", res)

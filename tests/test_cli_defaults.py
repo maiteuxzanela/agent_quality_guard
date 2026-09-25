@@ -88,9 +88,9 @@ class TestCliScoreCatalog:
         args = _parse_real(["score", "x"])
         assert args.rubric is None
 
-    def test_score_task_type_default_entrega(self):
+    def test_score_task_type_default_codigo_producao(self):
         args = _parse_real(["score", "x"])
-        assert args.task_type == "entrega"
+        assert args.task_type == "codigo_producao"
 
     def test_score_task_type_aceita_chaves_do_catalogo(self):
         from src.core.schemas import RUBRIC_CATALOG

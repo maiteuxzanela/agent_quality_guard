@@ -228,10 +228,11 @@ class TestLayaLoad:
             adapter.load()
         assert adapter.is_ready is False
 
-    def test_checkpoint_invalido_lanca_value_error(self):
-        """Checkpoint desconhecido deve lançar ValueError na inicialização."""
-        with pytest.raises(ValueError, match="Checkpoint inválido"):
-            LayaAdapter(checkpoint="inexistente")
+    def test_checkpoint_invalido_recai_para_padrao(self):
+        """Checkpoint desconhecido recai para o checkpoint padrão documentado (sem exceção)."""
+        adapter = LayaAdapter(checkpoint="inexistente")
+        assert adapter.is_ready is False
+        assert adapter._checkpoint_key in ("typed-decisions", "english")
 
     def test_ensure_ready_sem_load(self):
         """Chamar _ensure_ready sem load deve lançar OpenJevNotReadyError."""

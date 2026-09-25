@@ -105,17 +105,13 @@ def main():
                 print(json.dumps({}))
                 sys.exit(0)
 
-            violations_summary = "\n".join(
-                f"- [{v.rule_id}] {v.file_path}:{v.line_number}: {v.message}"
-                for v in ast_violations[:5]
-            )
+            from src.core.feedback_formatter import format_ast_rejection_reason
+
             response = {
                 "decision": "continue",
-                "reason": (
-                    f"🚨 [Clara - Guardiã da Qualidade / Stop Hook] (Tentativa {new_attempts}/{MAX_ATTEMPTS}):\n"
-                    f"A entrega foi bloqueada por violações determinísticas de AST detectadas pelo Needle 3:\n\n"
-                    f"{violations_summary}\n\n"
-                    "O agente deve consertar essas violações no disco antes de encerrar o turno."
+                "reason": format_ast_rejection_reason(
+                    "Clara — Guardiã da Qualidade",
+                    [v.to_dict() for v in ast_violations],
                 ),
             }
             print(json.dumps(response))
@@ -172,7 +168,104 @@ def main():
             print(json.dumps(response))
             sys.exit(0)
 
-    # 5. Sucesso completo em todas as verificações
+    # 5. Camada 3: Avaliação de Conformidade via Socket IPC (Laya na GPU)
+    import time
+    from src.decision.ipc_service import is_ipc_available
+
+    def ensure_ipc_daemon() -> bool:
+        if is_ipc_available():
+            return True
+        try:
+            subprocess.run(
+                ["systemctl", "--user", "start", "openjev.service"],
+                capture_output=True,
+                timeout=5,
+            )
+            for _ in range(6):
+                time.sleep(0.5)
+                if is_ipc_available():
+                    return True
+        except Exception as e:
+            sys.stderr.write(f"[Clara - Daemon Recovery]: Falha ao tentar acordar daemon: {e}\n")
+        return is_ipc_available()
+
+    from src.core.feedback_formatter import (
+        format_score_rejection_reason,
+        format_infrastructure_error_reason,
+        format_circuit_breaker_guidance,
+    )
+
+    daemon_ready = ensure_ipc_daemon()
+    if not daemon_ready:
+        response = {
+            "decision": "continue",
+            "reason": format_infrastructure_error_reason(
+                "Clara — Guardiã da Qualidade",
+                "Daemon Open JEV está offline em /tmp/openjev_ipc.sock e não respondeu após tentativa de inicialização.",
+            ),
+        }
+        print(json.dumps(response))
+        sys.exit(0)
+
+    try:
+        from src.client.jev_ipc_client import request_score_and_diagnose
+        from src.core.transcript_sniffer import build_factual_premise
+
+        premise = build_factual_premise(
+            workspace=str(workspace_dir),
+            payload=payload,
+        )
+        res = request_score_and_diagnose(
+            premise=premise,
+            workspace=str(workspace_dir),
+            threshold=3.40,
+        )
+
+        if res.get("emergency_exit_unlocked"):
+            clear_state()
+            guidance = format_circuit_breaker_guidance(
+                "Clara — Guardiã da Qualidade",
+                attempts=res.get("attempts", MAX_ATTEMPTS),
+                max_attempts=MAX_ATTEMPTS,
+            )
+            sys.stderr.write(f"\n{guidance}\n")
+            print(json.dumps({}))
+            sys.exit(0)
+
+        if res.get("passed") or res.get("approved_as_borderline"):
+            clear_state()
+            print(json.dumps({}))
+            sys.exit(0)
+
+        # Reprovação de Score (< 3.40): reporta diagnóstico estruturado com diretiva
+        attempts = res.get("attempts", current_attempts + 1)
+        state["attempts"] = attempts
+        save_state(state)
+
+        response = {
+            "decision": "continue",
+            "reason": format_score_rejection_reason(
+                "Clara — Guardiã da Qualidade",
+                res,
+                max_attempts=MAX_ATTEMPTS,
+            ),
+        }
+        print(json.dumps(response))
+        sys.exit(0)
+
+    except Exception as e:
+        sys.stderr.write(f"[Clara - Camada 3 Score IPC]: Erro durante avaliação: {e}\n")
+        response = {
+            "decision": "continue",
+            "reason": format_infrastructure_error_reason(
+                "Clara — Guardiã da Qualidade",
+                f"Erro na comunicação com o daemon Open JEV: {e}",
+            ),
+        }
+        print(json.dumps(response))
+        sys.exit(0)
+
+    # 6. Sucesso completo em todas as verificações
     clear_state()
     print(json.dumps({}))
     sys.exit(0)

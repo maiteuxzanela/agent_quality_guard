@@ -19,25 +19,36 @@ O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
   * `needle3_search` — busca cirúrgica relacional de código (AST).
   * `openjev_choice` — roteamento de subagentes e seleção de ferramenta/busca por distribuição de probabilidade.
   * `openjev_noul` — avaliação booleana **opcional** (threshold ≥ 0.78; exigência pré-ação removida — anti premise gaming).
-  * `openjev_score_and_diagnose` — **única tool de score (a tool `openjev_score` foi expurgada)**: executa Score (corte ≥ 3.40; premissa recusada se ausente de `Pedido`/`Resultado` ou > 1500 caracteres; rubrica prioritária unificada do catálogo fechado por `task_type="entrega"`; retorna `score_margin`/`borderline`/`rubric_source`). Se `borderline: true`: avalia o **Borderline Mass Gate** ($p_{\text{saudavel}} \ge 0.85$ e $p_{\text{falhas}} \le 0.12$). Preenchido o gate $\implies$ entrega **aprovada** com `approved_as_borderline: true` (sem viés léxico do choice). Se reprovado por falha real ou incerteza excessiva, dispara o **choice único flat sobre 10 categorias** (`DEFECT_OPTIONS`, critérios `DEFECT_DESCRIPTIONS`, instrução neutra), retornando `selected`, `confidence`, `probabilities`, `description` e `candidate_defects` (folhas de `DEFECT_MEMBERS`) para auto-correção. Anti-premise gaming e circuit breaker (**5 tentativas**, `MAX_ATTEMPTS`) valem neste único caminho.
+  * `openjev_score_and_diagnose` — **única tool de score (a tool `openjev_score` foi expurgada)**: executa Score (corte ≥ 3.40; premissa recusada se ausente de `Pedido`/`Resultado` ou > 1500 caracteres; rubrica centralizada estritamente em `task_type="codigo_producao"`; retorna `score_margin`/`borderline`/`rubric_source`). **O choice de diagnóstico foi removido (set/2026)** — o fluxo é: **AST Guardrail fail-fast** (bloco determinístico, `score=1.0`) → **Needle 3 Screener estrutural** sobre as **8 categorias reais** (`DEFECT_OPTIONS`) → **JEV Noul (P ≥ 0.78) em cada suspeita** → **Score Laya**. Decisão final: sem nenhuma suspeita ⇒ `passed=true` (nota < corte vira `approved_with_caveat=true`, divulgar `score_margin`); defeito confirmado pelo Noul ⇒ `passed=false` com categoria/arquivo/linhas/`candidate_defects`; suspeita refutada mas nota < corte ⇒ `passed=false` com `diagnosis` = suspeita de maior probabilidade para **INVESTIGAÇÃO** (mesmo com Noul negativo). Anti-premise gaming e circuit breaker universal (**5 tentativas**, `MAX_ATTEMPTS` — destrava a Saída de Emergência imediatamente na 5ª) valem neste caminho.
   * `openjev_consulta` — consulta direta (*"esse script funciona?"*) retornando **indício textual** (probability/confidence) **sem booleano de aprovação**; postura de indício obrigatória (premise gaming proibido).
-* **`src/core/schemas.py`:** Contratos Pydantic estritos incluindo `DiagnosisResult`, `ScoreDiagnoseResponse`, `ConsultaRequest`/`ConsultaResponse` e o catálogo fechado de rubricas `RUBRIC_CATALOG` (`entrega` unificada | `auditoria` | `codigo_producao`).
+* **`src/core/schemas.py`:** Contratos Pydantic estritos incluindo `DiagnosisResult`, `ScoreDiagnoseResponse`, `ConsultaRequest`/`ConsultaResponse` e o catálogo fechado de rubricas `RUBRIC_CATALOG` centralizado exclusivamente em `codigo_producao`.
+
+> **🚨 REGRA INEGOCIÁVEL DE COMMIT:** O `git status` NÃO PODE ser limpo antes da aprovação completa da entrega técnica. O agente está terminantemente proibido de realizar `git commit` antes de obter a nota de corte $\ge 3.40$ ou o desbloqueio da Saída de Emergência. Caso o repositório já se encontre limpo, o motor inspeciona as alterações reais do último commit (`HEAD~1..HEAD`), mas comitar antecipadamente oculta o working tree e viola o protocolo.
 
 ---
 
 ## 2. Taxonomia de Diagnóstico e Borderline Mass Gate (openjev_score_and_diagnose)
 
-Quando `score < threshold`:
-1. **Borderline Mass Gate:** Se `borderline: true` e a distribuição ordinal concentrar $p_{\text{acceptable}} + p_{\text{good quality}} + p_{\text{exceptional}} \ge 0.85$ com falhas $p_{\text{critical flaws}} + p_{\text{poor quality}} \le 0.12$, a entrega é aprovada na fronteira com `approved_as_borderline: true`.
-2. **Choice Flat Diagnóstico:** Se reprovado fora da fronteira ou com falhas relevantes ($p_{\text{falhas}} > 0.12$), o motor executa um **choice único** sobre **10 categorias flat** (`DEFECT_OPTIONS`) com instrução neutra e critérios `DEFECT_DESCRIPTIONS`. A resposta traz `diagnosis` detalhado com `candidate_defects` para guiar a refatoração real no disco.
+> **Mudança de contrato (set/2026):** o **choice único flat de diagnóstico foi removido** do fluxo de score. Quem diagnostica agora é o **Needle 3 Screener** (hipóteses estruturais) arbitrado pelo **JEV Noul (P ≥ 0.78)**. As categorias nulas (`sem_defeito_identificavel`, `evidencia_insuficiente`) **não existem mais** — restam 8 categorias técnicas reais.
 
-> **Calibração obrigatória (ago/2026):** o head do Laya só discrimina com **≤ 10 opções** (bucket de temperature `6-10`). Listas ≥ 11 defeitos finos colapsam na opção-savor (precisão medida 1/4 no golden set); ≤ 5 opções concentradas mediram apenas 1–2/4. Não ampliar a lista sem revalidar `tests/test_diagnosis_calibration.py`.
+Fluxo em quatro camadas:
+1. **AST Guardrail fail-fast:** violação determinística (mock em produção, SQL injection, `eval` perigoso, segredo hardcoded, ...) ⇒ `passed=false`, `score=1.0`, `diagnosis` com a categoria da regra e `description` `🚨 [Needle 3 AST Block] ...` (arquivo:linha). *Exceção de vocabulário mantida por decisão (set/2026):* a regra `mock_in_production` emite `mock_stub_em_producao`, categoria do próprio guard **fora** das 8 opções de `DEFECT_OPTIONS` — a mensagem do bloco AST carrega o `file:line` completo.
+2. **Needle 3 Screener estrutural:** extrai os símbolos AST do diff e dispara triggers determinísticos (ex.: `open()` fora de try/with → `robustez_excecoes_recursos`; `# TODO:` → `requisito_incompleto_ou_ausente`; `while True` → `logica_ou_regra`; nested ifs ≥ 3 → `logica_ou_regra`; `os.getenv` sem default → `documentacao_configuracao`). Cada suspeita vai ao **Noul**:
+   * **Confirmada (P ≥ 0.78)** ⇒ `passed=false` **sempre** (mesmo com score ≥ corte), com categoria, arquivo, linhas, `evidence` e `candidate_defects`.
+   * **Refutada (P < 0.78)** ⇒ entra em `refuted_suspicions`.
+3. **Decisão do Score Laya (corte ≥ 3.40):**
+   * **Zero suspeitas** do Screener ⇒ `passed=true`; se `score < 3.40` vira **aprovação com ressalva** (`approved_with_caveat=true`) — divulgar `score_margin` e a `message`.
+   * **Suspeitas presentes + `score < 3.40`** ⇒ `passed=false` e `diagnosis` aponta a suspeita de **maior probabilidade** para **INVESTIGAÇÃO** no disco — mesmo com Noul negativo.
+   * **Suspeitas refutadas + `score ≥ 3.40`** ⇒ `passed=true`.
+4. **Borderline Mass Gate:** no **caminho mono** (workspace sem símbolos AST — repositório limpo ou diff não-code), `borderline: true` com massa saudável ≥ 0.85 e falhas ≤ 0.12 ⇒ `approved_as_borderline: true`; senão `passed=false` com `diagnosis=None` e `message` indicando caminho mono. No caminho com símbolos, `approved_as_borderline` só acompanha a ressalva (`approved_with_caveat` **e** massa saudável).
 
-**Categorias (10 opções flat):**
+> **Calibração obrigatória (ago/2026):** o head do Laya só discrimina com **≤ 10 opções** (bucket de temperature `6-10`). Listas ≥ 11 defeitos finos colapsam na opção-savor (precisão medida 1/4 no golden set); ≤ 5 opções concentradas mediram apenas 1–2/4. Essa calibração continua valendo para `openjev_choice` de roteamento e para ferramentas externas que ainda disparam `evaluate_choice` com as 8 categorias; não ampliar a lista sem revalidar `tests/test_diagnosis_calibration.py`.
 
-`sem_defeito_identificavel` (1º) | `logica_ou_regra` | `robustez_excecoes_recursos` | `seguranca` | `qualidade_de_testes` | `evidencia_insuficiente` (6º) | `contrato_ambiente` | `performance_escopo_estilo` | `mock_stub_em_producao` | `documentacao_configuracao`
+**Categorias (8 opções flat — sem nulas):**
 
-Ordem fixa: nulas em **1º e 6º**. Instructions + `DEFECT_DESCRIPTIONS` são textos curtos medidos para caber em `head_max_len=192` **sem truncar** o álibi das nulas nem as descrições (`scripts/measure_diag_choice_tokens.py`); não alongar sem re-medir.
+`logica_ou_regra` | `robustez_excecoes_recursos` | `seguranca` | `qualidade_de_testes` | `contrato_ambiente` | `performance_escopo_estilo` | `requisito_incompleto_ou_ausente` | `documentacao_configuracao`
+
+Instructions + `DEFECT_DESCRIPTIONS` são textos curtos medidos para caber em `head_max_len=192` **sem truncar** (`scripts/measure_diag_choice_tokens.py`); não alongar sem re-medir.
 
 Ver `DEFECT_OPTIONS`, `DEFECT_DESCRIPTIONS` e `DEFECT_MEMBERS` em `src/core/schemas.py` para o mapeamento completo (categorias → folhas).
 

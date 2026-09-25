@@ -41,7 +41,7 @@ def is_ipc_available(socket_path: str = DEFAULT_SOCKET_PATH) -> bool:
 def call_jev_ipc(
     action: str,
     payload: Optional[Dict[str, Any]] = None,
-    timeout: float = 60.0,
+    timeout: float = 120.0,
     socket_path: str = DEFAULT_SOCKET_PATH,
 ) -> Dict[str, Any]:
     """Envia requisição síncrona ao daemon Open JEV e retorna a resposta decodificada.
@@ -77,14 +77,15 @@ def request_score_and_diagnose(
     premise: str,
     workspace: str,
     threshold: float = 3.40,
-    task_type: str = "entrega",
-    timeout: float = 60.0,
+    task_type: str = "codigo_producao",
+    timeout: float = 180.0,
     socket_path: str = DEFAULT_SOCKET_PATH,
+    reset_history: bool = False,
 ) -> Dict[str, Any]:
     """Invoca formalmente o pipeline openjev_score_and_diagnose via socket IPC.
 
     Executa multi-etapas via diffs reais, anti-premise gaming, persistência de tentativas
-    e diagnóstico em 10 categorias flat contra o modelo Laya na GPU.
+    e diagnóstico via Screener Needle 3 (8 categorias) + Noul contra o modelo Laya na GPU.
     """
     target_ws = str(Path(workspace).resolve())
     payload = {
@@ -92,12 +93,6 @@ def request_score_and_diagnose(
         "workspace": target_ws,
         "threshold": threshold,
         "task_type": task_type,
+        "reset_history": reset_history,
     }
-    try:
-        return call_jev_ipc("score_and_diagnose", payload=payload, timeout=timeout, socket_path=socket_path)
-    except RuntimeError as e:
-        if "Ação desconhecida: score_and_diagnose" in str(e):
-            import asyncio
-            from src.mcp_server import openjev_score_and_diagnose
-            return asyncio.run(openjev_score_and_diagnose(**payload))
-        raise
+    return call_jev_ipc("score_and_diagnose", payload=payload, timeout=timeout, socket_path=socket_path)

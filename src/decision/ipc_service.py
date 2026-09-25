@@ -44,18 +44,20 @@ def is_ipc_available(socket_path: str = SOCKET_PATH) -> bool:
         sock.close()
 
 
-def call_ipc_sync(action: str, payload: Dict[str, Any], timeout: float = 60.0, socket_path: str = SOCKET_PATH) -> Dict[str, Any]:
+def call_ipc_sync(action: str, payload: Dict[str, Any], timeout: float = 120.0, socket_path: str = SOCKET_PATH) -> Dict[str, Any]:
     """Envia requisição síncrona ao servidor IPC e aguarda a resposta."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    try:
+    if not os.path.exists(socket_path):
+        raise ConnectionError(f"Socket IPC não encontrado em {socket_path}. Certifique-se de que o daemon MCP está ativo.")
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
         sock.connect(socket_path)
         msg = json.dumps({"action": action, "payload": payload}, ensure_ascii=False) + "\n"
         sock.sendall(msg.encode("utf-8"))
 
-        # Lê resposta até o delimitador de quebra de linha
+        # Lê resposta até o delimitador de quebra de linha com limite defensivo
         buffer = bytearray()
-        while True:
+        for _ in range(10000):
             chunk = sock.recv(4096)
             if not chunk:
                 break
@@ -70,8 +72,6 @@ def call_ipc_sync(action: str, payload: Dict[str, Any], timeout: float = 60.0, s
         if "error" in res:
             raise RuntimeError(f"Erro no IPC Open Jev: {res['error']}")
         return res.get("data", res)
-    finally:
-        sock.close()
 
 
 async def call_ipc_async(action: str, payload: Dict[str, Any], timeout: float = 60.0, socket_path: str = SOCKET_PATH) -> Dict[str, Any]:
@@ -143,17 +143,30 @@ class OpenJevIPCServer:
                 req_obj = ConsultaRequest(**payload)
                 consulta_res = await self.engine.evaluate_consulta(req_obj)
                 resp = {"status": "ok", "data": consulta_res.model_dump()}
+            elif action == "needle3_search":
+                from src.memory.local_needle import LocalNeedleEngine
+                from src.core.schemas import Needle3Query
+                query_str = str(payload.get("query", ""))
+                max_tok = int(payload.get("max_tokens", 1000))
+                scope_val = payload.get("scope") or []
+                ws_dir = str(payload.get("workspace", "")) or os.getcwd()
+                needle_engine = LocalNeedleEngine(workspace_root=ws_dir)
+                needle_query = Needle3Query(query=query_str, max_tokens=max_tok, scope=scope_val)
+                needle_res = await needle_engine.search(needle_query)
+                resp = {"status": "ok", "data": needle_res.model_dump()}
             elif action == "score_and_diagnose":
                 from src.mcp_server import openjev_score_and_diagnose
                 premise = str(payload.get("premise", ""))
                 workspace = str(payload.get("workspace", ""))
-                task_type = str(payload.get("task_type", "entrega"))
+                task_type = str(payload.get("task_type", "codigo_producao"))
                 threshold = float(payload.get("threshold", 3.40))
+                reset_history = bool(payload.get("reset_history", False))
                 diag_res = await openjev_score_and_diagnose(
                     premise=premise,
                     workspace=workspace,
                     task_type=task_type,
                     threshold=threshold,
+                    reset_history=reset_history,
                 )
                 resp = {"status": "ok", "data": diag_res}
             else:

@@ -140,7 +140,9 @@ async def cmd_score(args):
         sys.exit(2)
 
     engine = get_engine(args.model)
-    task_type = (args.task_type or "entrega").strip().lower()
+    task_type = (args.task_type or "codigo_producao").strip().lower()
+    if task_type in ("entrega", "auditoria"):
+        task_type = "codigo_producao"
     if task_type not in RUBRIC_CATALOG:
         options = ", ".join(sorted(RUBRIC_CATALOG))
         print(f"Erro: --task-type inválido '{task_type}'. Opções: {options}.", file=sys.stderr)
@@ -160,7 +162,12 @@ async def cmd_score(args):
         threshold=args.threshold,
     )
 
-    resp = await engine.evaluate_score(req)
+    try:
+        resp = await engine.evaluate_score(req)
+    except Exception as err:
+        logger.error(f"Erro durante avaliação de score: {err}", exc_info=True)
+        print(f"Erro interno durante avaliação: {err}", file=sys.stderr)
+        sys.exit(1)
 
     if args.json:
         print(resp.model_dump_json(indent=2))
@@ -233,8 +240,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="DEPRECIADO e ignorado — rubrica vem do catálogo fechado por --task-type",
     )
     p_score.add_argument(
-        "--task-type", default="entrega",
-        help="Chave do catálogo RUBRIC_CATALOG: entrega | auditoria | codigo_producao (default: entrega)",
+        "--task-type", default="codigo_producao",
+        help="Chave do catálogo RUBRIC_CATALOG: codigo_producao (default: codigo_producao)",
     )
     p_score.add_argument("--min-score", type=float, default=1.0, help="Nota mínima (default: 1.0)")
     p_score.add_argument("--max-score", type=float, default=5.0, help="Nota máxima (default: 5.0)")

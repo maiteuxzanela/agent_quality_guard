@@ -17,7 +17,11 @@ from src.decision.engine import OpenJevEngine
 
 @pytest.mark.asyncio
 async def test_engine_unloaded_raises_noul_error():
-    engine = OpenJevEngine(model_id_or_path="convaiinnovations/laya")
+    engine = OpenJevEngine(
+        model_id_or_path="convaiinnovations/laya",
+        device="cpu",  # explícito: não deteta IPC ambiente (daemon ativo),
+        #                 cenário real "motor local não carregado => 503"
+    )
     assert engine.is_laya is True
     assert engine.is_ready is False
 
@@ -35,7 +39,11 @@ async def test_engine_unloaded_raises_noul_error():
 
 @pytest.mark.asyncio
 async def test_engine_unloaded_raises_choice_error():
-    engine = OpenJevEngine(model_id_or_path="convaiinnovations/laya")
+    engine = OpenJevEngine(
+        model_id_or_path="convaiinnovations/laya",
+        device="cpu",  # explícito: não deteta IPC ambiente (daemon ativo),
+        #                 cenário real "motor local não carregado => 503"
+    )
     assert engine.is_laya is True
     assert engine.is_ready is False
 
@@ -52,7 +60,11 @@ async def test_engine_unloaded_raises_choice_error():
 
 @pytest.mark.asyncio
 async def test_engine_unloaded_raises_score_error():
-    engine = OpenJevEngine(model_id_or_path="convaiinnovations/laya")
+    engine = OpenJevEngine(
+        model_id_or_path="convaiinnovations/laya",
+        device="cpu",  # explícito: não deteta IPC ambiente (daemon ativo),
+        #                 cenário real "motor local não carregado => 503"
+    )
     assert engine.is_laya is True
     assert engine.is_ready is False
 

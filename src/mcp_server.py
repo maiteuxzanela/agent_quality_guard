@@ -20,6 +20,13 @@ from typing import Any, Dict, List, Optional
 os.environ["PYTHONWARNINGS"] = "ignore"
 warnings.filterwarnings("ignore")
 
+# Redireciona todos os logs para stderr (stdout exclusivo do protocolo MCP stdio)
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stderr,
+    format="%(asctime)s [%(levelname)s] [JEV MCP] %(message)s",
+)
+
 # Adiciona raiz do projeto JEV ao sys.path
 PROJECT_DIR = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_DIR))
@@ -32,8 +39,6 @@ from src.core.schemas import (
     ConsultaResponse,
     DEFECT_DESCRIPTIONS,
     DEFECT_MEMBERS,
-    DEFECT_OPTIONS,
-    DIAG_CHOICE_INSTRUCTIONS,
     DiagnosisResult,
     DiffStageResult,
     Needle3Query,
@@ -45,6 +50,8 @@ from src.core.schemas import (
     SpawnSubagentResponse,
 )
 from src.core.diff_inspector import extract_workspace_stages, format_stage_premise
+from src.memory.ast_diff_extractor import extract_workspace_ast_symbols, AstSymbolSlice
+from src.memory.needle_defect_screener import screen_workspace_symbols, DefectSuspicion, DEFECT_NOUL_HYPOTHESES
 from src.decision.engine import OpenJevEngine
 from src.decision.laya_adapter import evaluate_borderline_mass_gate
 from src.memory.local_needle import LocalNeedleEngine
@@ -60,12 +67,15 @@ _engine_lock = threading.Lock()
 
 
 _ipc_server: Any = None
+# Definido como True pelo daemon embutido (src/decision/daemon.py) antes de
+# get_engine(): quem detém o socket IPC é o daemon — este processo não compete.
+_ipc_disabled: bool = False
 
 
 def _start_ipc_server_if_needed(engine: OpenJevEngine) -> None:
     """Inicia o servidor IPC em background thread caso este processo detenha a GPU."""
     global _ipc_server
-    if _ipc_server is not None:
+    if _ipc_disabled or _ipc_server is not None:
         return
     # Não sobe IPC se estiver rodando em CPU fallback ou já for cliente IPC
     if getattr(engine, "use_ipc", False) or getattr(engine, "target_device", "") == "cpu":
@@ -77,7 +87,12 @@ def _start_ipc_server_if_needed(engine: OpenJevEngine) -> None:
         def _run_ipc_loop():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(_ipc_server.start())
+            try:
+                loop.run_until_complete(_ipc_server.start())
+            except OSError as exc:
+                # Outro servidor (ex.: daemon) já detém o socket — não competir.
+                logger.warning("Servidor IPC não iniciado (socket de outro detentor): %s", exc)
+                return
             loop.run_forever()
 
         t = threading.Thread(target=_run_ipc_loop, daemon=True, name="jev-ipc-service")
@@ -328,7 +343,7 @@ async def openjev_spawn_subagent(
 
 
 
-DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["entrega"]
+DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["codigo_producao"]
 
 # Teto rígido da premissa de score (anti-ruído: prosa longa distorce a nota).
 from src.core.score_gate import (  # noqa: E402
@@ -354,6 +369,153 @@ def _get_workspace_git_signature(workspace_dir: str) -> str:
     return _score_gate_git_signature(workspace_dir)
 
 
+def _emergency_exit_response(
+    threshold: float, attempts: int, last_score: float, reason: str
+) -> dict:
+    """Resposta-padrão da Saída de Emergência (breaker universal ou anti-gaming)."""
+    return {
+        "score": last_score,
+        "passed": False,
+        "threshold": threshold,
+        "attempts": attempts,
+        "max_attempts": MAX_ATTEMPTS,
+        "emergency_exit_unlocked": True,
+        "diagnosis": None,
+        "message": (
+            f"🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA] (Tentativa {attempts}/{MAX_ATTEMPTS}): "
+            f"{reason} "
+            "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
+        ),
+    }
+
+
+def _no_change_response(attempts: int) -> dict:
+    """Recusa anti-premise gaming: avaliação repetida sem mudança no disco."""
+    return {
+        "error": (
+            f"🚨 AVALIAÇÃO RECUSADA (Tentativa {attempts}/{MAX_ATTEMPTS}): Nenhuma alteração detectada "
+            "no repositório desde a última reprovação. Refatore o código no disco antes de reavaliar."
+        ),
+        "attempts": attempts,
+        "max_attempts": MAX_ATTEMPTS,
+        "emergency_exit_unlocked": False,
+    }
+
+
+def _evaluation_gate(
+    target_workspace: str,
+    hist: Optional[Dict[str, Any]],
+    current_git_state: str,
+    threshold: float,
+) -> Optional[dict]:
+    """Camada 0: circuit breaker universal + anti-premise gaming, sem aninhamento.
+
+    Condições checadas em passos curtos com retorno antecipado (evita predicado
+    denso e cadeia de if de nível 3). Devolve a resposta-padrão de bloqueio ou
+    ``None`` quando a avaliação pode prosseguir.
+    """
+    if not hist or hist.get("passed", True):
+        return None
+    attempts = int(hist.get("attempts", 1))
+    last_score = hist.get("last_score", 0.0)
+    if attempts >= MAX_ATTEMPTS:
+        logger.warning(
+            f"🚨 [Circuit Breaker Universal]: Limite de {MAX_ATTEMPTS} tentativas atingido para {target_workspace}. "
+            "Desbloqueando Saída de Emergência."
+        )
+        return _emergency_exit_response(
+            threshold,
+            attempts,
+            last_score,
+            f"Limite de {MAX_ATTEMPTS} tentativas consecutivas atingido.",
+        )
+    prev_state = hist.get("git_state", "")
+    if current_git_state != prev_state or current_git_state == "":
+        return None
+    new_attempts = _history_increment_attempts(target_workspace)
+    if new_attempts >= MAX_ATTEMPTS:
+        return _emergency_exit_response(
+            threshold,
+            new_attempts,
+            last_score,
+            f"Limite de {MAX_ATTEMPTS} tentativas atingido sem alteração no repositório.",
+        )
+    return _no_change_response(new_attempts)
+
+
+def _flag_suspect_failed_stages(
+    stages: List[Any], refuted_suspicions: List[Dict[str, Any]]
+) -> None:
+    """Na reprovação por suspeita não-resolvida, marca as etapas afetadas."""
+    suspect_keys = {
+        f"{r['file_path']}::{r['symbol_name']}" for r in refuted_suspicions
+    }
+    for st in stages:
+        if not st.cached and st.stage_id in suspect_keys:
+            st.passed = False
+
+
+def _cache_passed_stages(
+    stages: List[Any], symbols_map: Dict[str, Any], target_workspace: str
+) -> None:
+    """Persiste estágios aprovados no cache do workspace."""
+    for st in stages:
+        if st.passed:
+            sym_obj = symbols_map.get(st.stage_id)
+            s_h = hashlib.sha256(sym_obj.content.encode("utf-8")).hexdigest() if sym_obj else ""
+            _stages_cache_set(target_workspace, st.stage_id, {
+                "score": st.score,
+                "passed": True,
+                "hash": s_h,
+            })
+
+
+def _build_failure_diagnosis(
+    confirmed_defects: List[Dict[str, Any]],
+    refuted_suspicions: List[Dict[str, Any]],
+    delivery_score: float,
+    threshold: float,
+    latency_ms: float,
+) -> tuple:
+    """Monta ``(diagnosis, message)`` da reprovação: defeito confirmado pelo Noul
+    ou suspeita estrutural que exige investigação no disco."""
+    if confirmed_defects:
+        confirmed_defects.sort(key=lambda d: d["probability"], reverse=True)
+        top_defect = confirmed_defects[0]
+        diag = DiagnosisResult(
+            selected=top_defect["category"],
+            confidence=top_defect["probability"],
+            probabilities={top_defect["category"]: top_defect["probability"]},
+            description=top_defect["description"],
+            candidate_defects=top_defect["candidate_defects"],
+            diagnosis_latency_ms=latency_ms,
+        )
+        msg = (
+            f"Defeito '{top_defect['category']}' confirmado pelo Noul (P={top_defect['probability']:.1%}) "
+            f"em {top_defect['file_path']}::{top_defect['symbol_name']} (linhas {top_defect['start_line']}-{top_defect['end_line']}): "
+            f"{top_defect['evidence']}"
+        )
+        return diag, msg
+    top_susp = max(refuted_suspicions, key=lambda r: r["probability"])
+    diag = DiagnosisResult(
+        selected=top_susp["category"],
+        confidence=top_susp["probability"],
+        probabilities={top_susp["category"]: top_susp["probability"]},
+        description=DEFECT_DESCRIPTIONS.get(top_susp["category"], ""),
+        candidate_defects=list(DEFECT_MEMBERS.get(top_susp["category"], [])),
+        diagnosis_latency_ms=latency_ms,
+    )
+    msg = (
+        f"Score insuficiente ({delivery_score:.2f}/{threshold:.2f}) com suspeita estrutural "
+        f"do Needle 3 em {top_susp['file_path']}::{top_susp['symbol_name']} "
+        f"(linhas {top_susp['start_line']}-{top_susp['end_line']}, categoria "
+        f"'{top_susp['category']}'): {top_susp['evidence']}. O Noul refutou a hipótese "
+        f"(P={top_susp['probability']:.1%} < 0.78), mas a nota está abaixo do corte: "
+        "investigar o símbolo no disco antes de reavaliar."
+    )
+    return diag, msg
+
+
 
 
 # NOTA: a tool `openjev_score` foi expurgada (set/2026) — todo o fluxo de
@@ -363,92 +525,64 @@ def _get_workspace_git_signature(workspace_dir: str) -> str:
 
 # Circuit breaker (MAX_ATTEMPTS) vem de score_gate — fonte única.
 
-# Categorias nulas do choice flat: o diagnóstico não aponta defeito concreto.
-# Em borderline, estas categorias aprovam a entrega (carve-out §4.4) SOMENTE
-# se a confiança do choice for >= NULL_CHOICE_MIN_CONFIDENCE (gate anti-FP:
-# nula fraca não deve resgatar entrega reprovada, ex.: injecao_sql).
-NULL_DEFECT_OPTIONS = frozenset(
-    {
-        "sem_defeito_identificavel",
-        "evidencia_insuficiente",
-    }
-)
-
-# Confiança mínima do choice para a nula valer como aprovação borderline.
-# Alinhado a Router.min_confidence (0.40). FP medido (injecao → nula) teve ~0.216.
-NULL_CHOICE_MIN_CONFIDENCE = 0.40
+# NOTA (set/2026): o choice de diagnóstico flat foi removido do fluxo de score.
+# O diagnóstico vem do Needle 3 Screener (8 categorias técnicas) confirmado/
+# arbitrado pelo JEV Noul (P >= 0.78); as categorias nulas
+# (`sem_defeito_identificavel`, `evidencia_insuficiente`) deixaram de existir
+# no universo de decisão — ver DEFECT_OPTIONS em src/core/schemas.py.
 
 
 @app.tool(
     name="openjev_score_and_diagnose",
     description=(
-        "Avaliacao de qualidade com diagnostico estruturado de defeito. "
-        "Se score >= threshold: retorna aprovacao simples (diagnosis=null). "
-        "Se score < threshold: executa um choice unico sobre 10 categorias de defeito flat "
-        "(calibrado — listas >= 11 opções degradam o head do Laya) e retorna a categoria "
-        "identificada com confianca, distribuicao, descricao legivel e candidate_defects "
-        "(folhas candidatas) para auto-correcao. "
-        "Se borderline=true, o choice AINDA roda: se selected for sem_defeito_identificavel "
-        "ou evidencia_insuficiente E confidence >= 0.40, passed=true com "
-        "approved_as_borderline=true (divulgar score_margin); nula fraca ou defeito "
-        "concreto => passed=false e exige correcao real "
-        "no disco. Circuit breaker apos 5 tentativas."
+        "Avaliacao de qualidade com diagnostico estruturado de defeito, sem choice. "
+        "Pipeline: Needle 3 AST Guardrail (fail-fast) -> Screener estrutural sobre "
+        "8 categorias reais -> JEV Noul (P >= 0.78) em cada suspeita -> Score Laya. "
+        "Se o Screener nao aponta NENHUMA suspeita: passed=true; score < threshold "
+        "vira passed=true com approved_with_caveat=true (divulgar score_margin). "
+        "Se o Screener aponta suspeitas: defeito confirmado pelo Noul => passed=false "
+        "com a categoria, arquivo, linhas e candidate_defects; todas refutadas mas "
+        "score < threshold => passed=false e diagnosis aponta a suspeita de maior "
+        "probabilidade para INVESTIGACAO (mesmo com Noul negativo). "
+        "Circuito breaker apos 5 tentativas."
     ),
 )
 async def openjev_score_and_diagnose(
     premise: str,
     workspace: str = "",
-    task_type: str = "entrega",
+    task_type: str = "codigo_producao",
     rubric: str = "",
     min_score: float = 1.0,
     max_score: float = 5.0,
     threshold: float = 3.40,
+    reset_history: bool = False,
 ) -> dict:
-    """Executa Score + Diagnóstico via choice único flat sobre 10 categorias de defeito."""
-    # DEFECT_OPTIONS e DEFECT_DESCRIPTIONS importados no topo do módulo via src.core.schemas
+    """Score + diagnóstico via Screener Needle 3 (8 categorias) + Noul — sem choice."""
     premise_error = _validate_score_premise(premise)
     if premise_error:
         return {"error": premise_error, "premise_rejected": True, "diagnosis": None}
     resolved_rubric, rubric_error = _resolve_task_rubric(task_type)
     if rubric_error:
         return {"error": rubric_error, "task_type_rejected": True, "diagnosis": None}
-    task_type_key = task_type.strip().lower()
+    task_type_key = "codigo_producao"
 
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
+
+    if reset_history:
+        _history_clear()
+        logger.info("Histórico e cache de etapas limpos via flag reset_history=True.")
+
     current_git_state = _get_workspace_git_signature(target_workspace)
 
-    # ── Anti-Premise Gaming (history sob lock: chamadas concorrentes) ────────
+    # ── 1. CIRCUIT BREAKER UNIVERSAL + 2. ANTI-PREMISE GAMING ────────────────
+    # Lógica plana extraída para _evaluation_gate (evita cadeia de if de
+    # nível 3 e predicado denso dentro da tool).
     hist = _history_get(target_workspace)
-    if hist and not hist.get("passed", True):
-        prev_state = hist.get("git_state", "")
-        attempts = hist.get("attempts", 1)
-
-        if current_git_state == prev_state and current_git_state != "":
-            if attempts >= MAX_ATTEMPTS:
-                return {
-                    "score": hist.get("last_score", 0.0),
-                    "passed": False,
-                    "threshold": threshold,
-                    "attempts": attempts,
-                    "max_attempts": MAX_ATTEMPTS,
-                    "emergency_exit_unlocked": True,
-                    "diagnosis": None,
-                    "message": (
-                        f"🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA]: Limite de {MAX_ATTEMPTS} tentativas atingido. "
-                        "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
-                    ),
-                }
-            else:
-                _history_increment_attempts(target_workspace)
-                return {
-                    "error": (
-                        f"🚨 AVALIAÇÃO RECUSADA (Tentativa {attempts}/{MAX_ATTEMPTS}): Nenhuma alteração detectada "
-                        "no repositório desde a última reprovação. Refatore o código antes de reavaliar."
-                    ),
-                    "attempts": attempts,
-                    "max_attempts": MAX_ATTEMPTS,
-                    "emergency_exit_unlocked": False,
-                }
+    gate_response = _evaluation_gate(
+        target_workspace, hist, current_git_state, threshold
+    )
+    if gate_response is not None:
+        return gate_response
 
     # ── Camada 1: Needle 3 AST Guardrail (Fail-Fast Determinístico) ───────────
     ast_violations = NeedleASTGuard.scan_workspace(target_workspace)
@@ -508,178 +642,247 @@ async def openjev_score_and_diagnose(
 
     engine = await _get_engine_async()
 
-    # ── Avaliação Multi-Etapas via Diffs Reais do Git ─────────────────────────
-    diff_stages = extract_workspace_stages(target_workspace)
+    # ── Camada 2: Extração de Símbolos AST e Arbitragem Noul Universal ────────
+    # NOTA: sem importlib.reload — recarregar recria as classes (ex.:
+    # AstSymbolSlice) e quebra isinstance nos módulos já importados no mesmo
+    # processo (poluição de identidade entre lotes de teste / hot-reload).
+    import src.memory.ast_diff_extractor as _ade
+    _extract_symbols = _ade.extract_workspace_ast_symbols
 
-    if diff_stages:
-        evaluated_stages: List[DiffStageResult] = []
-        for st in diff_stages:
-            cached_data = _stages_cache_get(target_workspace, st.stage_id)
-            if cached_data and cached_data.get("passed", False):
-                # Cache Hit: etapa inalterada já aprovada em ciclo anterior
-                evaluated_stages.append(
-                    DiffStageResult(
-                        stage_id=st.stage_id,
-                        file_path=st.file_path,
-                        part_index=st.part_index,
-                        total_parts=st.total_parts,
-                        score=cached_data["score"],
-                        passed=True,
-                        borderline=cached_data.get("borderline", False),
-                        cached=True,
-                        diagnosis=None,
-                    )
-                )
-                continue
+    import src.memory.needle_defect_screener as _nds
+    _screen_symbols = _nds.screen_workspace_symbols
 
-            # Avalia a etapa individualmente com o Laya Score
-            st_premise = format_stage_premise(premise, st)
-            st_score_req = ScoreRequest(
-                premise=st_premise,
-                rubric=resolved_rubric,
-                min_score=min_score,
-                max_score=max_score,
-                threshold=threshold,
+    ast_symbols = _extract_symbols(target_workspace)
+
+    if ast_symbols:
+        suspicions_by_symbol = _screen_symbols(ast_symbols)
+        t_start_noul = time.perf_counter()
+        confirmed_defects: List[Dict[str, Any]] = []
+        refuted_suspicions: List[Dict[str, Any]] = []
+
+        # Indexa os símbolos por chave para busca O(1) imediata e laço plano linear
+        symbols_by_key = {f"{s.file_path}::{s.symbol_name}": s for s in ast_symbols}
+        all_screened_items = [
+            (symbols_by_key[k], susp)
+            for k, susps in suspicions_by_symbol.items()
+            if k in symbols_by_key
+            for susp in susps
+        ]
+
+        # Se o Needle 3 detectou indícios estruturais, submete cada hipótese ao JEV Noul em laço plano
+        for symbol, susp in all_screened_items:
+            noul_premise = (
+                f"Código do símbolo {symbol.file_path}::{symbol.symbol_name} "
+                f"(linhas {symbol.start_line}-{symbol.end_line}):\n"
+                f"{symbol.full_context[:1200]}"
             )
-            st_score_resp = await engine.evaluate_score(st_score_req)
+            noul_req = NoulRequest(
+                premise=noul_premise,
+                hypothesis=susp.noul_hypothesis,
+                threshold=0.78,
+            )
+            noul_resp = await engine.evaluate_noul(noul_req)
+            if noul_resp.passed and noul_resp.probability >= 0.78:
+                confirmed_defects.append({
+                    "category": susp.category,
+                    "symbol_name": symbol.symbol_name,
+                    "file_path": symbol.file_path,
+                    "start_line": symbol.start_line,
+                    "end_line": symbol.end_line,
+                    "probability": round(noul_resp.probability, 4),
+                    "evidence": susp.trigger_evidence,
+                    "description": DEFECT_DESCRIPTIONS.get(susp.category, ""),
+                    "candidate_defects": list(DEFECT_MEMBERS.get(susp.category, [])),
+                })
+            else:
+                refuted_suspicions.append({
+                    "category": susp.category,
+                    "symbol_name": symbol.symbol_name,
+                    "file_path": symbol.file_path,
+                    "start_line": symbol.start_line,
+                    "end_line": symbol.end_line,
+                    "probability": round(noul_resp.probability, 4),
+                    "evidence": susp.trigger_evidence,
+                })
 
-            st_passed = st_score_resp.passed
-            st_borderline = bool(st_score_resp.borderline)
-            st_diag = None
+        # Monta a premissa factual enriquecida com o código real dos símbolos alterados
+        code_snippets = []
+        for s in ast_symbols[:3]:
+            code_snippets.append(f"Arquivo {s.file_path} ({s.symbol_type} {s.symbol_name}):\n{s.content[:350]}")
+        code_context = "\n---\n".join(code_snippets)
 
-            if not st_passed and st_borderline:
-                mass_ok, _, _ = evaluate_borderline_mass_gate(
-                    st_score_resp.breakdown,
-                    healthy_min=BORDERLINE_HEALTHY_MIN_MASS,
-                    flawed_max=BORDERLINE_FLAWED_MAX_MASS,
-                )
-                if mass_ok:
-                    st_passed = True
+        combined_premise = premise
+        if code_context and "\nSímbolos alterados:\n" not in premise:
+            combined_premise = f"{premise}\n\nSímbolos alterados:\n{code_context}"
+        if len(combined_premise) > 1480:
+            combined_premise = combined_premise[:1480]
 
-            if not st_passed:
-                # Dispara choice sobre as 10 categorias no diff da etapa
-                st_diag_premise = (
-                    f"Código alterado avaliado com score {st_score_resp.score:.2f}/{max_score} "
-                    f"(corte={threshold}, borderline={st_borderline}). "
-                    f"Arquivo: {st.file_path} (bloco {st.part_index}/{st.total_parts}).\n"
-                    f"{st.content[:700]}"
-                )
-                t_st_diag = time.perf_counter()
-                st_choice_req = ChoiceRequest(
-                    premise=st_diag_premise,
-                    options=DEFECT_OPTIONS,
-                    instructions=DIAG_CHOICE_INSTRUCTIONS,
-                    criteria=DEFECT_DESCRIPTIONS,
-                )
-                st_choice_resp = await engine.evaluate_choice(st_choice_req)
-                st_diag = DiagnosisResult(
-                    selected=st_choice_resp.selected,
-                    confidence=round(st_choice_resp.top_confidence, 4),
-                    probabilities={k: round(v, 4) for k, v in st_choice_resp.probabilities.items()},
-                    description=DEFECT_DESCRIPTIONS.get(st_choice_resp.selected, ""),
-                    candidate_defects=list(DEFECT_MEMBERS.get(st_choice_resp.selected, [])),
-                    diagnosis_latency_ms=round((time.perf_counter() - t_st_diag) * 1000.0, 2),
-                )
-                if (
-                    st_borderline
-                    and st_diag.selected in NULL_DEFECT_OPTIONS
-                    and st_diag.confidence >= NULL_CHOICE_MIN_CONFIDENCE
-                ):
-                    st_passed = True
+        # Avaliação de Score base para a premissa de entrega
+        score_req = ScoreRequest(
+            premise=combined_premise,
+            rubric=resolved_rubric,
+            min_score=min_score,
+            max_score=max_score,
+            threshold=threshold,
+        )
+        score_resp = await engine.evaluate_score(score_req)
+        delivery_score = round(score_resp.score, 2)
+        score_borderline = bool(score_resp.borderline)
 
-            # Registra no cache de etapas aprovadas
-            if st_passed:
-                _stages_cache_set(
-                    target_workspace,
-                    st.stage_id,
-                    {
-                        "score": round(st_score_resp.score, 2),
-                        "passed": True,
-                        "borderline": st_borderline,
-                    },
-                )
+        mass_ok, p_healthy, p_flawed = evaluate_borderline_mass_gate(
+            score_resp.breakdown,
+            healthy_min=BORDERLINE_HEALTHY_MIN_MASS,
+            flawed_max=BORDERLINE_FLAWED_MAX_MASS,
+        )
 
+        # Monta stages sintéticos por símbolo para auditoria com suporte a cache
+        symbols_map = {f"{s.file_path}::{s.symbol_name}": s for s in ast_symbols}
+        evaluated_stages = []
+        for s in ast_symbols[:20]:  # Limite de telemetria
+            st_id = f"{s.file_path}::{s.symbol_name}"
+            s_hash = hashlib.sha256(s.content.encode("utf-8")).hexdigest()
+            cached_entry = _stages_cache_get(target_workspace, st_id)
+            is_cached = False
+            if cached_entry and cached_entry.get("hash") == s_hash and cached_entry.get("passed", False):
+                is_cached = True
+
+            st_passed = is_cached or (not any(d["file_path"] == s.file_path and d["symbol_name"] == s.symbol_name for d in confirmed_defects))
             evaluated_stages.append(
                 DiffStageResult(
-                    stage_id=st.stage_id,
-                    file_path=st.file_path,
-                    part_index=st.part_index,
-                    total_parts=st.total_parts,
-                    score=round(st_score_resp.score, 2),
+                    stage_id=st_id,
+                    file_path=s.file_path,
+                    part_index=1,
+                    total_parts=1,
+                    score=cached_entry.get("score", delivery_score) if is_cached else delivery_score,
                     passed=st_passed,
-                    borderline=st_borderline,
-                    cached=False,
-                    diagnosis=st_diag if not st_passed else None,
+                    borderline=score_borderline,
+                    cached=is_cached,
+                    diagnosis=None,
                 )
             )
 
-        all_passed = all(s.passed for s in evaluated_stages)
-        passed_cnt = sum(1 for s in evaluated_stages if s.passed)
-        failed_cnt = len(evaluated_stages) - passed_cnt
-        avg_score = round(sum(s.score for s in evaluated_stages) / len(evaluated_stages), 2)
-        any_borderline = any(s.borderline for s in evaluated_stages)
-        first_failure = next((s for s in evaluated_stages if not s.passed), None)
-        global_diag = first_failure.diagnosis if first_failure else None
+        # Se todas as etapas já foram aprovadas anteriormente e o workspace permanece idêntico
+        all_stages_cached = bool(evaluated_stages and all(st.cached for st in evaluated_stages))
+        if all_stages_cached and hist and hist.get("passed", False):
+            delivery_score = max(delivery_score, float(hist.get("last_score", threshold)))
 
-        if all_passed:
+        # ── Decisão final (sem choice) ───────────────────────────────────────
+        # 1. Defeito confirmado pelo Noul (P >= 0.78) => reprova.
+        # 2. Needle 3 sem NENHUMA suspeita estrutural => aprova; nota < corte
+        #    vira aprovação com ressalva (approved_with_caveat).
+        # 3. Needle 3 apontou qualquer uma das 8 categorias e a nota ficou
+        #    abaixo do corte => REPROVA e manda investigar — mesmo que o Noul
+        #    tenha refutado a hipótese (P < 0.78): suspeita estrutural +
+        #    nota baixa exige apuração humana no disco.
+        zero_suspicions = not all_screened_items
+        score_ok = delivery_score >= threshold
+
+        if confirmed_defects:
+            passed_delivery = False
+        elif zero_suspicions or score_ok or all_stages_cached:
+            passed_delivery = True
+        else:
+            passed_delivery = False
+
+        is_caveat = passed_delivery and (not score_ok) and zero_suspicions
+
+        # Na reprovação por suspeita não-resolvida, marca as etapas afetadas
+        if not passed_delivery and not confirmed_defects:
+            _flag_suspect_failed_stages(evaluated_stages, refuted_suspicions)
+
+        failed_keys = {st.stage_id for st in evaluated_stages if not st.passed}
+        failed_keys |= {f"{d['file_path']}::{d['symbol_name']}" for d in confirmed_defects}
+        total_syms = len(ast_symbols)
+        failed_syms = len(failed_keys)
+        passed_syms = total_syms - failed_syms
+
+        if passed_delivery:
+            caveat_msg = (
+                f"Entrega aprovada com ressalva: o Needle 3 não apontou nenhuma das 8 categorias de "
+                f"defeito no diff; score contínuo ({delivery_score:.2f}) abaixo do corte de {threshold:.2f} "
+                "aceito por não haver suspeita estrutural a investigar."
+            ) if is_caveat else None
+
+            # Persiste estágios aprovados no cache do workspace
+            _cache_passed_stages(evaluated_stages, symbols_map, target_workspace)
+
             _history_set(target_workspace, {
                 "passed": True,
                 "attempts": 0,
                 "git_state": current_git_state,
-                "last_score": avg_score,
+                "last_score": delivery_score,
             })
             return ScoreDiagnoseResponse(
-                score=avg_score,
+                score=delivery_score,
                 max_score=max_score,
-                normalized_score=round((avg_score - min_score) / (max_score - min_score), 4),
+                normalized_score=round((delivery_score - min_score) / (max_score - min_score), 4),
                 passed=True,
                 threshold=threshold,
-                breakdown={},
-                score_latency_ms=0.0,
-                score_margin=round(avg_score - threshold, 4),
-                borderline=any_borderline,
+                breakdown=score_resp.breakdown,
+                score_latency_ms=round((time.perf_counter() - t_start_noul) * 1000.0, 2),
+                score_margin=round(delivery_score - threshold, 4),
+                borderline=score_borderline,
                 task_type=task_type_key,
                 rubric_source=f"catalog:{task_type_key}",
                 diagnosis=None,
-                approved_as_borderline=any_borderline,
+                approved_as_borderline=is_caveat and bool(mass_ok),
+                approved_with_caveat=is_caveat,
                 stages=evaluated_stages,
-                total_stages=len(evaluated_stages),
-                passed_stages=passed_cnt,
-                failed_stages=failed_cnt,
+                total_stages=total_syms,
+                passed_stages=passed_syms,
+                failed_stages=failed_syms,
                 attempts=0,
                 max_attempts=MAX_ATTEMPTS,
                 emergency_exit_unlocked=False,
+                message=caveat_msg,
             ).model_dump()
         else:
+            # Reprovado: defeito confirmado pelo Noul OU suspeita estrutural
+            # não-resolvida com score abaixo do corte. Montagem extraída para
+            # _build_failure_diagnosis (profundidade de condicional <= 2).
+            global_diag, diag_msg = _build_failure_diagnosis(
+                confirmed_defects,
+                refuted_suspicions,
+                delivery_score,
+                threshold,
+                round((time.perf_counter() - t_start_noul) * 1000.0, 2),
+            )
+
             prev_attempts = hist.get("attempts", 0) if hist else 0
             new_attempts = prev_attempts + 1
             _history_set(target_workspace, {
                 "passed": False,
                 "attempts": new_attempts,
                 "git_state": current_git_state,
-                "last_score": avg_score,
+                "last_score": delivery_score,
             })
             return ScoreDiagnoseResponse(
-                score=avg_score,
+                score=delivery_score,
                 max_score=max_score,
-                normalized_score=round((avg_score - min_score) / (max_score - min_score), 4),
+                normalized_score=round((delivery_score - min_score) / (max_score - min_score), 4),
                 passed=False,
                 threshold=threshold,
-                breakdown={},
-                score_latency_ms=0.0,
-                score_margin=round(avg_score - threshold, 4),
-                borderline=any_borderline,
+                breakdown=score_resp.breakdown,
+                score_latency_ms=round((time.perf_counter() - t_start_noul) * 1000.0, 2),
+                score_margin=round(delivery_score - threshold, 4),
+                borderline=score_borderline,
                 task_type=task_type_key,
                 rubric_source=f"catalog:{task_type_key}",
                 diagnosis=global_diag,
                 approved_as_borderline=False,
+                approved_with_caveat=False,
                 stages=evaluated_stages,
-                total_stages=len(evaluated_stages),
-                passed_stages=passed_cnt,
-                failed_stages=failed_cnt,
+                total_stages=total_syms,
+                passed_stages=passed_syms,
+                failed_stages=failed_syms,
                 attempts=new_attempts,
                 max_attempts=MAX_ATTEMPTS,
                 emergency_exit_unlocked=new_attempts >= MAX_ATTEMPTS,
+                message=(
+                    f"🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA] (Tentativa {new_attempts}/{MAX_ATTEMPTS}): "
+                    f"Limite de {MAX_ATTEMPTS} tentativas consecutivas atingido. "
+                    "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
+                ) if new_attempts >= MAX_ATTEMPTS else diag_msg,
             ).model_dump()
 
     # ── CAMINHO FALLBACK MONO-ETAPA (quando repositório limpo ou sem diffs de código) ─
@@ -773,66 +976,6 @@ async def openjev_score_and_diagnose(
                 emergency_exit_unlocked=False,
             ).model_dump()
 
-    # Choice de diagnóstico flat (10 categorias)
-    diag_premise = (
-        f"Código avaliado com score {score_resp.score:.2f}/{max_score} "
-        f"(corte={threshold}, borderline={bool(score_resp.borderline)}). "
-        f"Contexto do artefato: {premise[:500]}"
-    )
-
-    t_diag_start = time.perf_counter()
-    choice_req = ChoiceRequest(
-        premise=diag_premise,
-        options=DEFECT_OPTIONS,
-        instructions=DIAG_CHOICE_INSTRUCTIONS,
-        criteria=DEFECT_DESCRIPTIONS,
-    )
-    choice_resp = await engine.evaluate_choice(choice_req)
-    diag_latency_ms = (time.perf_counter() - t_diag_start) * 1000.0
-
-    diagnosis = DiagnosisResult(
-        selected=choice_resp.selected,
-        confidence=round(choice_resp.top_confidence, 4),
-        probabilities={k: round(v, 4) for k, v in choice_resp.probabilities.items()},
-        description=DEFECT_DESCRIPTIONS.get(choice_resp.selected, ""),
-        candidate_defects=list(DEFECT_MEMBERS.get(choice_resp.selected, [])),
-        diagnosis_latency_ms=round(diag_latency_ms, 2),
-    )
-    mono_stage.diagnosis = diagnosis
-
-    null_elected = diagnosis.selected in NULL_DEFECT_OPTIONS
-    null_conf_ok = diagnosis.confidence >= NULL_CHOICE_MIN_CONFIDENCE
-    if score_resp.borderline and null_elected and null_conf_ok:
-        _history_set(target_workspace, {
-            "passed": True,
-            "attempts": 0,
-            "git_state": current_git_state,
-            "last_score": round(score_resp.score, 2),
-        })
-        mono_stage.passed = True
-        return ScoreDiagnoseResponse(
-            score=round(score_resp.score, 2),
-            max_score=max_score,
-            normalized_score=round(score_resp.normalized_score, 4),
-            passed=True,
-            threshold=threshold,
-            breakdown=score_resp.breakdown,
-            score_latency_ms=round(score_resp.latency_ms, 2),
-            score_margin=score_resp.score_margin,
-            borderline=score_resp.borderline,
-            task_type=task_type_key,
-            rubric_source=f"catalog:{task_type_key}",
-            diagnosis=diagnosis,
-            approved_as_borderline=True,
-            stages=[mono_stage],
-            total_stages=1,
-            passed_stages=1,
-            failed_stages=0,
-            attempts=0,
-            max_attempts=MAX_ATTEMPTS,
-            emergency_exit_unlocked=False,
-        ).model_dump()
-
     prev_attempts = hist.get("attempts", 0) if hist else 0
     new_attempts = prev_attempts + 1
     _history_set(target_workspace, {
@@ -854,7 +997,7 @@ async def openjev_score_and_diagnose(
         borderline=score_resp.borderline,
         task_type=task_type_key,
         rubric_source=f"catalog:{task_type_key}",
-        diagnosis=diagnosis,
+        diagnosis=None,
         approved_as_borderline=False,
         stages=[mono_stage],
         total_stages=1,
@@ -863,6 +1006,15 @@ async def openjev_score_and_diagnose(
         attempts=new_attempts,
         max_attempts=MAX_ATTEMPTS,
         emergency_exit_unlocked=new_attempts >= MAX_ATTEMPTS,
+        message=(
+            f"🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA] (Tentativa {new_attempts}/{MAX_ATTEMPTS}): "
+            f"Limite de {MAX_ATTEMPTS} tentativas consecutivas atingido. "
+            "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
+        ) if new_attempts >= MAX_ATTEMPTS else (
+            f"Score insuficiente ({round(score_resp.score, 2)}/{threshold:.2f}) no caminho mono "
+            "(workspace sem símbolos AST no diff para triagem estrutural): não há suspeita do "
+            "Needle 3 para diagnosticar — refatore o artefato no disco e reavalie."
+        ),
     ).model_dump()
 
 
@@ -895,19 +1047,6 @@ if __name__ == "__main__":
             signal.signal(signal.SIGHUP, _graceful_exit)
     except Exception as e:
         logger.debug("Sinais de terminação não puderam ser registrados: %s", e)
-
-    # Sentinela de ciclo de vida do pai: se o pai original morrer e o processo for adotado por PID 1
-    _initial_ppid = os.getppid()
-
-    def _parent_watchdog() -> None:
-        while True:
-            time.sleep(2.0)
-            current_ppid = os.getppid()
-            if current_ppid != _initial_ppid or current_ppid <= 1:
-                logger.warning("Processo pai da IDE (PID %s) foi encerrado. Finalizando servidor MCP...", _initial_ppid)
-                os._exit(0)
-
-    threading.Thread(target=_parent_watchdog, daemon=True, name="jev-parent-watchdog").start()
 
     def _preload_engine() -> None:
         try:

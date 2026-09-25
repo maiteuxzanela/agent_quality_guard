@@ -119,7 +119,8 @@ def test_audit_target_fail_fast_engine_nao_pronta(tmp_path):
     from src.core.schemas import OpenJevNotReadyError
     from audit_mocks import audit_target
 
-    engine = OpenJevEngine()  # sem load_model() — estado real de não-pronto
+    engine = OpenJevEngine(device="cpu")  # sem load_model(); device explícito
+    #   ignora IPC ambiente (daemon ativo) — estado real de não-pronto
     needle = LocalNeedleEngine(workspace_root=str(tmp_path))
     target = {"id": "t", "name": "Alvo", "path": str(tmp_path)}
 
@@ -136,7 +137,8 @@ def test_safe_audit_target_registra_erro_sem_derrubar(tmp_path):
     from src.memory.local_needle import LocalNeedleEngine
     from audit_mocks import _safe_audit_target
 
-    engine = OpenJevEngine()  # sem load — vai falhar de verdade
+    engine = OpenJevEngine(device="cpu")  # sem load; device explícito ignora
+    #   IPC ambiente (daemon ativo) — vai falhar de verdade
     needle = LocalNeedleEngine(workspace_root=str(tmp_path))
     target = {"id": "t", "name": "AlvoTeste", "path": str(tmp_path)}
 

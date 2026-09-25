@@ -67,40 +67,45 @@ Recebe uma premissa e uma hipótese e retorna a probabilidade calibrada da hipó
 Calcula a distribuição de probabilidade sobre um array de opções em única passagem.
 - **Uso:** Decisão de qual subagente (`backend`, `security`, `frontend`, `devops`, `documentation`) deve assumir a subtarefa. Acurácia comprovada de 89.6% com latência de ~627 ms na GPU.
 
-### 3. `openjev_score_and_diagnose` (Score + Diagnóstico de Defeito)
-**Única tool de score do pipeline MCP** (a tool `openjev_score` foi expurgada em set/2026). Compara a entrega contra a rubrica de qualidade, mapeia a escala nativa ordinal (0–4) para a escala contínua JEV de 1.0 a 5.0 ($\text{Score} = 1.0 + \text{Ordinal}$) e, se reprovado, realiza um **choice único sobre 10 categorias de defeito** (taxonomia flat, calibrada — listas ≥ 11 opções degradam o head do Laya, medido 1/4 no golden set).
+### 3. `openjev_score_and_diagnose` (Score + Diagnóstico sem choice)
+**Única tool de score do pipeline MCP** (a tool `openjev_score` foi expurgada em set/2026). Compara a entrega contra a rubrica de qualidade e mapeia a escala nativa ordinal (0–4) para a escala contínua JEV de 1.0 a 5.0 ($\text{Score} = 1.0 + \text{Ordinal}$). O diagnóstico de defeito **não usa mais choice flat** (removido em set/2026): quem diagnostica é o **Needle 3 Screener estrutural** (gatilhos determinísticos sobre as **8 categorias reais** de `DEFECT_OPTIONS`, sem categorias nulas) arbitrado pelo **JEV Noul (P ≥ 0.78)**.
+
+**Pipeline em 4 camadas:**
+1. **AST Guardrail fail-fast:** violação determinística (SQL injection, `eval`, mock em produção, segredo hardcoded, ...) ⇒ `passed=false` com `score=1.0` e `description` `🚨 [Needle 3 AST Block] ...` — sem inferência. *Exceção (mantida por decisão):* a regra `mock_in_production` usa a categoria `mock_stub_em_producao`, fora das 8 de `DEFECT_OPTIONS`.
+2. **Needle 3 Screener:** extrai os símbolos AST do diff e dispara triggers (`open()` fora de try/with, `# TODO:`, `while True`, `os.getenv` sem default, ifs aninhados ≥ 3, ...). Cada suspeita vai ao Noul: **confirmada (P ≥ 0.78)** ⇒ reprovação com categoria/arquivo/linhas; **refutada** ⇒ `refuted_suspicions`.
+3. **Score Laya (corte ≥ 3.40) + decisão:** zero suspeitas ⇒ `passed=true` (nota < corte vira `approved_with_caveat=true` com `message` e `score_margin`); suspeita presente + nota < corte ⇒ `passed=false` com `diagnosis` = suspeita de maior probabilidade para **INVESTIGAÇÃO** no disco, mesmo com Noul negativo; nota ≥ corte + suspeitas refutadas ⇒ `passed=true`.
+4. **Caminho mono** (workspace sem símbolos AST): score ≥ corte aprova; `borderline` + Mass Gate saudável (≥ 0.85 / ≤ 0.12) aprova como `approved_as_borderline`; senão reprovado com `diagnosis=None` e `message` do caminho mono.
 
 **Contrato de score:**
-- **Uso:** Validação de conformidade antes de aceitar código gerado. Nota de corte calibrada padrão: **$\ge 3.40$**. Se `score < 3.40`, o subagente entra em refatoração real no disco (com proteção anti-premise gaming e saída de emergência após **5 tentativas** (`MAX_ATTEMPTS`) — valem neste único caminho).
+- **Uso:** Validação de conformidade antes de aceitar código gerado. Nota de corte calibrada padrão: **$\ge 3.40$**. Se `score < 3.40`, o subagente entra em refatoração real no disco (proteção anti-premise gaming e circuit breaker universal de **5 tentativas** (`MAX_ATTEMPTS`) — a Saída de Emergência é destravada imediatamente na 5ª).
 - **Premissa:** padrão factual obrigatório `Pedido do Prompt: ... | Resultado Executado: ...`, **máximo 1500 caracteres** — o MCP recusa (não trunca) premissas fora do padrão ou acima do teto.
-- **Rubrica:** resolvida exclusivamente do catálogo fechado `RUBRIC_CATALOG` (`src/core/schemas.py`) pelo parâmetro `task_type` (`entrega` | `auditoria` | `codigo_producao`); o campo `rubric` livre do cliente é **ignorado** (`rubric_source: catalog:<task_type>`).
+- **Rubrica:** resolvida exclusivamente do catálogo fechado `RUBRIC_CATALOG` (`src/core/schemas.py`) pelo parâmetro `task_type` (chave única `codigo_producao`; chaves legadas `entrega`/`auditoria` mapeiam para ela); o campo `rubric` livre do cliente é **ignorado** (`rubric_source: catalog:<task_type>`).
 - **Incerteza:** a resposta inclui `score_margin` (massa probabilística acima − abaixo do threshold) e `borderline` (≥35% de cada lado da fronteira). Se `borderline: true`, a margem deve ser mencionada na resposta final (AGENTS.md §4.7).
 - **Observabilidade de device:** `device` e `dtype` na `ScoreResponse` expõem se a nota veio de fp16-GPU ou fp32-CPU (migração em OOM desloca o numérico perto do corte).
-- **Regressão de notas:** `tests/test_score_calibration.py` mantém um golden set de 12 pares com resposta conhecida (4 positivos ≥ 3.40, 4 negativos < 3.40, 2 de ordem, 2 de estabilidade de template) contra o motor Laya real.
+- **Regressão de notas:** `tests/test_score_calibration.py` mantém golden set de casos com resposta conhecida (positivos ≥ 3.40 e negativos semânticos < 3.40) contra o motor Laya real.
 
-**Contrato de diagnóstico** (roda sempre que reprovado, inclusive em `borderline: true`):
-- `selected`: a categoria identificada (ex: `mock_stub_em_producao`, `seguranca`)
-- `confidence`: probabilidade da opção vencedora [0.0–1.0]
-- `probabilities`: distribuição completa sobre as 10 opções
-- `description`: descrição legível da categoria para auto-correção
-- **Borderline Mass Gate (Critério Probabilístico de Fronteira):** se `borderline: true` e a distribuição ordinal concentrar $p_{\text{acceptable}} + p_{\text{good quality}} + p_{\text{exceptional}} \ge 0.85$ com falhas $p_{\text{critical flaws}} + p_{\text{poor quality}} \le 0.12$ → `passed: true` com `approved_as_borderline: true` (sem viés léxico do choice). Se reprovado por falha real ou incerteza excessiva, o choice flat roda com instrução neutra e retorna o defeito com `diagnosis` presente para auto-correção.
+**Contrato de diagnóstico** (origem: Screener + Noul, ou AST Guardrail):
+- `diagnosis.selected`: a categoria identificada (ex: `seguranca`, `robustez_excecoes_recursos`)
+- `diagnosis.confidence`: probabilidade do Noul (confirmada/refutada) ou `1.0` no bloco AST
+- `diagnosis.probabilities`: distribuição da categoria (uma entrada — o choice sumiu)
+- `diagnosis.description`: descrição legível da categoria, ou o bloco `🚨 [Needle 3 AST Block] ...`
+- `diagnosis.candidate_defects`: folhas candidatas (as de `DEFECT_MEMBERS`) para guiar a refatoração
+- `refuted_suspicions`: suspeitas estruturais refutadas pelo Noul (P < 0.78) que ainda assim exigem investigação quando a nota < corte
 
-**Taxonomia de defeitos (10 categorias flat — nulas em 1º e 6º):**
+**Taxonomia de defeitos (8 categorias flat — sem nulas):**
 
 | # | Categoria | Folhas candidatas (`candidate_defects`) |
 |---|---|---|
-| 1 | `sem_defeito_identificavel` | *(nula — evidência não sustenta defeito concreto)* |
-| 2 | `logica_ou_regra` | `erro_off_by_one`, `regra_de_negocio_incompleta`, `estado_mutavel_inconsistente`, `inversao_de_predicado` |
-| 3 | `robustez_excecoes_recursos` | `falha_de_tratamento_de_excecoes`, `falta_tratamento_nulo_ou_vazio`, `estouro_de_limites_numericos`, `condicao_de_corrida_deadlock`, `vazamento_de_recursos` |
-| 4 | `seguranca` | `injecao_e_sanitizacao`, `credenciais_hardcoded`, `autorizacao_e_autenticacao_frouxa` |
-| 5 | `qualidade_de_testes` | `ausencia_de_testes_unitarios`, `teste_tautologico_ou_falso_positivo`, `falta_cobertura_caminhos_de_erro`, `testes_nao_reprodutiveis_flaky` |
-| 6 | `evidencia_insuficiente` | *(nula — premissa sem evidência verificável)* |
-| 7 | `contrato_ambiente` | `dependencia_ou_import_inexistente`, `incompatibilidade_de_assinatura`, `violacao_de_schema_de_dados`, `quebra_de_retrocompatibilidade`, `incompatibilidade_de_ambiente_ou_runtime` |
-| 8 | `performance_escopo_estilo` | `gargalo_de_performance_ou_complexidade`, `alucinacao_de_efeitos_colaterais_externos`, `desvio_de_escopo_ou_overengineering`, `inconsistencia_estilistica_ou_linting_estrito` |
-| 9 | `mock_stub_em_producao` | `stub_ou_mock_em_producao` |
-| 10 | `documentacao_configuracao` | `documentacao_ausente_ou_incorreta`, `configuracao_ou_governanca_incorreta` |
+| 1 | `logica_ou_regra` | `erro_off_by_one`, `regra_de_negocio_incompleta`, `estado_mutavel_inconsistente`, `inversao_de_predicado` |
+| 2 | `robustez_excecoes_recursos` | `falha_de_tratamento_de_excecoes`, `falta_tratamento_nulo_ou_vazio`, `estouro_de_limites_numericos`, `condicao_de_corrida_deadlock`, `vazamento_de_recursos` |
+| 3 | `seguranca` | `injecao_e_sanitizacao`, `credenciais_hardcoded`, `autorizacao_e_autenticacao_frouxa` |
+| 4 | `qualidade_de_testes` | `ausencia_de_testes_unitarios`, `teste_tautologico_ou_falso_positivo`, `falta_cobertura_caminhos_de_erro`, `testes_nao_reprodutiveis_flaky` |
+| 5 | `contrato_ambiente` | `dependencia_ou_import_inexistente`, `incompatibilidade_de_assinatura`, `violacao_de_schema_de_dados`, `quebra_de_retrocompatibilidade`, `incompatibilidade_de_ambiente_ou_runtime` |
+| 6 | `performance_escopo_estilo` | `gargalo_de_performance_ou_complexidade`, `alucinacao_de_efeitos_colaterais_externos`, `desvio_de_escopo_ou_overengineering`, `inconsistencia_estilistica_ou_linting_estrito` |
+| 7 | `requisito_incompleto_ou_ausente` | `funcionalidade_do_pedido_ausente`, `requisito_do_prompt_ignorado`, `caso_de_borda_do_pedido_faltando` |
+| 8 | `documentacao_configuracao` | `documentacao_ausente_ou_incorreta`, `configuracao_ou_governanca_incorreta` |
 
-Instruções e descrições são textos curtos medidos em `head_max_len=192` para **nenhum truncamento** (álibi das nulas + `id: description` completos) — ver `scripts/measure_diag_choice_tokens.py`.
+As categorias nulas `sem_defeito_identificavel` e `evidencia_insuficiente` foram **aposentadas** (set/2026): o universo de decisão é só técnico. Instruções e descrições são textos curtos medidos em `head_max_len=192` para **nenhum truncamento** — ver `scripts/measure_diag_choice_tokens.py` (ainda relevante para `openjev_choice` de roteamento e scripts de auditoria externos).
 
 ### 4. `openjev_consulta` (Consulta Direta — Indício Textual)
 Para perguntas diretas do tipo *"esse script funciona?"* ou *"esse banco de dados tem essa informação?"*. Recebe a evidência real (`premise`: trecho de código, schema, amostra de dados) e a `question`, retornando:
@@ -118,7 +123,7 @@ Script genérico que aplica o mesmo molde dos audits arquiteturais aos **4 proje
 
 1. **Scrub determinístico léxico** — varre arquivos de código (excluindo `node_modules`, `.venv`, etc.) por 10 padrões (`unittest.mock`, `MagicMock`, `@patch`, `jest.mock`, `sinon`, `__mocks__/`, ...) e registra `file:line`. Qualquer ocorrência conta igual (sem distinguir teste de produção na severidade — `em_testes`/`em_producao` é só metadata).
 2. **Needle 3** — trechos cirúrgicos de mocks via `LocalNeedleEngine` (`max_tokens=1200`).
-3. **Cascata JEV** — `choice` (`sem_mocks` | `apenas_em_testes` | `mocks_em_producao`) → `noul` (0.78) → `score` (3.40, rubrica `codigo_producao` do catálogo fechado) → se reprovado, diagnóstico flat (10 categorias).
+3. **Cascata JEV** — `choice` (`sem_mocks` | `apenas_em_testes` | `mocks_em_producao`) → `noul` (0.78) → `score` (3.40, rubrica `codigo_producao` do catálogo fechado) → se reprovado, o **próprio script** dispara diagnóstico via `evaluate_choice` direto sobre `DEFECT_OPTIONS` (8 categorias; a tool de score do MCP não tem mais choice de diagnóstico).
 4. **Saída** — `mocks_audit_results.json` na raiz do projeto (ocorrências completas, contagens, notas, diagnóstico).
 
 ```bash
