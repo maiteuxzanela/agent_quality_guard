@@ -30,7 +30,6 @@ from src.core.schemas import (
     DEFECT_OPTIONS,
 )
 from src.mcp_server import _score_history, openjev_score_and_diagnose
-from tests.test_score_calibration import POSITIVE_CASES
 from tests.test_score_diagnose import _make_git_repo, _make_repo_with_code
 
 
@@ -39,7 +38,12 @@ from tests.test_score_diagnose import _make_git_repo, _make_repo_with_code
 GOLDEN_CASES = [
     (
         "e_s_desprotegida",
-        'def carregar_configuracao(caminho):\n    """Abre o arquivo de configuração."""\n'
+        'def carregar_configuracao(caminho):\n'
+        '    """Abre o arquivo de configuração.\n'
+        "\n"
+        "    Exemplo:\n"
+        '        carregar_configuracao("app.ini")\n'
+        '    """\n'
         '    arquivo = open(caminho)\n    return arquivo.read()\n',
         "entrega.py",
         "Pedido do Prompt: entregar módulo de configuração. | Resultado Executado: arquivo aberto sem proteção nem fechamento no disco.",
@@ -69,8 +73,16 @@ GOLDEN_CASES = [
     ),
 ]
 
-# Premissa com nota ~3.4 (positivo bugfix) para forçar faixa borderline em th=3.5
-BORDERLINE_PREMISE = {case[0]: case[1] for case in POSITIVE_CASES}["bugfix_off_by_one_com_regressao"]
+# Premissa standalone usada só no caminho mono (workspace limpo, sem símbolos):
+# a nota é medida em tempo de execução e o threshold da banda é derivado dela,
+# tornando o carve-out imune a drift de calibração do Laya.
+BORDERLINE_PREMISE = (
+    "Pedido do Prompt: corrigir bug off-by-one que descartava o último elemento da fatia. | "
+    "Resultado Executado: alterado range(n) para range(n + 1) em src/slice_helper.py; "
+    "teste de regressão tests/test_slice.py valida fatia completa com sucesso (out == expected) "
+    "e último elemento out[-1] == xs[-1]; pytest 4/4 passed; suíte total 13/13 passed; "
+    "docstring do helper atualizada."
+)
 
 
 def _ensure_engine_loaded():
@@ -97,6 +109,19 @@ class TestGoldenDiagnostico(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         _score_history.clear()
+
+    def test_diagnosis_result_confidence_invalida_levanta_validationerror(self):
+        """Caminho de erro real do contrato: confidence fora de [0, 1] é rejeitada."""
+        from pydantic import ValidationError
+        from src.core.schemas import DiagnosisResult
+
+        with self.assertRaises(ValidationError):
+            DiagnosisResult(
+                selected="seguranca",
+                confidence=1.5,  # viola ge=0.0, le=1.0
+                description="confiança fora do intervalo",
+                diagnosis_latency_ms=1.0,
+            )
 
     async def test_diagnostico_defeito_conhecido(self):
         hits = []
@@ -126,37 +151,63 @@ class TestGoldenDiagnostico(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(hits), 4, report)
 
     async def test_diagnostico_emissao_borderline_carve_out(self):
-        """Reprovação na fronteira (th=3.5, nota ~3.4) no caminho mono:
+        """Carve-out do caminho mono em 3 fases (imune a drift da nota):
 
-        Contrato Borderline Mass Gate: se a massa saudável >= 0.85 e falhas <= 0.12,
-        aprova com approved_as_borderline=True. Sem símbolos AST no diff não há
-        Screener — reprovado fora da massa sai com diagnosis=None (caminho mono).
+        1. Mede a nota mono da premissa (workspace git limpo, sem símbolos).
+        2. threshold = nota + 0.10 => nota dentro da banda de indiferença
+           [3.20, 3.40) => aprovação com ressalva (approved_with_caveat),
+           borderline=True e telemetria approved_as_borderline; diagnosis=None.
+        3. threshold = nota + 0.50 => nota abaixo da banda => reprovado com
+           diagnosis=None e mensagem do caminho mono.
         """
-        ws = _make_git_repo()
+        # Fase 1: sondagem da nota mono
+        probe = await openjev_score_and_diagnose(
+            premise=BORDERLINE_PREMISE,
+            workspace=_make_git_repo(),
+            threshold=1.0,
+        )
+        self.assertNotIn("error", probe, f"sondagem mono falhou: {probe.get('error')}")
+        mono_score = probe["score"]
+        self.assertGreaterEqual(mono_score, 1.0)
+
+        # Fase 2: banda de indiferença derivada da nota medida
         result = await openjev_score_and_diagnose(
             premise=BORDERLINE_PREMISE,
-            workspace=ws,
-            threshold=3.5,
+            workspace=_make_git_repo(),
+            threshold=round(mono_score + 0.10, 2),
         )
+        self.assertNotIn("error", result, f"avaliação da banda falhou: {result.get('error')}")
         self.assertTrue(
             result["borderline"],
-            f"esperava borderline=True em th=3.5 (score={result['score']}, "
+            f"esperava borderline=True dentro da banda (score={result['score']}, "
             f"margin={result['score_margin']})",
         )
+        self.assertTrue(
+            result["passed"],
+            f"nota na banda sem suspeita deve aprovar com ressalva (score={result['score']})",
+        )
+        self.assertTrue(
+            result.get("approved_with_caveat"),
+            "aprovação na banda DEVE carregar approved_with_caveat",
+        )
+        self.assertIn("approved_as_borderline", result)
+        self.assertIsNone(result.get("diagnosis"))
+        self.assertEqual(result["attempts"], 0)
 
-        if result["passed"]:
-            # Massa borderline aprovou (ou nota >= corte)
-            self.assertIn("approved_as_borderline", result)
-            self.assertIsNone(result.get("diagnosis"))
-            self.assertEqual(result["attempts"], 0)
-        else:
-            self.assertFalse(result["passed"])
-            self.assertIsNone(
-                result.get("diagnosis"),
-                "caminho mono não tem suspeita do Needle 3 para diagnosticar",
-            )
-            self.assertIn("caminho mono", result.get("message", ""))
-            self.assertGreaterEqual(result["attempts"], 1)
+        # Fase 3: abaixo da banda => reprovado, mono sem diagnosis
+        below = await openjev_score_and_diagnose(
+            premise=BORDERLINE_PREMISE,
+            workspace=_make_git_repo(),
+            threshold=round(mono_score + 0.50, 2),
+        )
+        self.assertNotIn("error", below, f"avaliação abaixo da banda falhou: {below.get('error')}")
+        self.assertFalse(below["passed"])
+        self.assertIsNone(
+            below.get("diagnosis"),
+            "caminho mono não tem suspeita do Needle 3 para diagnosticar",
+        )
+        self.assertIn("caminho mono", below.get("message", ""))
+        self.assertGreaterEqual(below["attempts"], 1)
 
         # Contrato do único tool de score: origem da rubrica sempre presente
         self.assertEqual(result["rubric_source"], "catalog:codigo_producao")

@@ -4,8 +4,10 @@ import threading
 import unittest
 
 from src.core.score_gate import (
+    CAVEAT_BAND,
     MAX_ATTEMPTS,
     SCORE_PREMISE_MAX_LEN,
+    caveat_decision,
     history_clear,
     history_get,
     history_increment_attempts,
@@ -14,6 +16,34 @@ from src.core.score_gate import (
     validate_score_premise,
 )
 from src.core.schemas import NoulRequest, ScoreRequest
+
+
+class TestCaveatBand(unittest.TestCase):
+    """Banda de indiferença (indifference zone) — decisão da fundadora, set/2026.
+
+    Faixa de 0.20 abaixo do corte: dentro dela a ressalva é permitida (com
+    zero suspeitas, arbitrado pelo chamador); abaixo dela o corte é estrito.
+    """
+
+    def test_banda_e_020(self):
+        self.assertEqual(CAVEAT_BAND, 0.20)
+
+    def test_score_no_corte_passa(self):
+        self.assertEqual(caveat_decision(3.40, 3.40), "pass")
+        self.assertEqual(caveat_decision(4.85, 3.40), "pass")
+
+    def test_score_na_banda_caveat(self):
+        self.assertEqual(caveat_decision(3.39, 3.40), "caveat")
+        self.assertEqual(caveat_decision(3.20, 3.40), "caveat")
+        self.assertEqual(caveat_decision(3.21, 3.40), "caveat")
+
+    def test_score_abaixo_da_banda_fail(self):
+        self.assertEqual(caveat_decision(3.19, 3.40), "fail")
+        self.assertEqual(caveat_decision(2.68, 3.40), "fail")
+
+    def test_faixa_calculada(self):
+        """Piso da banda: threshold - 0.20 (3.40 -> 3.20)."""
+        self.assertAlmostEqual(3.40 - CAVEAT_BAND, 3.20)
 
 
 class TestScoreGateDefaults(unittest.TestCase):
@@ -28,6 +58,29 @@ class TestScoreGateDefaults(unittest.TestCase):
 
     def test_premise_max_len_1500(self):
         self.assertEqual(SCORE_PREMISE_MAX_LEN, 1500)
+
+    def test_score_request_escala_invertida_levanta_validationerror(self):
+        """Caminho de erro real: min_score >= max_score é rejeitado pelo validator do schema."""
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            ScoreRequest(
+                premise="Pedido: x | Resultado: y",
+                min_score=5.0,
+                max_score=1.0,
+            )
+
+    def test_score_request_threshold_fora_da_escala_levanta_validationerror(self):
+        """Caminho de erro real: threshold fora de [min_score, max_score] é rejeitado."""
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            ScoreRequest(
+                premise="Pedido: x | Resultado: y",
+                min_score=1.0,
+                max_score=5.0,
+                threshold=9.0,
+            )
 
 
 class TestValidatePremise(unittest.TestCase):

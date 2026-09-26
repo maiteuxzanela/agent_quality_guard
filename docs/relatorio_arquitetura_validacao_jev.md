@@ -5,7 +5,7 @@
 **Data:** 23 de Setembro de 2026  
 **Status do Validador:** Homologado e Operacional em Produção  
 
-> **Atualização (25 de Setembro de 2026):** o fluxo de diagnóstico descrito nas seções 3–4 (choice flat sobre 10 categorias com opções nulas `sem_defeito_identificavel`/`evidencia_insuficiente`) foi **substituído**: `openjev_score_and_diagnose` opera sem choice — AST Guardrail fail-fast → Screener Needle 3 → Noul (P ≥ 0.78) → Score Laya, sobre **8 categorias técnicas** (AGENTS.md §2, README §3). O restante do relatório (premissa `Pedido|Resultado`, rubrica fechada, thresholds 0.78/3.40, anti-gaming e circuit breaker) segue vigente.
+> **Atualização (25 de Setembro de 2026):** o fluxo de diagnóstico descrito nas seções 3–4 (choice flat sobre 10 categorias com opções nulas `sem_defeito_identificavel`/`evidencia_insuficiente`) foi **substituído**: `openjev_score_and_diagnose` opera sem choice — AST Guardrail fail-fast → Screener Needle 3 → Noul (P ≥ 0.78) → Score Laya, sobre **10 categorias técnicas sem nulas** (8 duras + 2 de análise `tipagem_ausente`/`docstring_ausente`; AGENTS.md §2, README §3). O restante do relatório (premissa `Pedido|Resultado`, rubrica fechada, thresholds 0.78/3.40, anti-gaming e circuit breaker) segue vigente, com a **banda de indiferença [3.20, 3.40)** como única via de ressalva (abaixo de 3.20 reprova mesmo sem suspeitas).
 
 ---
 

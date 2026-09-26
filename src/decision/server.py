@@ -4,9 +4,9 @@ Expõe endpoints para noul, choice, score e monitoramento de saúde da GPU/VRAM.
 
 from contextlib import asynccontextmanager
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from ..core.schemas import (
@@ -72,17 +72,27 @@ def _block_if_unchanged(target_ws: str, git_state: str, hist: Optional[Dict]) ->
     )
 
 
-def _apply_borderline_mass_gate(resp: ScoreResponse) -> None:
-    """Paridade com MCP: aprovação matemática se borderline e distribuição saudável."""
-    if resp.passed or not getattr(resp, "borderline", False):
-        return
-    if not getattr(resp, "breakdown", None):
-        return
-    from src.decision.laya_adapter import evaluate_borderline_mass_gate
+def _apply_caveat_band(resp: ScoreResponse, threshold: Optional[float]) -> None:
+    """Paridade com MCP: banda de indiferença (CAVEAT_BAND) decide a ressalva.
 
-    if evaluate_borderline_mass_gate(resp.breakdown):
-        resp.passed = True
-        resp.approved_as_borderline = True
+    Nota em [threshold - CAVEAT_BAND, threshold) => passed=true com
+    approved_with_caveat=true (o endpoint HTTP não tem Screener — mesmas
+    condições do caminho mono do MCP). Abaixo da banda o corte é estrito.
+    O Borderline Mass Gate vira apenas telemetria (approved_as_borderline).
+    """
+    if resp.passed or threshold is None:
+        return
+    from src.core.score_gate import caveat_decision
+
+    if caveat_decision(resp.score, threshold) != "caveat":
+        return
+    resp.passed = True
+    resp.approved_with_caveat = True
+    if getattr(resp, "breakdown", None):
+        from src.decision.laya_adapter import evaluate_borderline_mass_gate
+
+        if evaluate_borderline_mass_gate(resp.breakdown)[0]:
+            resp.approved_as_borderline = True
 
 
 def create_app(
@@ -91,7 +101,12 @@ def create_app(
     model_id: str = "convaiinnovations/laya",
     max_length: int = 1024,
 ) -> FastAPI:
-    """Cria e configura a instância da aplicação FastAPI com backend Laya."""
+    """Cria e configura a instância da aplicação FastAPI com backend Laya.
+
+    Exemplo:
+        app = create_app(auto_load_model=True)
+        # ou com engine já carregada: app = create_app(engine=meu_engine)
+    """
 
     # Cria engine se não fornecida
     if engine is None:
@@ -100,7 +115,8 @@ def create_app(
         _engine = engine
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Carrega o modelo no startup (se configurado) e libera os recursos no shutdown."""
         # Startup
         if auto_load_model:
             try:
@@ -128,7 +144,8 @@ def create_app(
     # ==========================================================================
 
     @app.exception_handler(OpenJevNotReadyError)
-    async def not_ready_handler(request, exc: OpenJevNotReadyError):
+    async def not_ready_handler(request: Request, exc: OpenJevNotReadyError) -> JSONResponse:
+        """503 canônico quando o modelo ainda não está carregado na memória."""
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -139,7 +156,10 @@ def create_app(
         )
 
     @app.exception_handler(HardwareUnavailableError)
-    async def hardware_unavailable_handler(request, exc: HardwareUnavailableError):
+    async def hardware_unavailable_handler(
+        request: Request, exc: HardwareUnavailableError
+    ) -> JSONResponse:
+        """503 canônico quando GPU/VRAM/PyTorch não atendem aos pré-requisitos."""
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -150,7 +170,8 @@ def create_app(
         )
 
     @app.exception_handler(InferenceError)
-    async def inference_error_handler(request, exc: InferenceError):
+    async def inference_error_handler(request: Request, exc: InferenceError) -> JSONResponse:
+        """500 canônico para falha matemática ou OOM durante o forward pass."""
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
@@ -221,7 +242,7 @@ def create_app(
         _block_if_unchanged(target_ws, git_state, hist)
 
         resp = await app.state.engine.evaluate_score(request)
-        _apply_borderline_mass_gate(resp)
+        _apply_caveat_band(resp, request.threshold)
 
         if resp.passed:
             history_set(target_ws, {

@@ -12,7 +12,7 @@ conta igual — sem distinguir teste de produção na severidade (metadata
 
 Se score < 3.40 (reprovado pelo score), o PRÓPRIO SCRIPT — não a tool de
 score do MCP, cujo choice de diagnóstico foi removido — dispara
-`evaluate_choice` direto sobre DEFECT_OPTIONS (8 categorias técnicas);
+`evaluate_choice` direto sobre DEFECT_OPTIONS (10 categorias técnicas);
 a categoria esperada aqui é qualidade_de_testes
 (folha: ausencia_de_testes_unitarios / teste_tautologico_ou_falso_positivo).
 """
@@ -243,7 +243,7 @@ async def audit_target(engine: OpenJevEngine, needle: LocalNeedleEngine, target:
     print(f"  [Score] Nota: {score_resp.score:.2f} / 5.00 (corte {SCORE_THRESHOLD})")
     print(f"          Distribuição: {score_resp.breakdown}")
 
-    # 6. Diagnóstico flat (8 categorias) se reprovado
+    # 6. Diagnóstico flat (10 categorias) se reprovado
     diagnosis = None
     if score_resp.passed is False:
         scrub_head = (

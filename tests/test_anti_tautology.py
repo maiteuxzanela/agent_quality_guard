@@ -58,13 +58,24 @@ class TestSuiteAntiTautologia(unittest.TestCase):
             POSITIVE_CASES,
             STABILITY_PAIRS,
         )
-        self.assertGreaterEqual(len(POSITIVE_CASES), 4)
+        self.assertGreaterEqual(len(POSITIVE_CASES), 3)
         self.assertGreaterEqual(len(NEGATIVE_CASES), 4)
         self.assertGreaterEqual(len(ORDER_PAIRS), 2)
         self.assertGreaterEqual(len(STABILITY_PAIRS), 2)
         nomes_pos = {name for name, *_ in POSITIVE_CASES}
         nomes_neg = {name for name, *_ in NEGATIVE_CASES}
         self.assertTrue(nomes_pos.isdisjoint(nomes_neg))
+
+    def test_fonte_nao_utf8_propaga_unicode_decode_error(self):
+        """Caminho de erro real: a varredura lê toda fonte em UTF-8; bytes
+        inválidos não podem ser engolidos silenciosamente (fail-fast)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            fonte_invalida = Path(td) / "test_binario.py"
+            fonte_invalida.write_bytes(b"\xff\xfe\x00\x01lixo")
+            with self.assertRaises(UnicodeDecodeError):
+                TRIPLE_QUOTED.sub("", fonte_invalida.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

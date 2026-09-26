@@ -85,7 +85,12 @@ def request_score_and_diagnose(
     """Invoca formalmente o pipeline openjev_score_and_diagnose via socket IPC.
 
     Executa multi-etapas via diffs reais, anti-premise gaming, persistência de tentativas
-    e diagnóstico via Screener Needle 3 (8 categorias) + Noul contra o modelo Laya na GPU.
+    e diagnóstico via Screener Needle 3 (10 categorias) + Noul contra o modelo Laya na GPU.
+
+    Exemplo:
+        >>> resp = request_score_and_diagnose("Pedido: add | Resultado: add(a, b)", "/tmp/ws")
+        >>> resp["passed"] in (True, False)
+        True
     """
     target_ws = str(Path(workspace).resolve())
     payload = {

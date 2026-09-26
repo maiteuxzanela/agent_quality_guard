@@ -68,21 +68,21 @@ Calcula a distribuição de probabilidade sobre um array de opções em única p
 - **Uso:** Decisão de qual subagente (`backend`, `security`, `frontend`, `devops`, `documentation`) deve assumir a subtarefa. Acurácia comprovada de 89.6% com latência de ~627 ms na GPU.
 
 ### 3. `openjev_score_and_diagnose` (Score + Diagnóstico sem choice)
-**Única tool de score do pipeline MCP** (a tool `openjev_score` foi expurgada em set/2026). Compara a entrega contra a rubrica de qualidade e mapeia a escala nativa ordinal (0–4) para a escala contínua JEV de 1.0 a 5.0 ($\text{Score} = 1.0 + \text{Ordinal}$). O diagnóstico de defeito **não usa mais choice flat** (removido em set/2026): quem diagnostica é o **Needle 3 Screener estrutural** (gatilhos determinísticos sobre as **8 categorias reais** de `DEFECT_OPTIONS`, sem categorias nulas) arbitrado pelo **JEV Noul (P ≥ 0.78)**.
+**Única tool de score do pipeline MCP** (a tool `openjev_score` foi expurgada em set/2026). Compara a entrega contra a rubrica de qualidade e mapeia a escala nativa ordinal (0–4) para a escala contínua JEV de 1.0 a 5.0 ($\text{Score} = 1.0 + \text{Ordinal}$). O diagnóstico de defeito **não usa mais choice flat** (removido em set/2026): quem diagnostica é o **Needle 3 Screener estrutural** (gatilhos determinísticos sobre as **10 categorias reais** de `DEFECT_OPTIONS`, sem categorias nulas) arbitrado pelo **JEV Noul (P ≥ 0.78)**.
 
 **Pipeline em 4 camadas:**
-1. **AST Guardrail fail-fast:** violação determinística (SQL injection, `eval`, mock em produção, segredo hardcoded, ...) ⇒ `passed=false` com `score=1.0` e `description` `🚨 [Needle 3 AST Block] ...` — sem inferência. *Exceção (mantida por decisão):* a regra `mock_in_production` usa a categoria `mock_stub_em_producao`, fora das 8 de `DEFECT_OPTIONS`.
-2. **Needle 3 Screener:** extrai os símbolos AST do diff e dispara triggers (`open()` fora de try/with, `# TODO:`, `while True`, `os.getenv` sem default, ifs aninhados ≥ 3, ...). Cada suspeita vai ao Noul: **confirmada (P ≥ 0.78)** ⇒ reprovação com categoria/arquivo/linhas; **refutada** ⇒ `refuted_suspicions`.
-3. **Score Laya (corte ≥ 3.40) + decisão:** zero suspeitas ⇒ `passed=true` (nota < corte vira `approved_with_caveat=true` com `message` e `score_margin`); suspeita presente + nota < corte ⇒ `passed=false` com `diagnosis` = suspeita de maior probabilidade para **INVESTIGAÇÃO** no disco, mesmo com Noul negativo; nota ≥ corte + suspeitas refutadas ⇒ `passed=true`.
-4. **Caminho mono** (workspace sem símbolos AST): score ≥ corte aprova; `borderline` + Mass Gate saudável (≥ 0.85 / ≤ 0.12) aprova como `approved_as_borderline`; senão reprovado com `diagnosis=None` e `message` do caminho mono.
+1. **AST Guardrail fail-fast:** violação determinística (SQL injection, `eval`, mock em produção, segredo hardcoded, ...) ⇒ `passed=false` com `score=1.0` e `description` `🚨 [Needle 3 AST Block] ...` — sem inferência. *Exceção (mantida por decisão):* a regra `mock_in_production` usa a categoria `mock_stub_em_producao`, fora das 10 de `DEFECT_OPTIONS`.
+2. **Needle 3 Screener:** extrai os símbolos AST do diff e dispara triggers (`open()` fora de try/with, `# TODO:`, `while True`, `os.getenv` sem default, ifs aninhados ≥ 3, assinatura sem anotação de tipo, docstring ausente, ...). Cada suspeita vai ao Noul: **confirmada (P ≥ 0.78) — categoria dura** ⇒ reprovação com categoria/arquivo/linhas (**categoria de análise** `tipagem_ausente`/`docstring_ausente` não veta nota ≥ corte); **refutada** ⇒ `refuted_suspicions`.
+3. **Score Laya (corte ≥ 3.40; banda de indiferença `CAVEAT_BAND = 0.20`):** zero suspeitas + nota ≥ 3.40 ⇒ `passed=true`; zero suspeitas + nota em **[3.20, 3.40)** ⇒ `approved_with_caveat=true` com `message` e `score_margin`; zero suspeitas + nota **< 3.20** ⇒ `passed=false` com `diagnosis=None` e mensagem da banda (**não existe ressalva abaixo de 3.20**); suspeita presente + nota < corte ⇒ `passed=false` com `diagnosis` = suspeita de maior probabilidade para **INVESTIGAÇÃO** no disco, mesmo com Noul negativo; nota ≥ corte + suspeitas refutadas ⇒ `passed=true`.
+4. **Caminho mono** (workspace sem símbolos AST): nota **na banda** ⇒ `approved_with_caveat=true` + `approved_as_borderline` (massa saudável ≥ 0.85 / ≤ 0.12); **abaixo da banda** ⇒ reprovado com `diagnosis=None` e `message` do caminho mono.
 
 **Contrato de score:**
-- **Uso:** Validação de conformidade antes de aceitar código gerado. Nota de corte calibrada padrão: **$\ge 3.40$**. Se `score < 3.40`, o subagente entra em refatoração real no disco (proteção anti-premise gaming e circuit breaker universal de **5 tentativas** (`MAX_ATTEMPTS`) — a Saída de Emergência é destravada imediatamente na 5ª).
+- **Uso:** Validação de conformidade antes de aceitar código gerado. Nota de corte calibrada padrão: **$\ge 3.40$** (banda de indiferença **[3.20, 3.40)** = única via de ressalva; **abaixo de 3.20 reprovado mesmo com zero suspeitas**). Quando `passed=false`, o subagente entra em refatoração real no disco (proteção anti-premise gaming e circuit breaker universal de **5 tentativas** (`MAX_ATTEMPTS`) — a Saída de Emergência é destravada imediatamente na 5ª).
 - **Premissa:** padrão factual obrigatório `Pedido do Prompt: ... | Resultado Executado: ...`, **máximo 1500 caracteres** — o MCP recusa (não trunca) premissas fora do padrão ou acima do teto.
 - **Rubrica:** resolvida exclusivamente do catálogo fechado `RUBRIC_CATALOG` (`src/core/schemas.py`) pelo parâmetro `task_type` (chave única `codigo_producao`; chaves legadas `entrega`/`auditoria` mapeiam para ela); o campo `rubric` livre do cliente é **ignorado** (`rubric_source: catalog:<task_type>`).
 - **Incerteza:** a resposta inclui `score_margin` (massa probabilística acima − abaixo do threshold) e `borderline` (≥35% de cada lado da fronteira). Se `borderline: true`, a margem deve ser mencionada na resposta final (AGENTS.md §4.7).
 - **Observabilidade de device:** `device` e `dtype` na `ScoreResponse` expõem se a nota veio de fp16-GPU ou fp32-CPU (migração em OOM desloca o numérico perto do corte).
-- **Regressão de notas:** `tests/test_score_calibration.py` mantém golden set de casos com resposta conhecida (positivos ≥ 3.40 e negativos semânticos < 3.40) contra o motor Laya real.
+- **Regressão de notas:** `tests/test_score_calibration.py` mantém golden set de casos com resposta conhecida (positivos aprovados — nota ≥ 3.40 ou banda com ressalva —; negativos semânticos reprovados; e o caso **sub-banda** `bugfix_off_by_one_com_regressao`, sentinela de que nota < 3.20 reprova mesmo com zero suspeitas) contra o motor Laya real.
 
 **Contrato de diagnóstico** (origem: Screener + Noul, ou AST Guardrail):
 - `diagnosis.selected`: a categoria identificada (ex: `seguranca`, `robustez_excecoes_recursos`)
@@ -92,7 +92,7 @@ Calcula a distribuição de probabilidade sobre um array de opções em única p
 - `diagnosis.candidate_defects`: folhas candidatas (as de `DEFECT_MEMBERS`) para guiar a refatoração
 - `refuted_suspicions`: suspeitas estruturais refutadas pelo Noul (P < 0.78) que ainda assim exigem investigação quando a nota < corte
 
-**Taxonomia de defeitos (8 categorias flat — sem nulas):**
+**Taxonomia de defeitos (10 categorias flat — sem nulas; 8 duras + 2 de análise):**
 
 | # | Categoria | Folhas candidatas (`candidate_defects`) |
 |---|---|---|
@@ -104,6 +104,10 @@ Calcula a distribuição de probabilidade sobre um array de opções em única p
 | 6 | `performance_escopo_estilo` | `gargalo_de_performance_ou_complexidade`, `alucinacao_de_efeitos_colaterais_externos`, `desvio_de_escopo_ou_overengineering`, `inconsistencia_estilistica_ou_linting_estrito` |
 | 7 | `requisito_incompleto_ou_ausente` | `funcionalidade_do_pedido_ausente`, `requisito_do_prompt_ignorado`, `caso_de_borda_do_pedido_faltando` |
 | 8 | `documentacao_configuracao` | `documentacao_ausente_ou_incorreta`, `configuracao_ou_governanca_incorreta` |
+| 9 | `tipagem_ausente` *(análise)* | `parametro_sem_anotacao_de_tipo`, `retorno_sem_anotacao_de_tipo`, `generico_nao_especificado` |
+| 10 | `docstring_ausente` *(análise)* | `docstring_de_funcao_ausente`, `docstring_de_classe_ausente`, `contrato_de_uso_nao_documentado` |
+
+As duas últimas categorias (**análise**, em `QUALITY_DEFECT_CATEGORIES`) não vetam nota ≥ corte quando confirmadas pelo Noul — com nota < corte reprovam/diagnosticam como qualquer outra.
 
 As categorias nulas `sem_defeito_identificavel` e `evidencia_insuficiente` foram **aposentadas** (set/2026): o universo de decisão é só técnico. Instruções e descrições são textos curtos medidos em `head_max_len=192` para **nenhum truncamento** — ver `scripts/measure_diag_choice_tokens.py` (ainda relevante para `openjev_choice` de roteamento e scripts de auditoria externos).
 
@@ -123,7 +127,7 @@ Script genérico que aplica o mesmo molde dos audits arquiteturais aos **4 proje
 
 1. **Scrub determinístico léxico** — varre arquivos de código (excluindo `node_modules`, `.venv`, etc.) por 10 padrões (`unittest.mock`, `MagicMock`, `@patch`, `jest.mock`, `sinon`, `__mocks__/`, ...) e registra `file:line`. Qualquer ocorrência conta igual (sem distinguir teste de produção na severidade — `em_testes`/`em_producao` é só metadata).
 2. **Needle 3** — trechos cirúrgicos de mocks via `LocalNeedleEngine` (`max_tokens=1200`).
-3. **Cascata JEV** — `choice` (`sem_mocks` | `apenas_em_testes` | `mocks_em_producao`) → `noul` (0.78) → `score` (3.40, rubrica `codigo_producao` do catálogo fechado) → se reprovado, o **próprio script** dispara diagnóstico via `evaluate_choice` direto sobre `DEFECT_OPTIONS` (8 categorias; a tool de score do MCP não tem mais choice de diagnóstico).
+3. **Cascata JEV** — `choice` (`sem_mocks` | `apenas_em_testes` | `mocks_em_producao`) → `noul` (0.78) → `score` (3.40, rubrica `codigo_producao` do catálogo fechado) → se reprovado, o **próprio script** dispara diagnóstico via `evaluate_choice` direto sobre `DEFECT_OPTIONS` (10 categorias; a tool de score do MCP não tem mais choice de diagnóstico).
 4. **Saída** — `mocks_audit_results.json` na raiz do projeto (ocorrências completas, contagens, notas, diagnóstico).
 
 ```bash

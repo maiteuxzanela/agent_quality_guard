@@ -26,6 +26,37 @@ logger = logging.getLogger("jev.score_gate")
 SCORE_PREMISE_MAX_LEN = 1500
 MAX_ATTEMPTS = 5
 
+# Banda de indiferença (indifference zone) da nota de corte — decisão da
+# fundadora (set/2026), lastreada na literatura de cut-scores de mastery
+# testing (Fhanér 1974; Wilcox 1976; van der Linden 1980): scores dentro de
+# CAVEAT_BAND abaixo do corte são tratados como zona de fronteira — aprovados
+# APENAS com ressalva quando o Screener não aponta nenhuma suspeita; abaixo da
+# banda o corte é estrito (passed=false mesmo com zero suspeitas).
+CAVEAT_BAND = 0.20
+
+
+def caveat_decision(score: float, threshold: float) -> str:
+    """Decisão pura da banda de indiferença: ``"pass"`` | ``"caveat"`` | ``"fail"``.
+
+    - ``score >= threshold``                       → "pass"
+    - ``threshold - CAVEAT_BAND <= score < threshold`` → "caveat" (ressalva)
+    - ``score < threshold - CAVEAT_BAND``           → "fail" (corte estrito)
+
+    Função pura, sem I/O. A banda é o único critério da ressalva de nota; a
+    presença/ausência de suspeitas do Screener é arbitrária pelo chamador.
+
+    Exemplo:
+        >>> caveat_decision(3.45, 3.40)
+        'pass'
+        >>> caveat_decision(3.30, 3.40)
+        'caveat'
+    """
+    if score >= threshold:
+        return "pass"
+    if score >= threshold - CAVEAT_BAND:
+        return "caveat"
+    return "fail"
+
 _score_history: Dict[str, dict] = {}
 _stages_cache: Dict[str, Dict[str, dict]] = {}
 _score_history_lock = threading.Lock()

@@ -48,6 +48,7 @@ from src.core.schemas import (
     ScoreDiagnoseResponse,
     SpawnSubagentRequest,
     SpawnSubagentResponse,
+    QUALITY_DEFECT_CATEGORIES,
 )
 from src.core.diff_inspector import extract_workspace_stages, format_stage_premise
 from src.memory.ast_diff_extractor import extract_workspace_ast_symbols, AstSymbolSlice
@@ -349,6 +350,8 @@ DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["codigo_producao"]
 from src.core.score_gate import (  # noqa: E402
     MAX_ATTEMPTS as _SCORE_GATE_MAX_ATTEMPTS,
     SCORE_PREMISE_MAX_LEN,
+    CAVEAT_BAND as _CAVEAT_BAND,
+    caveat_decision as _caveat_decision,
     get_workspace_git_signature as _score_gate_git_signature,
     history_clear as _history_clear,
     history_get as _history_get,
@@ -470,15 +473,80 @@ def _cache_passed_stages(
             })
 
 
+def _is_test_symbol_path(file_path: str) -> bool:
+    """True quando o símbolo vem de um diretório de testes (tests/, test/)."""
+    return any(part in ("tests", "test") for part in file_path.split("/"))
+
+
+def _truncate_at_line(text: str, limit: int) -> str:
+    """Trunca `text` em no máximo `limit` caracteres, SEMPRE em fronteira de linha.
+
+    O corte cego de caracteres (ex.: `text[:350]`) podia fatiar uma declaração no
+    meio (ex.: `out: ` de `out: list[int] = []`), apresentando ao Laya código
+    sintaticamente quebrado e derrubando a nota mesmo com entrega impecável.
+    """
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    cut = window.rfind("\n")
+    if cut < 60:
+        return window
+    return window[:cut]
+
+
+def _build_code_context(premise: str, symbols: List[Any], headroom: int = 1480) -> str:
+    """Seleciona os snippets de código que enriquecem a premissa de score.
+
+    - Ordem estável alternando símbolos de produção e de teste (round-robin),
+      preenchendo o orçamento de caracteres em vez de um cap cego de 3 símbolos;
+    - garante pelo menos UM snippet de teste quando o diff contém testes, para
+      que o critério "cobertura de testes reais" da rubrica codigo_producao
+      tenha evidência de código (não só prosa na premissa);
+    - nunca excede o teto da premissa combinada (o score_gate recusa > 1500).
+    """
+    marker = "\n\nSímbolos alterados:\n"
+    if "\nSímbolos alterados:\n" in premise:
+        return ""
+    budget = headroom - len(premise) - len(marker)
+    if budget < 60:
+        return ""
+    src_syms = [s for s in symbols if not _is_test_symbol_path(s.file_path)]
+    test_syms = [s for s in symbols if _is_test_symbol_path(s.file_path)]
+    ordered: List[Any] = []
+    for i in range(max(len(src_syms), len(test_syms))):
+        if i < len(src_syms):
+            ordered.append(src_syms[i])
+        if i < len(test_syms):
+            ordered.append(test_syms[i])
+    parts: List[str] = []
+    used = 0
+    for s in ordered:
+        # full_context inclui o cabeçalho de imports: sem ele, trechos de teste
+        # exibem chamadas sem definição (ex.: add(...)) e leem como código quebrado.
+        piece = (
+            f"Arquivo {s.file_path} ({s.symbol_type} {s.symbol_name}):\n"
+            f"{_truncate_at_line(s.full_context, 350)}"
+        )
+        cost = len(piece) + (5 if parts else 0)
+        if used + cost > budget:
+            break
+        parts.append(piece)
+        used += cost
+    return "\n---\n".join(parts)
+
+
 def _build_failure_diagnosis(
     confirmed_defects: List[Dict[str, Any]],
     refuted_suspicions: List[Dict[str, Any]],
     delivery_score: float,
     threshold: float,
     latency_ms: float,
+    quality_confirmed: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple:
-    """Monta ``(diagnosis, message)`` da reprovação: defeito confirmado pelo Noul
-    ou suspeita estrutural que exige investigação no disco."""
+    """Monta ``(diagnosis, message)`` da reprovação por prioridade:
+    (1) defeito duro confirmado pelo Noul, (2) suspeita dura não-resolvida de
+    maior probabilidade (investigar mesmo com Noul negativo), (3) categoria de
+    análise confirmada (tier qualidade — só quando não há suspeita dura)."""
     if confirmed_defects:
         confirmed_defects.sort(key=lambda d: d["probability"], reverse=True)
         top_defect = confirmed_defects[0]
@@ -496,24 +564,66 @@ def _build_failure_diagnosis(
             f"{top_defect['evidence']}"
         )
         return diag, msg
-    top_susp = max(refuted_suspicions, key=lambda r: r["probability"])
-    diag = DiagnosisResult(
-        selected=top_susp["category"],
-        confidence=top_susp["probability"],
-        probabilities={top_susp["category"]: top_susp["probability"]},
-        description=DEFECT_DESCRIPTIONS.get(top_susp["category"], ""),
-        candidate_defects=list(DEFECT_MEMBERS.get(top_susp["category"], [])),
-        diagnosis_latency_ms=latency_ms,
+    if refuted_suspicions:
+        top_susp = max(refuted_suspicions, key=lambda r: r["probability"])
+        diag = DiagnosisResult(
+            selected=top_susp["category"],
+            confidence=top_susp["probability"],
+            probabilities={top_susp["category"]: top_susp["probability"]},
+            description=DEFECT_DESCRIPTIONS.get(top_susp["category"], ""),
+            candidate_defects=list(DEFECT_MEMBERS.get(top_susp["category"], [])),
+            diagnosis_latency_ms=latency_ms,
+        )
+        msg = (
+            f"Score insuficiente ({delivery_score:.2f}/{threshold:.2f}) com suspeita estrutural "
+            f"do Needle 3 em {top_susp['file_path']}::{top_susp['symbol_name']} "
+            f"(linhas {top_susp['start_line']}-{top_susp['end_line']}, categoria "
+            f"'{top_susp['category']}'): {top_susp['evidence']}. O Noul refutou a hipótese "
+            f"(P={top_susp['probability']:.1%} < 0.78), mas a nota está abaixo do corte: "
+            "investigar o símbolo no disco antes de reavaliar."
+        )
+        return diag, msg
+    if quality_confirmed:
+        quality_confirmed.sort(key=lambda d: d["probability"], reverse=True)
+        top_quality = quality_confirmed[0]
+        diag = DiagnosisResult(
+            selected=top_quality["category"],
+            confidence=top_quality["probability"],
+            probabilities={top_quality["category"]: top_quality["probability"]},
+            description=top_quality["description"],
+            candidate_defects=top_quality["candidate_defects"],
+            diagnosis_latency_ms=latency_ms,
+        )
+        msg = (
+            f"Categoria de análise '{top_quality['category']}' confirmada pelo Noul "
+            f"(P={top_quality['probability']:.1%}) em {top_quality['file_path']}::"
+            f"{top_quality['symbol_name']} (linhas {top_quality['start_line']}-{top_quality['end_line']}): "
+            f"{top_quality['evidence']} Score ({delivery_score:.2f}/{threshold:.2f}) abaixo do corte: "
+            "investigar e refinar o símbolo no disco antes de reavaliar."
+        )
+        return diag, msg
+    raise ValueError(
+        "Nenhuma suspeita disponível para diagnosis: chamador deve barrar "
+        "reprovação sem suspeita (caminho da banda de indiferença)."
     )
-    msg = (
-        f"Score insuficiente ({delivery_score:.2f}/{threshold:.2f}) com suspeita estrutural "
-        f"do Needle 3 em {top_susp['file_path']}::{top_susp['symbol_name']} "
-        f"(linhas {top_susp['start_line']}-{top_susp['end_line']}, categoria "
-        f"'{top_susp['category']}'): {top_susp['evidence']}. O Noul refutou a hipótese "
-        f"(P={top_susp['probability']:.1%} < 0.78), mas a nota está abaixo do corte: "
-        "investigar o símbolo no disco antes de reavaliar."
+
+
+def _caveat_message(delivery_score: float, threshold: float, zero_suspicions: bool) -> Optional[str]:
+    """Mensagem da aprovação com ressalva na banda de indiferença (None se não é ressalva)."""
+    floor = threshold - _CAVEAT_BAND
+    if delivery_score >= threshold:
+        return None
+    if zero_suspicions:
+        return (
+            f"Entrega aprovada com ressalva: score {delivery_score:.2f} caiu na banda de "
+            f"indiferença [{floor:.2f}, {threshold:.2f}) abaixo do corte de {threshold:.2f} e o "
+            "Needle 3 não apontou nenhuma suspeita estrutural a investigar."
+        )
+    return (
+        f"Entrega aprovada com ressalva: score {delivery_score:.2f} caiu na banda de "
+        f"indiferença [{floor:.2f}, {threshold:.2f}) e o workspace permanece idêntico ao "
+        "aprovado anteriormente (cache de estágios)."
     )
-    return diag, msg
 
 
 
@@ -526,10 +636,12 @@ def _build_failure_diagnosis(
 # Circuit breaker (MAX_ATTEMPTS) vem de score_gate — fonte única.
 
 # NOTA (set/2026): o choice de diagnóstico flat foi removido do fluxo de score.
-# O diagnóstico vem do Needle 3 Screener (8 categorias técnicas) confirmado/
-# arbitrado pelo JEV Noul (P >= 0.78); as categorias nulas
-# (`sem_defeito_identificavel`, `evidencia_insuficiente`) deixaram de existir
-# no universo de decisão — ver DEFECT_OPTIONS em src/core/schemas.py.
+# O diagnóstico vem do Needle 3 Screener (10 categorias técnicas: 8 duras + 2 de
+# análise tipagem/docstring) confirmado/arbitrado pelo JEV Noul (P >= 0.78); as
+# categorias nulas (`sem_defeito_identificavel`, `evidencia_insuficiente`)
+# deixaram de existir no universo de decisão — ver DEFECT_OPTIONS em
+# src/core/schemas.py. A ressalva de nota segue a banda de indiferença
+# CAVEAT_BAND (src/core/score_gate.py).
 
 
 @app.tool(
@@ -537,13 +649,16 @@ def _build_failure_diagnosis(
     description=(
         "Avaliacao de qualidade com diagnostico estruturado de defeito, sem choice. "
         "Pipeline: Needle 3 AST Guardrail (fail-fast) -> Screener estrutural sobre "
-        "8 categorias reais -> JEV Noul (P >= 0.78) em cada suspeita -> Score Laya. "
-        "Se o Screener nao aponta NENHUMA suspeita: passed=true; score < threshold "
-        "vira passed=true com approved_with_caveat=true (divulgar score_margin). "
-        "Se o Screener aponta suspeitas: defeito confirmado pelo Noul => passed=false "
-        "com a categoria, arquivo, linhas e candidate_defects; todas refutadas mas "
-        "score < threshold => passed=false e diagnosis aponta a suspeita de maior "
-        "probabilidade para INVESTIGACAO (mesmo com Noul negativo). "
+        "10 categorias reais (8 duras + 2 de análise) -> JEV Noul (P >= 0.78) em "
+        "cada suspeita -> Score Laya. Score >= threshold: passed=true (defeito duro "
+        "confirmado pelo Noul ainda reprova). Score na banda de indiferença "
+        "[threshold - 0.20, threshold): passed=true com approved_with_caveat=true "
+        "APENAS com zero suspeitas do Screener (divulgar score_margin). Abaixo da "
+        "banda (< threshold - 0.20): passed=false mesmo com zero suspeitas. "
+        "Suspeita confirmada pelo Noul => passed=false com a categoria, arquivo, "
+        "linhas e candidate_defects; todas refutadas mas score < threshold => "
+        "passed=false e diagnosis aponta a suspeita de maior probabilidade para "
+        "INVESTIGACAO (mesmo com Noul negativo). "
         "Circuito breaker apos 5 tentativas."
     ),
 )
@@ -557,7 +672,14 @@ async def openjev_score_and_diagnose(
     threshold: float = 3.40,
     reset_history: bool = False,
 ) -> dict:
-    """Score + diagnóstico via Screener Needle 3 (8 categorias) + Noul — sem choice."""
+    """Score + diagnóstico via Screener Needle 3 (10 categorias) + Noul — sem choice.
+
+    Exemplo:
+        resp = await openjev_score_and_diagnose(
+            premise="Pedido: add(a, b). | Resultado: add implementada e testada.",
+            workspace="/caminho/do/repositorio",
+        )
+    """
     premise_error = _validate_score_premise(premise)
     if premise_error:
         return {"error": premise_error, "premise_rejected": True, "diagnosis": None}
@@ -658,6 +780,7 @@ async def openjev_score_and_diagnose(
         suspicions_by_symbol = _screen_symbols(ast_symbols)
         t_start_noul = time.perf_counter()
         confirmed_defects: List[Dict[str, Any]] = []
+        quality_confirmed: List[Dict[str, Any]] = []
         refuted_suspicions: List[Dict[str, Any]] = []
 
         # Indexa os símbolos por chave para busca O(1) imediata e laço plano linear
@@ -683,7 +806,7 @@ async def openjev_score_and_diagnose(
             )
             noul_resp = await engine.evaluate_noul(noul_req)
             if noul_resp.passed and noul_resp.probability >= 0.78:
-                confirmed_defects.append({
+                entry = {
                     "category": susp.category,
                     "symbol_name": symbol.symbol_name,
                     "file_path": symbol.file_path,
@@ -693,7 +816,15 @@ async def openjev_score_and_diagnose(
                     "evidence": susp.trigger_evidence,
                     "description": DEFECT_DESCRIPTIONS.get(susp.category, ""),
                     "candidate_defects": list(DEFECT_MEMBERS.get(susp.category, [])),
-                })
+                }
+                # Tier de análise (tipagem/docstring): confirmado só reprova
+                # quando a nota está abaixo do corte (não veta score >= corte).
+                bucket = (
+                    quality_confirmed
+                    if susp.category in QUALITY_DEFECT_CATEGORIES
+                    else confirmed_defects
+                )
+                bucket.append(entry)
             else:
                 refuted_suspicions.append({
                     "category": susp.category,
@@ -705,14 +836,11 @@ async def openjev_score_and_diagnose(
                     "evidence": susp.trigger_evidence,
                 })
 
-        # Monta a premissa factual enriquecida com o código real dos símbolos alterados
-        code_snippets = []
-        for s in ast_symbols[:3]:
-            code_snippets.append(f"Arquivo {s.file_path} ({s.symbol_type} {s.symbol_name}):\n{s.content[:350]}")
-        code_context = "\n---\n".join(code_snippets)
-
+        # Monta a premissa factual enriquecida com o código real dos símbolos
+        # alterados (seleção orçamentária com garantia de cobertura de testes).
+        code_context = _build_code_context(premise, ast_symbols)
         combined_premise = premise
-        if code_context and "\nSímbolos alterados:\n" not in premise:
+        if code_context:
             combined_premise = f"{premise}\n\nSímbolos alterados:\n{code_context}"
         if len(combined_premise) > 1480:
             combined_premise = combined_premise[:1480]
@@ -767,28 +895,36 @@ async def openjev_score_and_diagnose(
             delivery_score = max(delivery_score, float(hist.get("last_score", threshold)))
 
         # ── Decisão final (sem choice) ───────────────────────────────────────
-        # 1. Defeito confirmado pelo Noul (P >= 0.78) => reprova.
-        # 2. Needle 3 sem NENHUMA suspeita estrutural => aprova; nota < corte
-        #    vira aprovação com ressalva (approved_with_caveat).
-        # 3. Needle 3 apontou qualquer uma das 8 categorias e a nota ficou
-        #    abaixo do corte => REPROVA e manda investigar — mesmo que o Noul
-        #    tenha refutado a hipótese (P < 0.78): suspeita estrutural +
-        #    nota baixa exige apuração humana no disco.
+        # 1. Defeito DURO confirmado pelo Noul (P >= 0.78) => reprova sempre
+        #    (categoria de análise confirmada não veta score >= corte).
+        # 2. score >= threshold => aprova (suspeitas refutadas não vetam).
+        # 3. Banda de indiferença [threshold - CAVEAT_BAND, threshold) com ZERO
+        #    suspeitas => aprova com ressalva (approved_with_caveat).
+        # 4. Qualquer suspeita estrutural + nota < corte => REPROVA com
+        #    diagnosis para investigação — mesmo com Noul negativo.
+        # 5. Nota abaixo da banda => REPROVA mesmo com zero suspeitas (corte
+        #    estrito da zona de indiferença — decisão da fundadora, set/2026).
         zero_suspicions = not all_screened_items
         score_ok = delivery_score >= threshold
+        band_decision = _caveat_decision(delivery_score, threshold)
 
         if confirmed_defects:
             passed_delivery = False
-        elif zero_suspicions or score_ok or all_stages_cached:
+        elif score_ok or all_stages_cached:
+            passed_delivery = True
+        elif band_decision == "caveat" and zero_suspicions:
             passed_delivery = True
         else:
             passed_delivery = False
 
-        is_caveat = passed_delivery and (not score_ok) and zero_suspicions
+        is_caveat = passed_delivery and (not score_ok)
 
-        # Na reprovação por suspeita não-resolvida, marca as etapas afetadas
+        # Na reprovação por suspeita não-resolvida (duras refutadas ou de
+        # análise confirmada), marca as etapas afetadas para o refino.
         if not passed_delivery and not confirmed_defects:
-            _flag_suspect_failed_stages(evaluated_stages, refuted_suspicions)
+            _flag_suspect_failed_stages(
+                evaluated_stages, refuted_suspicions + quality_confirmed
+            )
 
         failed_keys = {st.stage_id for st in evaluated_stages if not st.passed}
         failed_keys |= {f"{d['file_path']}::{d['symbol_name']}" for d in confirmed_defects}
@@ -797,11 +933,7 @@ async def openjev_score_and_diagnose(
         passed_syms = total_syms - failed_syms
 
         if passed_delivery:
-            caveat_msg = (
-                f"Entrega aprovada com ressalva: o Needle 3 não apontou nenhuma das 8 categorias de "
-                f"defeito no diff; score contínuo ({delivery_score:.2f}) abaixo do corte de {threshold:.2f} "
-                "aceito por não haver suspeita estrutural a investigar."
-            ) if is_caveat else None
+            caveat_msg = _caveat_message(delivery_score, threshold, zero_suspicions)
 
             # Persiste estágios aprovados no cache do workspace
             _cache_passed_stages(evaluated_stages, symbols_map, target_workspace)
@@ -837,15 +969,28 @@ async def openjev_score_and_diagnose(
                 message=caveat_msg,
             ).model_dump()
         else:
-            # Reprovado: defeito confirmado pelo Noul OU suspeita estrutural
-            # não-resolvida com score abaixo do corte. Montagem extraída para
+            # Reprovado: defeito duro confirmado pelo Noul, categoria de
+            # análise confirmada, suspeita não-resolvida com nota < corte, ou
+            # nota abaixo da banda de indiferença. Montagem extraída para
             # _build_failure_diagnosis (profundidade de condicional <= 2).
-            global_diag, diag_msg = _build_failure_diagnosis(
-                confirmed_defects,
-                refuted_suspicions,
-                delivery_score,
-                threshold,
-                round((time.perf_counter() - t_start_noul) * 1000.0, 2),
+            latency_ms = round((time.perf_counter() - t_start_noul) * 1000.0, 2)
+            global_diag, diag_msg = (
+                _build_failure_diagnosis(
+                    confirmed_defects,
+                    refuted_suspicions,
+                    delivery_score,
+                    threshold,
+                    latency_ms,
+                    quality_confirmed,
+                )
+                if all_screened_items
+                else (
+                    None,
+                    f"Score insuficiente ({delivery_score:.2f}/{threshold:.2f}): abaixo da banda "
+                    f"de indiferença [{threshold - _CAVEAT_BAND:.2f}, {threshold:.2f}) da nota de "
+                    "corte. Mesmo sem nenhuma suspeita do Screener, o corte é estrito — refatore "
+                    "o artefato no disco e reavalie.",
+                )
             )
 
             prev_attempts = hist.get("attempts", 0) if hist else 0
@@ -938,43 +1083,51 @@ async def openjev_score_and_diagnose(
             emergency_exit_unlocked=False,
         ).model_dump()
 
-    # Borderline Mass Gate
-    if score_resp.borderline:
+    # Banda de indiferença (caminho mono, sem Screener para triar): nota na
+    # faixa [threshold - CAVEAT_BAND, threshold) => aprova com ressalva; o
+    # Borderline Mass Gate vira telemetria (approved_as_borderline).
+    if _caveat_decision(round(score_resp.score, 2), threshold) == "caveat":
         mass_approved, p_healthy, p_flawed = evaluate_borderline_mass_gate(
             score_resp.breakdown,
             healthy_min=BORDERLINE_HEALTHY_MIN_MASS,
             flawed_max=BORDERLINE_FLAWED_MAX_MASS,
         )
-        if mass_approved:
-            _history_set(target_workspace, {
-                "passed": True,
-                "attempts": 0,
-                "git_state": current_git_state,
-                "last_score": round(score_resp.score, 2),
-            })
-            mono_stage.passed = True
-            return ScoreDiagnoseResponse(
-                score=round(score_resp.score, 2),
-                max_score=max_score,
-                normalized_score=round(score_resp.normalized_score, 4),
-                passed=True,
-                threshold=threshold,
-                breakdown=score_resp.breakdown,
-                score_latency_ms=round(score_resp.latency_ms, 2),
-                score_margin=score_resp.score_margin,
-                borderline=score_resp.borderline,
-                task_type=task_type_key,
-                rubric_source=f"catalog:{task_type_key}",
-                diagnosis=None,
-                approved_as_borderline=True,
-                stages=[mono_stage],
-                total_stages=1,
-                passed_stages=1,
-                failed_stages=0,
-                attempts=0,
-                max_attempts=MAX_ATTEMPTS,
-                emergency_exit_unlocked=False,
-            ).model_dump()
+        _history_set(target_workspace, {
+            "passed": True,
+            "attempts": 0,
+            "git_state": current_git_state,
+            "last_score": round(score_resp.score, 2),
+        })
+        mono_stage.passed = True
+        return ScoreDiagnoseResponse(
+            score=round(score_resp.score, 2),
+            max_score=max_score,
+            normalized_score=round(score_resp.normalized_score, 4),
+            passed=True,
+            threshold=threshold,
+            breakdown=score_resp.breakdown,
+            score_latency_ms=round(score_resp.latency_ms, 2),
+            score_margin=score_resp.score_margin,
+            borderline=score_resp.borderline,
+            task_type=task_type_key,
+            rubric_source=f"catalog:{task_type_key}",
+            diagnosis=None,
+            approved_as_borderline=bool(mass_approved),
+            approved_with_caveat=True,
+            stages=[mono_stage],
+            total_stages=1,
+            passed_stages=1,
+            failed_stages=0,
+            attempts=0,
+            max_attempts=MAX_ATTEMPTS,
+            emergency_exit_unlocked=False,
+            message=(
+                f"Entrega aprovada com ressalva (caminho mono): score "
+                f"{round(score_resp.score, 2):.2f} caiu na banda de indiferença "
+                f"[{threshold - _CAVEAT_BAND:.2f}, {threshold:.2f}) abaixo do corte de "
+                f"{threshold:.2f}, sem símbolos AST no diff para triagem estrutural."
+            ),
+        ).model_dump()
 
     prev_attempts = hist.get("attempts", 0) if hist else 0
     new_attempts = prev_attempts + 1
@@ -1012,7 +1165,8 @@ async def openjev_score_and_diagnose(
             "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
         ) if new_attempts >= MAX_ATTEMPTS else (
             f"Score insuficiente ({round(score_resp.score, 2)}/{threshold:.2f}) no caminho mono "
-            "(workspace sem símbolos AST no diff para triagem estrutural): não há suspeita do "
+            f"(workspace sem símbolos AST no diff para triagem estrutural): abaixo da banda de "
+            f"indiferença [{threshold - _CAVEAT_BAND:.2f}, {threshold:.2f}), não há suspeita do "
             "Needle 3 para diagnosticar — refatore o artefato no disco e reavalie."
         ),
     ).model_dump()

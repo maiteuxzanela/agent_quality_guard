@@ -314,6 +314,13 @@ class ScoreResponse(BaseModel):
         default=None,
         description="True quando a entrega é aprovada na fronteira via Borderline Mass Gate."
     )
+    approved_with_caveat: Optional[bool] = Field(
+        default=None,
+        description=(
+            "True quando a nota caiu na banda de indiferença "
+            "[threshold - CAVEAT_BAND, threshold) e a entrega foi aprovada com ressalva."
+        ),
+    )
     device: Optional[str] = Field(
         default=None,
         description=(
@@ -328,12 +335,15 @@ class ScoreResponse(BaseModel):
 
 
 # ==============================================================================
-# Schemas Open Jev: Score + Diagnóstico (Screener Needle 3 + Noul — 8 categorias)
+# Schemas Open Jev: Score + Diagnóstico (Screener Needle 3 + Noul — 10 categorias)
 # ==============================================================================
 # NOTA (set/2026): o choice de diagnóstico flat foi removido do fluxo de score.
 # Quem aponta a categoria agora é o Screener estrutural (needle_defect_screener)
-# e quem a confirma/arbitra é o JEV Noul (P >= 0.78). Restam as 8 categorias
+# e quem a confirma/arbitra é o JEV Noul (P >= 0.78). Restam 10 categorias
 # técnicas reais — as duas nulas saíram do universo de decisão.
+# Expansão (set/2026, decisão da fundadora): +2 categorias de ANÁLISE/qualidade
+# (`tipagem_ausente`, `docstring_ausente`) entram no limite calibrado de <= 10
+# opções do head do Laya (>= 11 colapsam — ver skill calibracao-score).
 # Calibração histórica (ago/2026, ainda relevante para escolhas genéricas de
 # openjev_choice): o head do Laya discrimina bem com <= 10 opções; >= 11 opções
 # colapsam na opção-savor (precisão 1/4 no golden de defeitos).
@@ -346,6 +356,18 @@ DEFECT_OPTIONS: List[str] = [
     "performance_escopo_estilo",
     "requisito_incompleto_ou_ausente",
     "documentacao_configuracao",
+    "tipagem_ausente",
+    "docstring_ausente",
+]
+
+# Tier de ANÁLISE (categorias de qualidade estrutural, set/2026): suspeitas
+# dessas categorias NUNCA reprovam sozinhas uma entrega com score >= threshold
+# (decisão "Noul P >= 0.78 reprova sempre" vale para as 8 categorias duras);
+# com score < threshold elas reprovam e viram diagnosis para refino. Fonte
+# única usada pelo mcp_server para separar confirmed hard vs quality.
+QUALITY_DEFECT_CATEGORIES: List[str] = [
+    "tipagem_ausente",
+    "docstring_ausente",
 ]
 
 # Instrução do choice — usada apenas por ferramentas de auditoria externas que
@@ -367,6 +389,8 @@ DEFECT_DESCRIPTIONS: Dict[str, str] = {
     "performance_escopo_estilo": "bottleneck, scope drift, lint",
     "requisito_incompleto_ou_ausente": "missing requested feature",
     "documentacao_configuracao": "docs or config wrong",
+    "tipagem_ausente": "params or return without type hints",
+    "docstring_ausente": "public function/class without docstring",
 }
 
 # Folhas (defeitos finos) candidatas de cada categoria — servem de dica para o
@@ -418,14 +442,24 @@ DEFECT_MEMBERS: Dict[str, List[str]] = {
         "documentacao_ausente_ou_incorreta",
         "configuracao_ou_governanca_incorreta",
     ],
+    "tipagem_ausente": [
+        "parametro_sem_anotacao_de_tipo",
+        "retorno_sem_anotacao_de_tipo",
+        "generico_nao_especificado",
+    ],
+    "docstring_ausente": [
+        "docstring_de_funcao_ausente",
+        "docstring_de_classe_ausente",
+        "contrato_de_uso_nao_documentado",
+    ],
 }
 
 
 class DiagnosisResult(BaseModel):
-    """Resultado do diagnóstico de defeito via Screener Needle 3 + Noul (8 categorias)."""
+    """Resultado do diagnóstico de defeito via Screener Needle 3 + Noul (10 categorias)."""
     selected: str = Field(
         ...,
-        description="Categoria de defeito apontada pelo Screener e arbitrada pelo Noul (8 categorias).",
+        description="Categoria de defeito apontada pelo Screener e arbitrada pelo Noul (10 categorias).",
     )
     confidence: float = Field(
         ...,
@@ -471,14 +505,15 @@ class DiffStageResult(BaseModel):
 class ScoreDiagnoseResponse(BaseModel):
     """Resposta unificada: Score + Diagnóstico via Screener Needle 3 + Noul.
 
-    Se passed=True e diagnosis=None: aprovação plena (score >= threshold ou
-    zero suspeitas estruturais).
+    Se passed=True e diagnosis=None: aprovação plena (score >= threshold).
     Se passed=True com approved_with_caveat=True: o Needle 3 não apontou
-    NENHUMA das 8 categorias e o score ficou abaixo do corte (residual).
+    NENHUMA das 10 categorias e o score caiu na banda de indiferença
+    [threshold - CAVEAT_BAND, threshold) (ressalva de fronteira).
     Se passed=False com diagnosis: defeito confirmado pelo Noul (P >= 0.78)
     OU suspeita não-resolvida com score < threshold (investigar mesmo com
     Noul negativo).
-    Se passed=False com diagnosis=None: caminho mono (sem símbolos AST).
+    Se passed=False com diagnosis=None: caminho mono (sem símbolos AST) ou
+    nota abaixo da banda de indiferença sem suspeita a diagnosticar.
     """
     # --- Campos do Score (sempre presentes) ---
     score: float = Field(..., description="Nota contínua calculada pelo Laya (escala 1.0–5.0).")
@@ -487,8 +522,8 @@ class ScoreDiagnoseResponse(BaseModel):
     passed: bool = Field(
         ...,
         description=(
-            "True se não há defeito confirmado pelo Noul E (score >= threshold "
-            "OU o Needle 3 não apontou nenhuma suspeita estrutural)."
+            "True se não há defeito duro confirmado pelo Noul E (score >= threshold "
+            "OU score na banda de indiferença sem nenhuma suspeita estrutural)."
         ),
     )
     threshold: float = Field(..., description="Nota de corte configurada.")
@@ -549,7 +584,7 @@ class ScoreDiagnoseResponse(BaseModel):
     max_attempts: int = Field(default=5, description="Máximo antes da saída de emergência (MAX_ATTEMPTS).")
     emergency_exit_unlocked: bool = Field(default=False, description="True após MAX_ATTEMPTS tentativas sem refatoração.")
     message: Optional[str] = Field(default=None, description="Mensagem de status ou instrução de Circuit Breaker.")
-    approved_with_caveat: bool = Field(default=False, description="True quando o Needle 3 não apontou NENHUMA suspeita estrutural e a nota ficou abaixo do corte (aprovação com ressalva).")
+    approved_with_caveat: bool = Field(default=False, description="True quando o Needle 3 não apontou NENHUMA suspeita estrutural e a nota caiu na banda de indiferença [threshold - CAVEAT_BAND, threshold) (aprovação com ressalva de fronteira).")
 
     # --- Needle 3 AST Guardrail (Fail-Fast Determinístico) ---
     ast_blocked: bool = Field(default=False, description="True se a entrega foi reprovada deterministamente pelo Needle 3 AST Guardrail.")

@@ -1,26 +1,30 @@
-"""Testes de integração para openjev_score_and_diagnose — Screener Needle 3 + Noul (8 categorias).
+"""Testes de integração para openjev_score_and_diagnose — Screener Needle 3 + Noul (10 categorias).
 
 Fluxo sem choice (set/2026):
   1. Guard AST (fail-fast determinístico) bloqueia mocks, testes tautológicos,
      exec/eval dinâmico, credenciais hardcoded etc. → reprovação imediata.
-  2. Screener Needle 3 levanta suspeitas estruturais das 8 categorias no diff.
+  2. Screener Needle 3 levanta suspeitas estruturais das 10 categorias no diff
+     (8 duras + 2 de análise: tipagem_ausente, docstring_ausente).
   3. JEV Noul arbitra cada suspeita (P >= 0.78 = confirmada).
-  4. Decisão:
-     - defeito confirmado pelo Noul => reprova com diagnosis;
-     - zero suspeitas estruturais => aprova (nota < corte vira ressalva
-       approved_with_caveat=true);
-     - suspeita + nota >= corte => aprova;
-     - suspeita + nota < corte => REPROVA com diagnosis (investigar no disco,
-       mesmo com Noul negativo).
+  4. Decisão (com banda de indiferença CAVEAT_BAND = 0.20):
+     - defeito duro confirmado pelo Noul => reprova com diagnosis;
+     - score >= corte => aprova (suspeita de análise confirmada não veta);
+     - score na banda [corte - 0.20, corte) com ZERO suspeitas => aprova com
+       ressalva approved_with_caveat=true;
+     - qualquer suspeita + nota < corte => REPROVA com diagnosis (investigar
+       no disco, mesmo com Noul negativo);
+     - score < corte - 0.20 => REPROVA mesmo com zero suspeitas.
   5. Caminho mono (workspace sem símbolos AST no diff): nota >= corte aprova;
-     nota < corte reprova com diagnosis=None e mensagem do caminho mono.
+     nota na banda aprova com ressalva; abaixo da banda reprova com
+     diagnosis=None e mensagem do caminho mono.
 
 Todos os testes exercitam o engine Laya real (sem mock), conforme AGENTS.md §5.2.
 O modelo é carregado uma única vez por sessão via singleton do mcp_server.
 
 Estratégia de threshold:
   - threshold=1.0  → qualquer score real (1.0–5.0) passa → testa caminho de aprovação
-  - threshold=5.0  → nenhum score real atinge            → testa reprovação/ressalva
+  - threshold=5.0  → nenhum score real atinge a banda [4.80, 5.00) → testa
+    reprovação (corte estrito abaixo da banda)
 
 Anti-gaming: usa repositório git real criado com subprocess para produzir
 git_state autêntico — sem patch nem simulação do estado do repositório.
@@ -83,8 +87,14 @@ def _make_repo_with_code(source: str, filename: str = "entrega.py") -> str:
 
 
 # Código limpo: nenhum marcador do Screener e nenhuma violação do Guard AST
-CLEAN_CODE = '''def somar(a, b):
-    """Retorna a soma de dois números inteiros."""
+# (tipagem estrita + docstring — as categorias de análise também ficam mudas)
+CLEAN_CODE = '''def somar(a: int, b: int) -> int:
+    """Retorna a soma de dois números inteiros.
+
+    Exemplo:
+        >>> somar(1, 2)
+        3
+    """
     resultado = a + b
     return resultado
 '''
@@ -168,25 +178,62 @@ class TestScoreAndDiagnoseIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["rubric_source"], "catalog:codigo_producao")
 
     async def test_suspeita_zerada_aprova_com_ressalva(self):
-        """Needle 3 sem NENHUMA suspeita + nota < corte => aprovação com ressalva."""
-        ws = _make_repo_with_code(CLEAN_CODE)
+        """Banda de indiferença: zero suspeitas + nota na faixa => ressalva;
+        nota abaixo da faixa => reprovado mesmo com zero suspeitas.
+
+        Três repositórios frescos (Laya determinístico, sigma = 0): mede o
+        score real com threshold=1.0, depois reavalia com corte dentro da
+        banda (score+0.10) e com corte acima da banda (score+0.50).
+        """
+        from src.core.score_gate import CAVEAT_BAND
+
+        # 1. Medição do score real do CLEAN_CODE (premissa limpa, sem suspeita)
+        ws_measure = _make_repo_with_code(CLEAN_CODE)
+        measured = await openjev_score_and_diagnose(
+            premise=CLEAN_PREMISE,
+            workspace=ws_measure,
+            threshold=1.0,
+        )
+        self.assertTrue(measured["passed"])
+        score = round(measured["score"], 2)
+        self.assertIsNone(measured["diagnosis"])
+
+        # 2. Corte dentro da banda [score, score + CAVEAT_BAND) => ressalva
+        threshold_in_band = round(score + 0.10, 2)
+        self.assertLessEqual(threshold_in_band, 5.0, "score medido inesperado")
+        ws_band = _make_repo_with_code(CLEAN_CODE)
         result = await openjev_score_and_diagnose(
             premise=CLEAN_PREMISE,
-            workspace=ws,
-            threshold=5.0,
+            workspace=ws_band,
+            threshold=threshold_in_band,
         )
-
-        self.assertTrue(result["passed"])
+        self.assertTrue(
+            result["passed"],
+            f"score {score} na banda [{threshold_in_band - CAVEAT_BAND:.2f}, "
+            f"{threshold_in_band:.2f}) com zero suspeitas deveria aprovar",
+        )
         self.assertIsNone(result["diagnosis"])
+        self.assertTrue(result["approved_with_caveat"])
+        self.assertIn("ressalva", result.get("message", ""))
         self.assertFalse(result["emergency_exit_unlocked"])
-        if result["score"] < 5.0:
-            self.assertTrue(
-                result["approved_with_caveat"],
-                f"nota {result['score']} < 5.0 sem suspeita deveria aprovar com ressalva",
-            )
-            self.assertIn("ressalva", result.get("message", ""))
-        else:
-            self.assertFalse(result["approved_with_caveat"])
+
+        # 3. Corte acima da banda (< threshold - CAVEAT_BAND) => REPROVA
+        threshold_below_band = round(score + 0.50, 2)
+        ws_fail = _make_repo_with_code(CLEAN_CODE)
+        result_fail = await openjev_score_and_diagnose(
+            premise=CLEAN_PREMISE,
+            workspace=ws_fail,
+            threshold=threshold_below_band,
+        )
+        self.assertFalse(
+            result_fail["passed"],
+            f"score {score} abaixo da banda de {CAVEAT_BAND} deveria reprovar "
+            "mesmo com zero suspeitas",
+        )
+        self.assertFalse(result_fail["approved_with_caveat"])
+        self.assertIsNone(result_fail["diagnosis"])
+        self.assertIn("banda de indiferença", result_fail.get("message", ""))
+        self.assertEqual(result_fail["attempts"], 1)
 
     async def test_suspeita_com_score_contra_arbitragem_noul(self):
         """Suspeita + nota >= corte: Noul confirma => reprova; Noul refuta => aprova.
@@ -227,7 +274,7 @@ class TestScoreAndDiagnoseIntegration(unittest.IsolatedAsyncioTestCase):
 
         diag = result["diagnosis"]
 
-        # Categoria válida da taxonomia de 8 opções
+        # Categoria válida da taxonomia de 10 opções
         self.assertIn(diag["selected"], DEFECT_OPTIONS)
         self.assertIn(diag["selected"], DEFECT_DESCRIPTIONS)
         self.assertEqual(diag["description"], DEFECT_DESCRIPTIONS[diag["selected"]])
@@ -418,15 +465,26 @@ class TestGuardAstFailFast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["diagnosis"]["selected"], "seguranca")
 
 
-# ─── Integridade da Taxonomia (8 categorias, sem I/O, sem engine) ────────────
+# ─── Integridade da Taxonomia (10 categorias, sem I/O, sem engine) ───────────
 
 class TestTaxonomiaIntegridade(unittest.TestCase):
-    """Verifica que a taxonomia flat de 8 categorias está corretamente definida.
+    """Verifica que a taxonomia flat de 10 categorias está corretamente definida.
     Sem I/O, sem rede, sem GPU — apenas lógica pura sobre os dicionários.
     """
 
-    def test_total_de_opcoes_e_8(self):
-        self.assertEqual(len(DEFECT_OPTIONS), 8)
+    def test_total_de_opcoes_e_10(self):
+        self.assertEqual(len(DEFECT_OPTIONS), 10)
+
+    def test_limite_calibrado_do_head_respeitado(self):
+        """Calibração ago/2026: o head do Laya só discrimina com <= 10 opções."""
+        self.assertLessEqual(len(DEFECT_OPTIONS), 10)
+
+    def test_tier_de_qualidade_consistente(self):
+        """Categorias de análise (QUALITY_DEFECT_CATEGORIES) são subconjunto
+        de DEFECT_OPTIONS e não vazam para fora da taxonomia."""
+        from src.core.schemas import QUALITY_DEFECT_CATEGORIES
+        self.assertEqual(set(QUALITY_DEFECT_CATEGORIES), {"tipagem_ausente", "docstring_ausente"})
+        self.assertTrue(set(QUALITY_DEFECT_CATEGORIES).issubset(set(DEFECT_OPTIONS)))
 
     def test_todas_opcoes_tem_descricao(self):
         for defect in DEFECT_OPTIONS:
@@ -466,7 +524,7 @@ class TestTaxonomiaIntegridade(unittest.TestCase):
             self.assertNotIn(opt, DEFECT_DESCRIPTIONS)
             self.assertNotIn(opt, DEFECT_MEMBERS)
 
-    def test_ordem_das_8_opcoes_estavel(self):
+    def test_ordem_das_10_opcoes_estavel(self):
         """Ordem fixa da taxonomia (posições importam para orçamento de tokens)."""
         self.assertEqual(DEFECT_OPTIONS, [
             "logica_ou_regra",
@@ -477,6 +535,8 @@ class TestTaxonomiaIntegridade(unittest.TestCase):
             "performance_escopo_estilo",
             "requisito_incompleto_ou_ausente",
             "documentacao_configuracao",
+            "tipagem_ausente",
+            "docstring_ausente",
         ])
 
     def test_instructions_sem_nulas_e_curta(self):
@@ -505,9 +565,9 @@ class TestTaxonomiaIntegridade(unittest.TestCase):
         self.assertIn("premise", params)
         self.assertIn("threshold", params)
         self.assertIn("workspace", params)
-        # Descrição reflete o contrato novo: Screener + Noul, 8 categorias, sem choice
+        # Descrição reflete o contrato novo: Screener + Noul, 10 categorias, sem choice
         desc = tool["function"]["description"]
-        self.assertIn("8", desc)
+        self.assertIn("10", desc)
         self.assertIn("Screener", desc)
         self.assertIn("approved_with_caveat", desc)
         self.assertNotIn("choice flat", desc)
@@ -558,7 +618,7 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
         self.assertTrue(len(dumped["description"]) > 10)
 
     def test_diagnosis_result_todas_categorias_serializam(self):
-        """Todas as 8 categorias são válidas no schema."""
+        """Todas as 10 categorias são válidas no schema."""
         from src.core.schemas import DiagnosisResult
         for opt in DEFECT_OPTIONS:
             diag = DiagnosisResult(
@@ -633,6 +693,17 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
                 diagnosis_latency_ms=10.0,
             )
 
+    def test_score_request_escala_invertida_levanta_validationerror(self):
+        """Caminho de erro real: min_score >= max_score derruba o ScoreRequest."""
+        from pydantic import ValidationError
+        from src.core.schemas import ScoreRequest
+        with self.assertRaises(ValidationError):
+            ScoreRequest(
+                premise="Pedido: x | Resultado: y",
+                min_score=5.0,
+                max_score=1.0,
+            )
+
 
 # ─── Testes parametrizados: reprovação com defeito conhecido da taxonomia ────
 
@@ -661,7 +732,7 @@ class TestPydanticSchemaIntegration(unittest.TestCase):
     ),
 ])
 async def test_reprovado_retorna_categoria_valida(source, filename, premise, descricao, esperado):
-    """Reprovação fail-fast deve devolver sempre uma categoria válida das 8 opções."""
+    """Reprovação fail-fast deve devolver sempre uma categoria válida das 10 opções."""
     _ensure_engine_loaded()
     _score_history.clear()
     ws = _make_repo_with_code(source, filename=filename)
@@ -678,7 +749,7 @@ async def test_reprovado_retorna_categoria_valida(source, filename, premise, des
     diag = result["diagnosis"]
 
     assert diag["selected"] in DEFECT_OPTIONS, (
-        f"[{descricao}] '{diag['selected']}' não é uma opção válida das 8 opções flat"
+        f"[{descricao}] '{diag['selected']}' não é uma opção válida das 10 opções flat"
     )
     assert diag["selected"] == esperado, (
         f"[{descricao}] esperado='{esperado}' obtido='{diag['selected']}'"

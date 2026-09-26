@@ -1,7 +1,7 @@
 """Módulo de Formatação de Feedback Estruturado com Diretiva Imperativa de Auto-Correção.
 
 Gera payloads de retorno 'decision: continue' com telemetria detalhada de defeitos
-(8 categorias técnicas do Screener Needle 3 + Noul, descrições, blocos do git e
+(10 categorias técnicas do Screener Needle 3 + Noul, descrições, blocos do git e
 prescrições de ação), forçando o agente a refatorar o código no disco em vez de
 pedir desculpas em texto livre.
 """
@@ -24,7 +24,7 @@ MANDATORY_ACTION_DIRECTIVE = (
 # Prescrição genérica quando não há categoria (reprovação mono / diagnosis ausente)
 GENERIC_PRESCRIPTION = "Aplique refatorações reais de código e testes no disco."
 
-# Prescrições técnicas de ação cirúrgica por categoria de defeito (8 categorias)
+# Prescrições técnicas de ação cirúrgica por categoria de defeito (10 categorias)
 DEFECT_ACTION_PRESCRIPTIONS: Dict[str, str] = {
     "logica_ou_regra": "Refine condicionais lógicas, operadores de comparação e consistência de estado do domínio.",
     "robustez_excecoes_recursos": "Adicione tratamento defensivo de exceções com blocos try/finally e proteção a nulos.",
@@ -34,6 +34,8 @@ DEFECT_ACTION_PRESCRIPTIONS: Dict[str, str] = {
     "performance_escopo_estilo": "Otimize processamento algorítmico e assegure conformidade estrita ao escopo solicitado.",
     "requisito_incompleto_ou_ausente": "Inspecione os requisitos do prompt e implemente todos os comportamentos esperados no disco.",
     "documentacao_configuracao": "Atualize documentação técnica, arquivos de configuração e variáveis de ambiente pertinentes.",
+    "tipagem_ausente": "Anote tipos de parâmetros e retorno em toda função pública de produção (mypy estrito).",
+    "docstring_ausente": "Escreva docstrings em funções e classes públicas descrevendo contrato, efeitos e exemplos de uso.",
 }
 
 

@@ -17,10 +17,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("openjev.ast_diff_extractor")
 
+# NOTA (set/2026): "tests"/"test" NÃO entram neste ignore — alinhado ao
+# IGNORE_DIR_PARTS do diff_inspector. A rubrica codigo_producao avalia
+# "cobertura de testes reais": excluir o código de teste dos símbolos AST
+# escondia essa evidência do score, do Screener e da telemetria de stages.
 IGNORE_DIR_PARTS = {
     ".git", "__pycache__", ".venv", "venv", "node_modules",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build",
-    ".agents", "scripts", "bin", "tests", "test", "docs",
+    ".agents", "scripts", "bin", "docs",
 }
 
 IGNORE_EXTENSIONS = {
