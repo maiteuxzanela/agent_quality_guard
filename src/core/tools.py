@@ -166,10 +166,11 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "number",
                         "default": 3.40,
                         "description": (
-                            "Nota de corte. Sem suspeita estrutural do Needle 3, score < threshold aprova "
-                            "com ressalva (approved_with_caveat); com suspeita (confirmada pelo Noul ou "
-                            "não-resolvida), score < threshold reprova e exige investigação. "
-                            "Padrão Laya calibrado: 3.40."
+                            "Nota de corte. Sem suspeita estrutural do Needle 3, score na banda de "
+                            "indiferença [3.20, 3.40) aprova com ressalva (approved_with_caveat); "
+                            "abaixo de 3.20 reprova mesmo sem suspeita; com suspeita (confirmada "
+                            "pelo Noul ou não-resolvida), score < threshold reprova e exige "
+                            "investigação. Padrão Laya calibrado: 3.40."
                         ),
                     },
                     "reset_history": {

@@ -111,22 +111,32 @@ def classify_execution_level(
     task_description: str,
     target_files: Optional[List[str]] = None,
 ) -> int:
-    """Classifica a demanda nos Três Níveis de Execução (AGENTS.md §3.1).
+    """Classifica a demanda em nível de complexidade (heurística léxico-arquivos).
 
-    - Nível 1: Dúvidas conceituais, documentação, markdown, .env ou status do git.
-    - Nível 2: Implementação técnica, código de produção, testes, lógica ou APIs.
-    - Nível 3: Demanda técnica cuja especialidade não existe no catálogo do repositório.
+    - 1: Dúvidas conceituais, documentação, markdown, .env ou status do git.
+    - 2: Implementação técnica, código de produção, testes, lógica ou APIs.
+
+    Nota (set/2026): a política de "Três Níveis de Execução" (delegação
+    obrigatória) foi aposentada pelo AGENTS.md §3.1 — o orquestrador tem
+    autonomia plena e o despacho de subagentes é sob demanda. Esta função é
+    apenas uma heurística descritiva de complexidade; o retorno é sempre
+    1 ou 2 (não há classificação de nível de especialidade ausente — essa
+    decisão cabe ao orquestrador, que propõe nova persona quando necessário).
+
+    Exemplo:
+        classify_execution_level("Como funciona o cache?") == 1
+        classify_execution_level("Implementar endpoint", ["src/api.py"]) == 2
     """
     desc = task_description.lower().strip()
     files = [f.lower() for f in (target_files or [])]
 
-    # Indicadores claros de código de produção (Nível 2)
+    # Indicadores claros de código de produção (nível 2)
     code_extensions = (".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".html", ".sh")
     has_code_targets = any(f.endswith(code_extensions) for f in files)
     if has_code_targets:
         return 2
 
-    # Perguntas conceituais, dúvidas ou inspeções sem arquivos alvo de código pertencem ao Nível 1
+    # Perguntas conceituais, dúvidas ou inspeções sem arquivos alvo de código pertencem ao nível 1
     conceptual_patterns = ("como funciona", "o que e", "explicar", "qual a diferenca", "por que", "tirar duvida", "inspecionar")
     if desc.startswith(conceptual_patterns) or (desc.endswith("?") and not any(act in desc for act in ["implementar", "criar", "alterar", "corrigir", "refatorar"])):
         return 1

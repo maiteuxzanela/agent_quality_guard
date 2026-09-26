@@ -62,6 +62,33 @@ class TestPersonasCatalog(unittest.TestCase):
             self.assertIn("Valério", text, f"{fname} deve referenciar o Orquestrador Valério")
             self.assertIn("Diretrizes e Guardrails", text, f"{fname} deve conter guardrails")
 
+    def test_specialists_have_delivery_contract(self) -> None:
+        """Toda persona de especialista declara o Contrato de Entrega do spawn (set/2026)."""
+        specialists = EXPECTED_PERSONA_FILES - {"README.md", "00_valerio_lead_architect.md"}
+        for fname in specialists:
+            text = (PERSONAS_DIR / fname).read_text(encoding="utf-8")
+            self.assertIn(
+                "Contrato de Entrega", text,
+                f"{fname} deve definir a seção Contrato de Entrega (retorno ao orquestrador)",
+            )
+            self.assertIn(
+                "openjev_spawn_subagent", text,
+                f"{fname} deve situar o contrato no fluxo de spawn",
+            )
+
+    def test_valerio_persona_retires_mandatory_routing(self) -> None:
+        """Governança set/2026: persona do Valério sem delegação obrigatória (Nível 2)."""
+        text = (PERSONAS_DIR / "00_valerio_lead_architect.md").read_text(encoding="utf-8")
+        self.assertIn("roteamento obrigatório está suspenso", text)
+        self.assertNotIn("Delegação Obrigatória", text)
+        self.assertNotIn("NÃO edita código de produção diretamente", text)
+
+    def test_readme_excludes_orchestrator_from_subagent_roster(self) -> None:
+        """Valério não é subagente: não aparece na matriz despachável do README."""
+        text = (PERSONAS_DIR / "README.md").read_text(encoding="utf-8")
+        self.assertIn("não deve ser despachado", text)
+        self.assertNotIn("| **Valério** |", text)
+
     def test_agents_md_references_team_matrix(self) -> None:
         agents_file = REPO_ROOT / "AGENTS.md"
         text = agents_file.read_text(encoding="utf-8")

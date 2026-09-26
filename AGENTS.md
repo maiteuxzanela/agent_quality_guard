@@ -78,7 +78,7 @@ Ver `DEFECT_OPTIONS`, `DEFECT_DESCRIPTIONS` e `DEFECT_MEMBERS` em `src/core/sche
 
 O Projeto JEV opera com um roster calibrado de especialistas coordenados pelo Orquestrador Valério. O roteamento obrigatório está suspenso: Valério possui autonomia plena para desenvolver, planejar e refatorar diretamente, acionando os subagentes sob demanda ao longo do fluxo de trabalho quando o isolamento de contexto ou especialidade técnica pontual for conveniente via `openjev_spawn_subagent`.
 
-| Subagente | Documento de Persona | Domínio Técnico | Quando Acionar via `openjev_choice` |
+| Subagente | Documento de Persona | Domínio Técnico | Quando Acionar (despacho direto; `openjev_choice` só em dúvida genuína) |
 | :--- | :--- | :--- | :--- |
 | **@Kael** | [`01_kael_ml_hardware.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/01_kael_ml_hardware.md) | ML Local, PyTorch & Pascal | Inferência do modelo Laya, profilagem da GTX 1050 Ti, bloqueio de `bfloat16`, fallback CPU e benchmarks. |
 | **@Maya** | [`02_maya_ast_memory.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/02_maya_ast_memory.md) | Memória Relacional & AST (Needle 3) | Parsing de AST Python, busca relacional, recorte de código (500–1.500 tok) e combate a context dumping. |
