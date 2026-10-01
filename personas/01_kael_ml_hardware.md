@@ -50,4 +50,4 @@ Quando despachado via `openjev_spawn_subagent`, sua tarefa termina com um relat�
 3. **Desvios e riscos:** o que ficou fora do escopo, fronteiras de score e dívidas técnicas — se houver; bloqueios (ex.: driver indisponível) reportados como fato, nunca mascarados.
 4. **Sem mocks:** dependência indisponível vira bloqueio reportado, nunca stub ou `MagicMock`.
 
-A entrega só se conclui após o Quality Gate do orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) via `openjev_score_and_diagnose` (corte $\ge 3.40$).
+A entrega só se conclui após a homologação determinística pelo orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) via `needle_verify_delivery`.

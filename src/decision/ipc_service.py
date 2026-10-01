@@ -15,63 +15,117 @@ import json
 import logging
 import os
 import socket
+import urllib.request
+import urllib.error
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlunsplit
 
 logger = logging.getLogger("openjev.ipc")
 
 SOCKET_PATH = "/tmp/openjev_ipc.sock"
+HTTP_BRIDGE_URL = os.getenv(
+    "OPENJEV_HTTP_BRIDGE_URL",
+    urlunsplit(("http", "127.0.0.1:8000", "", "", "")),
+)
+
+
+def is_http_available(url: str = HTTP_BRIDGE_URL) -> bool:
+    """Verifica se a API HTTP do motor na GPU está respondendo em loopback.
+
+    Exemplo:
+        >>> isinstance(is_http_available(), bool)
+        True
+    """
+    try:
+        req = urllib.request.Request(f"{url}/v1/decision/health", method="GET")
+        with urllib.request.urlopen(req, timeout=0.4) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
 
 
 def is_ipc_available(socket_path: str = SOCKET_PATH) -> bool:
-    """Verifica de forma rápida e não bloqueante se o servidor IPC está ativo e aceitando conexões."""
-    if not os.path.exists(socket_path):
+    """Verifica de forma rápida e não bloqueante se o servidor IPC ou a ponte HTTP está ativo.
+
+    Exemplo:
+        >>> isinstance(is_ipc_available(), bool)
+        True
+    """
+    if os.path.exists(socket_path):
+        sock: Optional[socket.socket] = None
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(0.3)
+            sock.connect(socket_path)
+            # Envia ping rápido
+            sock.sendall(json.dumps({"action": "ping"}).encode("utf-8") + b"\n")
+            data = sock.recv(1024)
+            if data:
+                resp = json.loads(data.decode("utf-8").strip())
+                return resp.get("status") == "ok"
+            return False
+        except Exception:
+            return False
+        finally:
+            if sock is not None:
+                sock.close()
+    # Se testando um socket customizado explícito inexistente, não faz fallback para HTTP
+    if socket_path != SOCKET_PATH:
         return False
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(0.3)
-    try:
-        sock.connect(socket_path)
-        # Envia ping rápido
-        sock.sendall(json.dumps({"action": "ping"}).encode("utf-8") + b"\n")
-        data = sock.recv(1024)
-        if data:
-            resp = json.loads(data.decode("utf-8").strip())
-            return resp.get("status") == "ok"
-        return False
-    except Exception:
-        return False
-    finally:
-        sock.close()
+    return is_http_available()
+
+
+def _read_ipc_line(sock: socket.socket, max_reads: int = 10000) -> str:
+    """Lê do socket até a quebra de linha, com limite defensivo de iterações."""
+    buffer = bytearray()
+    for _ in range(max_reads):
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if b"\n" in chunk:
+            break
+    return buffer.decode("utf-8").strip()
 
 
 def call_ipc_sync(action: str, payload: Dict[str, Any], timeout: float = 120.0, socket_path: str = SOCKET_PATH) -> Dict[str, Any]:
-    """Envia requisição síncrona ao servidor IPC e aguarda a resposta."""
-    if not os.path.exists(socket_path):
-        raise ConnectionError(f"Socket IPC não encontrado em {socket_path}. Certifique-se de que o daemon MCP está ativo.")
+    """Envia requisição síncrona ao servidor IPC ou via HTTP Bridge se o socket não estiver acessível.
 
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(timeout)
-        sock.connect(socket_path)
-        msg = json.dumps({"action": action, "payload": payload}, ensure_ascii=False) + "\n"
-        sock.sendall(msg.encode("utf-8"))
+    Exemplo:
+        >>> try:
+        ...     call_ipc_sync("ping", {}, socket_path="/nonexistent/openjev.sock")
+        ... except ConnectionError as exc:
+        ...     "indisponíveis" in str(exc)
+        True
+    """
+    if os.path.exists(socket_path):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
+                sock.connect(socket_path)
+                msg = json.dumps({"action": action, "payload": payload}, ensure_ascii=False) + "\n"
+                sock.sendall(msg.encode("utf-8"))
 
-        # Lê resposta até o delimitador de quebra de linha com limite defensivo
-        buffer = bytearray()
-        for _ in range(10000):
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buffer.extend(chunk)
-            if b"\n" in chunk:
-                break
+                line = _read_ipc_line(sock)
+                if not line:
+                    raise RuntimeError("Servidor IPC retornou resposta vazia.")
+                res = json.loads(line)
+                if "error" in res:
+                    raise RuntimeError(f"Erro no IPC Open Jev: {res['error']}")
+                return res.get("data", res)
+        except Exception as e:
+            logger.debug(f"Falha de conexão no socket IPC ({e}), tentando HTTP Bridge...")
 
-        line = buffer.decode("utf-8").strip()
-        if not line:
-            raise RuntimeError("Servidor IPC retornou resposta vazia.")
-        res = json.loads(line)
-        if "error" in res:
-            raise RuntimeError(f"Erro no IPC Open Jev: {res['error']}")
-        return res.get("data", res)
+    # Fallback transparente para HTTP Bridge (suporta sandbox bwrap)
+    if action in {"noul", "choice", "score"}:
+        endpoint = f"{HTTP_BRIDGE_URL}/v1/decision/{action}"
+        data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(endpoint, data=data_bytes, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    raise ConnectionError(f"Servidor IPC e HTTP Bridge indisponíveis para ação '{action}'.")
 
 
 async def call_ipc_async(action: str, payload: Dict[str, Any], timeout: float = 60.0, socket_path: str = SOCKET_PATH) -> Dict[str, Any]:
@@ -154,21 +208,21 @@ class OpenJevIPCServer:
                 needle_query = Needle3Query(query=query_str, max_tokens=max_tok, scope=scope_val)
                 needle_res = await needle_engine.search(needle_query)
                 resp = {"status": "ok", "data": needle_res.model_dump()}
-            elif action == "score_and_diagnose":
-                from src.mcp_server import openjev_score_and_diagnose
-                premise = str(payload.get("premise", ""))
+            elif action == "verify_delivery":
+                from src.mcp_server import needle_verify_delivery
                 workspace = str(payload.get("workspace", ""))
+                attempt_number = int(payload.get("attempt_number", 1))
                 task_type = str(payload.get("task_type", "codigo_producao"))
-                threshold = float(payload.get("threshold", 3.40))
-                reset_history = bool(payload.get("reset_history", False))
-                diag_res = await openjev_score_and_diagnose(
-                    premise=premise,
-                    workspace=workspace,
+                pedido = str(payload.get("pedido", ""))
+                resultado = str(payload.get("resultado", ""))
+                delivery_res = await needle_verify_delivery(
                     task_type=task_type,
-                    threshold=threshold,
-                    reset_history=reset_history,
+                    workspace=workspace,
+                    attempt_number=attempt_number,
+                    pedido=pedido,
+                    resultado=resultado,
                 )
-                resp = {"status": "ok", "data": diag_res}
+                resp = {"status": "ok", "data": delivery_res}
             else:
                 resp = {"status": "error", "error": f"Ação desconhecida: {action}"}
 

@@ -6,16 +6,16 @@ from src.core.tools import TOOL_DEFINITIONS, get_tool_definition
 
 
 def test_tool_catalog_contains_all_core_primitives():
-    """Nomes canônicos = nomes MCP (needle3_search, openjev_noul, openjev_choice)."""
+    """Nomes canônicos = nomes MCP (needle3_search, openjev_noul, openjev_choice, needle_verify_delivery, openjev_consulta)."""
     tool_names = [t["function"]["name"] for t in TOOL_DEFINITIONS]
     assert "needle3_search" in tool_names
     assert "openjev_noul" in tool_names
     assert "openjev_choice" in tool_names
-    assert "openjev_score_evaluate" not in tool_names, (
-        "Tool openjev_score (aka openjev_score_evaluate) foi expurgada — só openjev_score_and_diagnose."
+    assert "openjev_score_and_diagnose" not in tool_names, (
+        "Tool openjev_score_and_diagnose foi expurgada — a tool de homologação canônica é needle_verify_delivery."
     )
-    assert "openjev_score_and_diagnose" in tool_names, (
-        "Tool de score+diagnóstico deve ser o único caminho de score no catálogo."
+    assert "needle_verify_delivery" in tool_names, (
+        "Tool needle_verify_delivery deve ser a ferramenta de homologação canônica no catálogo."
     )
     assert "openjev_consulta" in tool_names, (
         "Tool de consulta direta (indício textual) deve estar registrada no catálogo."
@@ -47,18 +47,20 @@ def test_get_tool_definition_not_found():
         get_tool_definition("non_existent_tool")
 
 
-def test_score_and_diagnose_tool_schema_completo():
-    """Verifica que openjev_score_and_diagnose expõe os parâmetros obrigatórios."""
-    tool = get_tool_definition("openjev_score_and_diagnose")
+def test_needle_verify_delivery_tool_schema_completo():
+    """Verifica que needle_verify_delivery expõe os parâmetros esperados."""
+    tool = get_tool_definition("needle_verify_delivery")
     params = tool["function"]["parameters"]["properties"]
-    assert "premise" in params
-    assert "threshold" in params
+    assert "task_type" in params
     assert "workspace" in params
-    assert "rubric" in params
-    # Threshold padrão deve ser 3.40 (calibrado para o Laya)
-    assert params["threshold"].get("default") == 3.40
-    # Parâmetro obrigatório
-    assert "premise" in tool["function"]["parameters"]["required"]
+    assert "attempt_number" in params
+    assert "pedido" in params
+    assert "resultado" in params
+    assert "reset_history" not in params, (
+        "reset_history foi removido da tool: o chamador não pode zerar o "
+        "contador server-side do circuit breaker."
+    )
+    assert params["attempt_number"].get("default") == 1
 
 
 def test_consulta_tool_schema_completo():

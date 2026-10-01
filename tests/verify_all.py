@@ -35,7 +35,6 @@ from src.memory.needle_client import Needle3Client
 from src.orchestrator.evaluator import DeliveryEvaluator
 from src.orchestrator.guardrail import GuardrailInterceptor
 from src.orchestrator.router import SpecialistRouter
-from tests.test_circuit_breaker import TestCircuitBreakerAndAntiGaming
 
 
 class TestSchemas(unittest.TestCase):
@@ -82,7 +81,8 @@ class TestToolsCatalog(unittest.TestCase):
         self.assertIn("openjev_noul", names)
         self.assertIn("openjev_choice", names)
         self.assertNotIn("openjev_score_evaluate", names)
-        self.assertIn("openjev_score_and_diagnose", names)
+        self.assertNotIn("openjev_score_and_diagnose", names)
+        self.assertIn("needle_verify_delivery", names)
         self.assertIn("openjev_consulta", names)
 
     def test_get_tool(self):

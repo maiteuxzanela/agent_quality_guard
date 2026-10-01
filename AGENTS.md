@@ -2,58 +2,49 @@
 
 Este documento estabelece as diretrizes específicas para o desenvolvimento, testes e manutenção do código-fonte do próprio motor JEV.
 
-> **Governança Global:** As regras mandatórias da Arquitetura Tri-Camada (Needle 3, Open Jev Choice/Noul/Score com corte $\ge 3.40$) estão ativas globalmente no System Prompt via `~/.gemini/config/AGENTS.md` e `~/.config/opencode/AGENTS.md` (inclui o **Protocolo de Dúvida** §3 e o **Relatório Resumido de Validação** §4.7: Status, Tentativas e Notas).
+> **Governança Global:** A validação de entrega do ecossistema JEV opera sob o modelo **100% Determinístico (`needle_verify_delivery`)**, combinando execução de testes reais (`pytest`) em chunks sequenciais com análise de AST Needle 3 (Camada 1 anti-mock/segurança e Camada 2 qualidade estrutural). A ferramenta antiga `openjev_score_and_diagnose` foi expurgada de todo o repositório e ecossistema.
 
 ---
 
 ## 1. Arquitetura do Repositório
 
 O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
-* **`src/decision/`:** Motor discriminativo local (Laya / Open JEV RLCD) para as primitivas tipadas (`choice`, `noul`, `score`).
-  * `engine.py`: Wrapper de inferência primário (Laya na GPU GTX 1050 Ti com fallback seguro para CPU). O modelo DeBERTa-v3 foi removido do pipeline em set/2026.
-  * `laya_adapter.py`: Adaptador modular para o modelo Laya com mapeamento ordinal 0–4 → 1–5 e thresholds calibrados (noul 0.78, score 3.40).
+* **`src/decision/`:** Motor discriminativo local (Laya / Open JEV RLCD) para as primitivas probaiblísticas tipadas (`choice`, `noul`, `consulta`).
+  * `engine.py`: Wrapper de inferência primário (Laya na GPU GTX 1050 Ti com fallback seguro para CPU).
+  * `laya_adapter.py`: Adaptador modular para o modelo Laya com thresholds calibrados (noul 0.78).
   * `hardware.py`: Profilagem de hardware e travamento contra `bfloat16` na arquitetura Pascal GP107 (GTX 1050 Ti).
-* **`src/memory/`:** Motor de busca relacional de AST (Cactus Needle 3).
-  * `local_needle.py`: Extração cirúrgica de código com limitação estrita de 500 a 1.500 tokens.
-* **`src/mcp_server.py`:** Servidor MCP (Model Context Protocol) que expõe as **5 ferramentas universais**:
+* **`src/memory/`:** Motor de busca relacional de AST e análise de código (Cactus Needle 3).
+  * `needle_ast_guard.py`: Camada 1 determinística (Fail-Fast) — varredura de mocks em produção, SQL Injection, `eval`, segredos hardcoded.
+  * `needle_defect_screener.py`: Camada 2 estrutural — alertas de tipagem, docstrings e recursos.
+* **`src/orchestrator/`:** Orquestração e gerenciamento de execução.
+  * `pytest_chunk_runner.py`: Execução sequencial de testes reais em 3-4 chunks com isolamento de testes pesados (ML/Hardware).
+* **`src/mcp_server.py`:** Servidor MCP (Model Context Protocol) que expõe as ferramentas universais:
   * `needle3_search` — busca cirúrgica relacional de código (AST).
-  * `openjev_choice` — roteamento de subagentes e seleção de ferramenta/busca por distribuição de probabilidade.
-  * `openjev_noul` — avaliação booleana **opcional** (threshold ≥ 0.78; exigência pré-ação removida — anti premise gaming).
-  * `openjev_score_and_diagnose` — **única tool de score (a tool `openjev_score` foi expurgada)**: executa Score (corte ≥ 3.40; banda de indiferença **[3.20, 3.40)** = única via de ressalva; premissa recusada se ausente de `Pedido`/`Resultado` ou > 1500 caracteres; rubrica centralizada estritamente em `task_type="codigo_producao"`; retorna `score_margin`/`borderline`/`rubric_source`). **O choice de diagnóstico foi removido (set/2026)** — o fluxo é: **AST Guardrail fail-fast** (bloco determinístico, `score=1.0`) → **Needle 3 Screener estrutural** sobre as **10 categorias reais** (`DEFECT_OPTIONS`) → **JEV Noul (P ≥ 0.78) em cada suspeita** → **Score Laya**. Decisão final: sem nenhuma suspeita ⇒ `passed=true` se `score ≥ 3.40`, ou `approved_with_caveat=true` na banda **[3.20, 3.40)** (divulgar `score_margin`), ou **`passed=false` com `diagnosis=None` e mensagem da banda se `score < 3.20`**; defeito duro confirmado pelo Noul ⇒ `passed=false` com categoria/arquivo/linhas/`candidate_defects`; suspeita refutada mas nota < corte ⇒ `passed=false` com `diagnosis` = suspeita de maior probabilidade para **INVESTIGAÇÃO** (mesmo com Noul negativo). Anti-premise gaming e circuit breaker universal (**5 tentativas**, `MAX_ATTEMPTS` — destrava a Saída de Emergência imediatamente na 5ª) valem neste caminho.
-  * `openjev_consulta` — consulta direta (*"esse script funciona?"*) retornando **indício textual** (probability/confidence) **sem booleano de aprovação**; postura de indício obrigatória (premise gaming proibido).
-* **`src/core/schemas.py`:** Contratos Pydantic estritos incluindo `DiagnosisResult`, `ScoreDiagnoseResponse`, `ConsultaRequest`/`ConsultaResponse` e o catálogo fechado de rubricas `RUBRIC_CATALOG` centralizado exclusivamente em `codigo_producao`.
+  * `openjev_choice` — roteamento categórico de especialistas por distribuição de probabilidade.
+  * `openjev_noul` — avaliação booleana opcional (threshold ≥ 0.78).
+  * `openjev_consulta` — consulta direta retornando indício textual (probability/confidence) sem booleano.
+  * `needle_verify_delivery` — **única tool de homologação de entrega de código**: validação 100% determinística (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º NeedleASTScreener).
 
-> **🚨 REGRA INEGOCIÁVEL DE COMMIT:** O `git status` NÃO PODE ser limpo antes da aprovação completa da entrega técnica. O agente está terminantemente proibido de realizar `git commit` antes de obter a nota de corte $\ge 3.40$ ou o desbloqueio da Saída de Emergência. Caso o repositório já se encontre limpo, o motor inspeciona as alterações reais do último commit (`HEAD~1..HEAD`), mas comitar antecipadamente oculta o working tree e viola o protocolo.
+> **🚨 REGRA INEGOCIÁVEL DE COMMIT:** O `git status` NÃO PODE ser limpo antes da aprovação completa da entrega técnica. O agente está terminantemente proibido de realizar `git commit` antes da aprovação por `needle_verify_delivery` ou do destravamento da Saída de Emergência na 5ª tentativa.
 
 ---
 
-## 2. Taxonomia de Diagnóstico e Banda de Indiferença (openjev_score_and_diagnose)
+## 2. Pipeline Determinístico de Homologação (`needle_verify_delivery`)
 
-> **Mudança de contrato (set/2026):** o **choice único flat de diagnóstico foi removido** do fluxo de score. Quem diagnostica agora é o **Needle 3 Screener** (hipóteses estruturais) arbitrado pelo **JEV Noul (P ≥ 0.78)**. As categorias nulas (`sem_defeito_identificavel`, `evidencia_insuficiente`) **não existem mais** — restam **10 categorias técnicas reais**: 8 duras + 2 de análise (`tipagem_ausente`, `docstring_ausente`, em `QUALITY_DEFECT_CATEGORIES`).
+A validação de entrega não utiliza mais notas contínuas probabilísticas (1.0–5.0) do Laya para fechar entregas, eliminando truncamento de tokens e *premise gaming*. A homologação é executada em 3 etapas sequenciais (Fail-Fast):
 
-Fluxo em quatro camadas:
-1. **AST Guardrail fail-fast:** violação determinística (mock em produção, SQL injection, `eval` perigoso, segredo hardcoded, ...) ⇒ `passed=false`, `score=1.0`, `diagnosis` com a categoria da regra e `description` `🚨 [Needle 3 AST Block] ...` (arquivo:linha). *Exceção de vocabulário mantida por decisão (set/2026):* a regra `mock_in_production` emite `mock_stub_em_producao`, categoria do próprio guard **fora** das 10 opções de `DEFECT_OPTIONS` — a mensagem do bloco AST carrega o `file:line` completo.
-2. **Needle 3 Screener estrutural:** extrai os símbolos AST do diff e dispara triggers determinísticos (ex.: `open()` fora de try/with → `robustez_excecoes_recursos`; `# TODO:` → `requisito_incompleto_ou_ausente`; `while True` → `logica_ou_regra`; nested ifs ≥ 3 → `logica_ou_regra`; `os.getenv` sem default → `documentacao_configuracao`; assinatura sem anotação de params/retorno → `tipagem_ausente`; função/classe sem docstring → `docstring_ausente` — as duas últimas **fora de testes, `__init__`/`__str__`/dunders e exemplos**). Cada suspeita vai ao **Noul**:
-   * **Confirmada (P ≥ 0.78) — categoria dura** ⇒ `passed=false` **sempre** (mesmo com score ≥ corte), com categoria, arquivo, linhas, `evidence` e `candidate_defects`.
-   * **Confirmada — categoria de análise (`QUALITY_DEFECT_CATEGORIES`)** ⇒ **não veta** `score ≥ corte`; com nota < corte entra na reprovação/diagnóstico.
-   * **Refutada (P < 0.78)** ⇒ entra em `refuted_suspicions`.
-3. **Decisão do Score Laya (corte ≥ 3.40; banda de indiferença `CAVEAT_BAND = 0.20`):**
-   * **Zero suspeitas + `score ≥ 3.40`** ⇒ `passed=true`.
-   * **Zero suspeitas + `3.20 ≤ score < 3.40`** ⇒ **aprovação com ressalva** (`approved_with_caveat=true`) — divulgar `score_margin` e a `message`.
-   * **Zero suspeitas + `score < 3.20`** ⇒ `passed=false`, `diagnosis=None` e mensagem da banda — **não existe ressalva abaixo de 3.20**.
-   * **Suspeitas presentes + `score < 3.40`** ⇒ `passed=false` e `diagnosis` aponta a suspeita de **maior probabilidade** para **INVESTIGAÇÃO** no disco — mesmo com Noul negativo.
-   * **Suspeitas refutadas + `score ≥ 3.40`** ⇒ `passed=true`.
-4. **Caminho mono (banda + telemetria):** no **caminho mono** (workspace sem símbolos AST — repositório limpo ou diff não-code), a nota **na banda de indiferença** ⇒ `approved_with_caveat=true` + `approved_as_borderline=true` quando a massa saudável é ≥ 0.85 e falhas ≤ 0.12 (telemetria legada do Mass Gate); **abaixo da banda** ⇒ `passed=false` com `diagnosis=None` e `message` indicando caminho mono. No caminho com símbolos, `approved_as_borderline` só acompanha a ressalva (`approved_with_caveat` **e** massa saudável).
-
-> **Calibração obrigatória (ago/2026):** o head do Laya só discrimina com **≤ 10 opções** (bucket de temperature `6-10`). Listas ≥ 11 defeitos finos colapsam na opção-savor (precisão medida 1/4 no golden set); ≤ 5 opções concentradas mediram apenas 1–2/4. Essa calibração continua valendo para `openjev_choice` de roteamento e para ferramentas externas que ainda disparam `evaluate_choice` com as 10 categorias; não ampliar a lista sem revalidar `tests/test_diagnosis_calibration.py`.
-
-**Categorias (10 opções flat — sem nulas):**
-
-`logica_ou_regra` | `robustez_excecoes_recursos` | `seguranca` | `qualidade_de_testes` | `contrato_ambiente` | `performance_escopo_estilo` | `requisito_incompleto_ou_ausente` | `documentacao_configuracao` | `tipagem_ausente` | `docstring_ausente`
-
-Instructions + `DEFECT_DESCRIPTIONS` são textos curtos medidos para caber em `head_max_len=192` **sem truncar** (`scripts/measure_diag_choice_tokens.py`); não alongar sem re-medir.
-
-Ver `DEFECT_OPTIONS`, `DEFECT_DESCRIPTIONS` e `DEFECT_MEMBERS` em `src/core/schemas.py` para o mapeamento completo (categorias → folhas).
+1. **Etapa 0: Execução Sequencial de Testes Reais (`pytest`) em Chunks**
+   - Os testes de `tests/` são particionados em 3 a 4 chunks sequenciais para evitar estressar a CPU e a GPU GTX 1050 Ti.
+   - O chunk mais pesado (testes de inferência ML/Laya/Hardware/IPC) roda **isolado (solo)**.
+   - **Rejeição Estrita de Workspace sem Testes:** Se o workspace não contiver arquivos de teste reais em `tests/`, o pipeline rejeita sumariamente a entrega com instrução explícita de criação de teste. **O agente é estritamente obrigado a produzir pelo menos um teste real em `tests/test_<modulo>.py`** antes de tentar nova validação. É proibido tentar burlar esse bloqueio.
+   - Se qualquer teste falhar, o pipeline é abortado imediatamente (`passed: false`, `status: "REJECTED"`).
+2. **Etapa 1: NeedleASTGuard (Camada 1 — Bloqueios Determinísticos)**
+   - Bloqueia violações graves e inegociáveis de segurança e integridade (mocks em arquivos de produção sob `src/`, segredos hardcoded, `eval`/`exec`, SQL Injection, `verify=False`).
+   - Violações nesta camada causam rejeição imediata (`passed: false`, `status: "REJECTED"`).
+3. **Etapa 2: NeedleASTScreener (Camada 2 — Qualidade Estrutural)**
+   - Inspeciona o repositório em busca de alertas de higiene (tipagem ausente, docstrings ausentes, exceções engolidas), ignorando dunders (`__init__`), stubs (`.pyi`), decoradores `@property` e arquivos de teste.
+4. **Circuit Breaker Universal (Limite de 5 Tentativas)**
+   - Se o repositório atingir a **5ª tentativa** de validação sem aprovação limpa, o motor destrava automaticamente a **Saída de Emergência (Aprovação com Ressalva - `approved_with_caveat: true`, `status: "EMERGENCY_RELEASE"`)**.
 
 ---
 
@@ -61,12 +52,12 @@ Ver `DEFECT_OPTIONS`, `DEFECT_DESCRIPTIONS` e `DEFECT_MEMBERS` em `src/core/sche
 
 1. **Hardware Alvo (GTX 1050 Ti - 4GB VRAM):**
    * Suporte estrito a `float16` e `float32`.
-   * **Proibição de bfloat16:** GPUs Pascal (sm_61) não suportam `bfloat16`. O hardware guardrail deve coagir automaticamente para `float16` ou `float32`.
-   * **Resiliência:** Em caso de `OutOfMemoryError` ou indisponibilidade de driver, o motor executa fallback imediato para CPU.
+   * **Proibição de bfloat16:** GPUs Pascal (sm_61) não suportam `bfloat16`.
+   * **Resiliência:** Fallback automático para CPU caso ocorra indisponibilidade de VRAM.
 2. **Ambiente Virtual Python:**
-   * Execução restrita ao ambiente em `.venv/bin/python` e `.venv/bin/pytest tests/`.
+   * Execução restrita ao ambiente em `.venv/bin/python` e `.venv/bin/pytest`.
 3. **Política Fail-Fast:**
-   * Proibido simular decisões ou criar mocks em tempo de execução; o pipeline opera estritamente contra os modelos locais.
+   * Proibido simular decisões ou criar mocks em tempo de execução; o pipeline opera estritamente contra as dependências reais.
 
 ---
 
@@ -76,23 +67,22 @@ Ver `DEFECT_OPTIONS`, `DEFECT_DESCRIPTIONS` e `DEFECT_MEMBERS` em `src/core/sche
 > **Fundadora & Engenheira Líder:** [Maiteux Zanela](file:///home/maiteuxzanela/projeto%20JEV/AGENTS.md)  
 > **Diretório Oficial de Personas:** [personas/README.md](file:///home/maiteuxzanela/projeto%20JEV/personas/README.md)
 
-O Projeto JEV opera com um roster calibrado de especialistas coordenados pelo Orquestrador Valério. O roteamento obrigatório está suspenso: Valério possui autonomia plena para desenvolver, planejar e refatorar diretamente, acionando os subagentes sob demanda ao longo do fluxo de trabalho quando o isolamento de contexto ou especialidade técnica pontual for conveniente via `openjev_spawn_subagent`.
+O Orquestrador Valério possui autonomia plena para desenvolver, planejar e refatorar diretamente, acionando especialistas sob demanda via `openjev_spawn_subagent`.
 
-| Subagente | Documento de Persona | Domínio Técnico | Quando Acionar (despacho direto; `openjev_choice` só em dúvida genuína) |
+| Subagente | Documento de Persona | Domínio Técnico | Quando Acionar |
 | :--- | :--- | :--- | :--- |
-| **@Kael** | [`01_kael_ml_hardware.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/01_kael_ml_hardware.md) | ML Local, PyTorch & Pascal | Inferência do modelo Laya, profilagem da GTX 1050 Ti, bloqueio de `bfloat16`, fallback CPU e benchmarks. |
-| **@Maya** | [`02_maya_ast_memory.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/02_maya_ast_memory.md) | Memória Relacional & AST (Needle 3) | Parsing de AST Python, busca relacional, recorte de código (500–1.500 tok) e combate a context dumping. |
-| **@Túlio** | [`03_tulio_mcp_api.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/03_tulio_mcp_api.md) | Protocolos MCP, APIs & Schemas | Servidor MCP universal, API FastAPI, schemas Pydantic, concorrência assíncrona (`asyncio.to_thread`) e SSE. |
-| **@Clara** | [`04_clara_qa_governance.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/04_clara_qa_governance.md) | Quality Gate, Anti-Mock & Calibração | **Guardiã da Qualidade**. Testes reais em `tests/`, erradicação de mocks, Borderline Mass Gate e Golden Sets. |
-| **@Otávio** | [`05_otavio_audit_bridge.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/05_otavio_audit_bridge.md) | Auditorias Multi-Repo & Bridges | Molds de auditoria (`audit_*.py`), biblioteca `jev-client-bridge`, stop hooks e validação de skills. |
+| **@Kael** | [`01_kael_ml_hardware.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/01_kael_ml_hardware.md) | ML Local, PyTorch & Pascal | Inferência do modelo Laya para `choice` e `consulta`, profilagem de VRAM e fallback CPU. |
+| **@Maya** | [`02_maya_ast_memory.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/02_maya_ast_memory.md) | Memória Relacional & AST (Needle 3) | Parsing de AST Python, busca relacional e refinamento do `NeedleASTGuard`/`Screener`. |
+| **@Túlio** | [`03_tulio_mcp_api.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/03_tulio_mcp_api.md) | Protocolos MCP, APIs & Schemas | Servidor MCP universal, schemas Pydantic e ferramenta `needle_verify_delivery`. |
+| **@Clara** | [`04_clara_qa_governance.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/04_clara_qa_governance.md) | Quality Gate, Pytest & Anti-Mock | **Guardiã da Qualidade**. Suíte de testes reais em `tests/`, runner em chunks e políticas anti-mock. |
+| **@Otávio** | [`05_otavio_audit_bridge.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/05_otavio_audit_bridge.md) | Auditorias Multi-Repo & Bridges | Scripts de auditoria multi-repositório e integração com a biblioteca `jev-client-bridge`. |
 
 ---
 
-## 5. Relatório Resumido de Validação de Entrega (Score & Diagnose)
+## 5. Relatório Resumido de Validação de Entrega (`needle_verify_delivery`)
 
-Toda entrega técnica concluída nos repositórios do ecossistema deve reportar a validação final através de um bloco conciso e direto, contendo exclusivamente:
-* **Status:** Aprovado ($\ge 3.40$) OU Aprovado com ressalva (nota na banda $[3.20, 3.40)$ com zero suspeitas — divulgar `score_margin` e `message`) OU Reprovado OU Saída de Emergência
-* **Tentativas:** N
-* **Notas:** X.XX / 5.00 (em caso de reavaliações, relacionar as notas de cada tentativa: ex.: `3.15, 3.45`)
-
-
+Toda entrega técnica concluída deve reportar o resultado da homologação via:
+* **Status:** Aprovado (`APPROVED`) OU Rejeitado (`REJECTED`) OU Saída de Emergência (`EMERGENCY_RELEASE`)
+* **Tentativa:** N / 5
+* **Pytest Chunks:** Total de chunks executados e status de aprovação de cada chunk
+* **Violações AST:** Quantidade de violações bloqueantes (Camada 1) e alertas estruturais (Camada 2)

@@ -31,20 +31,39 @@ SQL_KEYWORDS = re.compile(
 
 @dataclass
 class ASTViolation:
-    """Representa uma violação estrutural detectada na AST do código."""
+    """Representa uma violação estrutural detectada na AST do código.
+
+    Exemplo:
+        >>> ASTViolation(file_path="a.py", line_number=1, rule_id="r", category="c", message="m").to_dict()["rule_id"]
+        'r'
+    """
     file_path: str
     line_number: int
     rule_id: str
     category: str
     message: str
+    code_snippet: str = ""
     snippet: str = ""
 
+    def __post_init__(self) -> None:
+        if not self.code_snippet and self.snippet:
+            self.code_snippet = self.snippet
+        elif not self.snippet and self.code_snippet:
+            self.snippet = self.code_snippet
+
     def to_dict(self) -> dict[str, Any]:
+        """Converte a violação em dicionário serializável para relatórios e respostas MCP.
+
+        Exemplo:
+            >>> ASTViolation(file_path="a.py", line_number=1, rule_id="r", category="c", message="m").to_dict()["line_number"]
+            1
+        """
         return {
-            "file_path": self.file_path,
-            "line_number": self.line_number,
             "rule_id": self.rule_id,
             "category": self.category,
+            "file_path": self.file_path,
+            "line_number": self.line_number,
+            "code_snippet": self.code_snippet,
             "message": self.message,
             "snippet": self.snippet,
         }
@@ -55,12 +74,21 @@ class NeedleASTGuard:
 
     @staticmethod
     def is_test_file(rel_path: str) -> bool:
-        """Determina se o arquivo pertence à suíte de testes."""
-        p = Path(rel_path)
+        """Determina se o arquivo pertence à suíte de testes (pasta tests/ ou prefixo test_).
+
+        Exemplo:
+            >>> NeedleASTGuard.is_test_file("tests/test_engine.py")
+            True
+        """
+        p = Path(rel_path.replace("\\", "/"))
         parts = [part.lower() for part in p.parts]
-        if any(part in ("tests", "test", "__tests__", "spec") for part in parts):
+        if not parts:
+            return False
+        # Prefixo test_ vale só no NOME do arquivo: aceitá-lo em componente de
+        # diretório (ex.: src/test_utils/) isentava produção da Camada 1.
+        dir_parts, name = parts[:-1], parts[-1]
+        if any(part in ("tests", "test", "__tests__", "spec") for part in dir_parts):
             return True
-        name = p.name.lower()
         return name.startswith("test_") or name.endswith("_test.py")
 
     @classmethod
@@ -124,28 +152,36 @@ class NeedleASTGuard:
     def _detect_mocks_in_production(
         cls, tree: ast.AST, lines: List[str], file_path: str
     ) -> List[ASTViolation]:
-        """Detecta importações ou instanciações de unittest.mock em código de produção."""
+        """Detecta importações ou instanciações de unittest.mock / mock em código de produção."""
         violations: List[ASTViolation] = []
 
         for node in ast.walk(tree):
-            # Caso 1: import unittest.mock
+            # Caso 1: import unittest.mock ou import mock
             if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == "unittest.mock" or alias.name.startswith("unittest.mock."):
-                        violations.append(
-                            ASTViolation(
-                                file_path=file_path,
-                                line_number=node.lineno,
-                                rule_id="mock_in_production",
-                                category="mock_stub_em_producao",
-                                message="Uso proibido de unittest.mock em código de produção.",
-                                snippet=cls._get_snippet(lines, node.lineno),
-                            )
-                        )
+                mock_module_names = [
+                    alias.name
+                    for alias in node.names
+                    if alias.name in ("unittest.mock", "mock")
+                    or alias.name.startswith("unittest.mock.")
+                ]
+                violations.extend(
+                    ASTViolation(
+                        file_path=file_path,
+                        line_number=node.lineno,
+                        rule_id="mock_in_production",
+                        category="mock_stub_em_producao",
+                        message=f"Uso proibido de '{module_name}' em código de produção.",
+                        code_snippet=cls._get_snippet(lines, node.lineno),
+                    )
+                    for module_name in mock_module_names
+                )
 
-            # Caso 2: from unittest.mock import MagicMock, patch, etc.
+            # Caso 2: from unittest.mock import MagicMock, patch, etc. ou from mock import ...
             elif isinstance(node, ast.ImportFrom):
-                if node.module and (node.module == "unittest.mock" or node.module.startswith("unittest.mock")):
+                if node.module and (
+                    node.module in ("unittest.mock", "mock")
+                    or node.module.startswith("unittest.mock.")
+                ):
                     violations.append(
                         ASTViolation(
                             file_path=file_path,
@@ -153,18 +189,18 @@ class NeedleASTGuard:
                             rule_id="mock_in_production",
                             category="mock_stub_em_producao",
                             message=f"Importação proibida de '{node.module}' em código de produção.",
-                            snippet=cls._get_snippet(lines, node.lineno),
+                            code_snippet=cls._get_snippet(lines, node.lineno),
                         )
                     )
 
-            # Caso 3: Chamada direta a MagicMock() / Mock() mesmo sem import explícito
+            # Caso 3: Chamada direta a MagicMock(), Mock(), AsyncMock(), PropertyMock(), patch()
             elif isinstance(node, ast.Call):
                 func_name = ""
                 if isinstance(node.func, ast.Name):
                     func_name = node.func.id
                 elif isinstance(node.func, ast.Attribute):
                     func_name = node.func.attr
-                if func_name in ("MagicMock", "AsyncMock"):
+                if func_name in ("MagicMock", "Mock", "AsyncMock", "PropertyMock", "patch", "create_autospec"):
                     violations.append(
                         ASTViolation(
                             file_path=file_path,
@@ -172,7 +208,7 @@ class NeedleASTGuard:
                             rule_id="mock_in_production",
                             category="mock_stub_em_producao",
                             message=f"Instanciação proibida de '{func_name}' em código de produção.",
-                            snippet=cls._get_snippet(lines, node.lineno),
+                            code_snippet=cls._get_snippet(lines, node.lineno),
                         )
                     )
 
@@ -196,32 +232,32 @@ class NeedleASTGuard:
         for node in ast.walk(tree):
             # Caso 1: Atribuição de f-string contendo SQL (ex.: query = f"SELECT ... {id}")
             if isinstance(node, ast.Assign):
-                if isinstance(node.value, ast.JoinedStr):
-                    # Verifica se alguma parte constante da f-string contém comando SQL
-                    has_sql = any(
-                        isinstance(part, ast.Constant)
-                        and isinstance(part.value, str)
-                        and cls._is_sql_string_value(part.value)
-                        for part in node.value.values
+                fstring_parts = node.value.values if isinstance(node.value, ast.JoinedStr) else []
+                # Verifica se alguma parte constante da f-string contém comando SQL
+                has_sql = any(
+                    isinstance(part, ast.Constant)
+                    and isinstance(part.value, str)
+                    and cls._is_sql_string_value(part.value)
+                    for part in fstring_parts
+                )
+                # Verifica se há valores interpolados (ast.FormattedValue)
+                has_interpolation = any(isinstance(part, ast.FormattedValue) for part in fstring_parts)
+
+                if has_sql and has_interpolation:
+                    sql_interpolated_vars.update(
+                        target.id for target in node.targets if isinstance(target, ast.Name)
                     )
-                    # Verifica se há valores interpolados (ast.FormattedValue)
-                    has_interpolation = any(isinstance(part, ast.FormattedValue) for part in node.value.values)
 
-                    if has_sql and has_interpolation:
-                        for target in node.targets:
-                            if isinstance(target, ast.Name):
-                                sql_interpolated_vars.add(target.id)
-
-                        violations.append(
-                            ASTViolation(
-                                file_path=file_path,
-                                line_number=node.lineno,
-                                rule_id="sql_injection",
-                                category="seguranca",
-                                message="Vulnerabilidade de SQL Injection: query SQL interpolada via f-string.",
-                                snippet=cls._get_snippet(lines, node.lineno),
-                            )
+                    violations.append(
+                        ASTViolation(
+                            file_path=file_path,
+                            line_number=node.lineno,
+                            rule_id="sql_injection",
+                            category="seguranca",
+                            message="Vulnerabilidade de SQL Injection: query SQL interpolada via f-string.",
+                            snippet=cls._get_snippet(lines, node.lineno),
                         )
+                    )
 
             # Caso 2: Chamada de execução (.execute, .executemany, .raw)
             elif isinstance(node, ast.Call):
@@ -231,51 +267,18 @@ class NeedleASTGuard:
                 elif isinstance(node.func, ast.Name):
                     func_name = node.func.id
 
-                if func_name in ("execute", "executemany", "raw", "cursor_execute") and node.args:
-                    first_arg = node.args[0]
-
-                    # 2.1 Passagem direta de f-string no .execute(f"SELECT ... {id}")
-                    if isinstance(first_arg, ast.JoinedStr):
-                        has_interpolation = any(isinstance(part, ast.FormattedValue) for part in first_arg.values)
-                        if has_interpolation:
-                            violations.append(
-                                ASTViolation(
-                                    file_path=file_path,
-                                    line_number=node.lineno,
-                                    rule_id="sql_injection",
-                                    category="seguranca",
-                                    message="Vulnerabilidade de SQL Injection: f-string dinâmica passada diretamente para método de execução SQL.",
-                                    snippet=cls._get_snippet(lines, node.lineno),
-                                )
-                            )
-
-                    # 2.2 Concatenação com operador + no .execute("SELECT ... " + id)
-                    elif isinstance(first_arg, ast.BinOp) and isinstance(first_arg.op, ast.Add):
-                        violations.append(
-                            ASTViolation(
-                                file_path=file_path,
-                                line_number=node.lineno,
-                                rule_id="sql_injection",
-                                category="seguranca",
-                                message="Vulnerabilidade de SQL Injection: query concatenada com '+' passada para método de execução SQL.",
-                                snippet=cls._get_snippet(lines, node.lineno),
-                            )
-                        )
-
-                    # 2.3 Variável rastreada previamente como f-string sem parâmetros separados
-                    elif isinstance(first_arg, ast.Name) and first_arg.id in sql_interpolated_vars:
-                        # Se não houver segundo argumento (parâmetros preparados)
-                        if len(node.args) < 2 and not node.keywords:
-                            violations.append(
-                                ASTViolation(
-                                    file_path=file_path,
-                                    line_number=node.lineno,
-                                    rule_id="sql_injection",
-                                    category="seguranca",
-                                    message=f"Vulnerabilidade de SQL Injection: variável '{first_arg.id}' interpolada executada sem parametrização.",
-                                    snippet=cls._get_snippet(lines, node.lineno),
-                                )
-                            )
+                is_sql_execute = (
+                    func_name in ("execute", "executemany", "raw", "cursor_execute") and bool(node.args)
+                )
+                execute_violation = (
+                    cls._detect_execute_sql_violation(
+                        node, node.args[0], sql_interpolated_vars, file_path, lines
+                    )
+                    if is_sql_execute
+                    else None
+                )
+                if execute_violation is not None:
+                    violations.append(execute_violation)
 
         # Remove duplicatas por linha
         unique_violations: dict[int, ASTViolation] = {}
@@ -283,6 +286,54 @@ class NeedleASTGuard:
             if v.line_number not in unique_violations:
                 unique_violations[v.line_number] = v
         return list(unique_violations.values())
+
+    @classmethod
+    def _detect_execute_sql_violation(
+        cls,
+        node: ast.Call,
+        first_arg: ast.expr,
+        sql_interpolated_vars: Set[str],
+        file_path: str,
+        lines: List[str],
+    ) -> Optional[ASTViolation]:
+        """Retorna a violação de SQL Injection de uma chamada `.execute()`, quando houver."""
+        # 2.1 Passagem direta de f-string no .execute(f"SELECT ... {id}")
+        has_interpolation = isinstance(first_arg, ast.JoinedStr) and any(
+            isinstance(part, ast.FormattedValue) for part in first_arg.values
+        )
+        if has_interpolation:
+            return ASTViolation(
+                file_path=file_path,
+                line_number=node.lineno,
+                rule_id="sql_injection",
+                category="seguranca",
+                message="Vulnerabilidade de SQL Injection: f-string dinâmica passada diretamente para método de execução SQL.",
+                snippet=cls._get_snippet(lines, node.lineno),
+            )
+
+        # 2.2 Concatenação com operador + no .execute("SELECT ... " + id)
+        if isinstance(first_arg, ast.BinOp) and isinstance(first_arg.op, ast.Add):
+            return ASTViolation(
+                file_path=file_path,
+                line_number=node.lineno,
+                rule_id="sql_injection",
+                category="seguranca",
+                message="Vulnerabilidade de SQL Injection: query concatenada com '+' passada para método de execução SQL.",
+                snippet=cls._get_snippet(lines, node.lineno),
+            )
+
+        # 2.3 Variável rastreada previamente como f-string sem parâmetros separados
+        is_tracked_var = isinstance(first_arg, ast.Name) and first_arg.id in sql_interpolated_vars
+        if is_tracked_var and len(node.args) < 2 and not node.keywords:
+            return ASTViolation(
+                file_path=file_path,
+                line_number=node.lineno,
+                rule_id="sql_injection",
+                category="seguranca",
+                message=f"Vulnerabilidade de SQL Injection: variável '{first_arg.id}' interpolada executada sem parametrização.",
+                snippet=cls._get_snippet(lines, node.lineno),
+            )
+        return None
 
     @classmethod
     def _detect_swallowed_exceptions(
@@ -314,6 +365,22 @@ class NeedleASTGuard:
         return violations
 
     @classmethod
+    def _is_trivially_true_assert(cls, test_expr: ast.expr) -> bool:
+        """True para `assert True` ou comparação entre literais (tautologia trivial).
+
+        Exemplo:
+            >>> NeedleASTGuard._is_trivially_true_assert(ast.parse("1 == 1").body[0].value)
+            True
+        """
+        if isinstance(test_expr, ast.Constant) and test_expr.value is True:
+            return True
+        if isinstance(test_expr, ast.Compare):
+            is_literal_left = isinstance(test_expr.left, ast.Constant)
+            is_literal_comparators = all(isinstance(c, ast.Constant) for c in test_expr.comparators)
+            return is_literal_left and is_literal_comparators
+        return False
+
+    @classmethod
     def _detect_tautological_tests(
         cls, tree: ast.AST, lines: List[str], file_path: str
     ) -> List[ASTViolation]:
@@ -330,20 +397,9 @@ class NeedleASTGuard:
                 if not assert_nodes:
                     continue
 
-                all_tautological = True
-                for a_node in assert_nodes:
-                    test_expr = a_node.test
-                    # assert True
-                    if isinstance(test_expr, ast.Constant) and test_expr.value is True:
-                        continue
-                    # assert 1 == 1 ou 'a' in 'abc' (comparação literal simples)
-                    if isinstance(test_expr, ast.Compare):
-                        is_literal_left = isinstance(test_expr.left, ast.Constant)
-                        is_literal_comparators = all(isinstance(c, ast.Constant) for c in test_expr.comparators)
-                        if is_literal_left and is_literal_comparators:
-                            continue
-                    all_tautological = False
-                    break
+                all_tautological = all(
+                    cls._is_trivially_true_assert(a_node.test) for a_node in assert_nodes
+                )
 
                 # Verifica se há chamadas reais a funções no corpo do teste
                 calls = [n for n in ast.walk(node) if isinstance(n, ast.Call)]
@@ -363,15 +419,34 @@ class NeedleASTGuard:
         return violations
 
     SECRET_VAR_NAMES = re.compile(
-        r"^(API_KEY|SECRET_KEY|PRIVATE_KEY|ACCESS_TOKEN|AUTH_TOKEN|PASSWORD|PASSWD|DB_PASSWORD|SECRET)$",
+        r"^(API_KEY|SECRET_KEY|PRIVATE_KEY|ACCESS_TOKEN|AUTH_TOKEN|PASSWORD|PASSWD|DB_PASSWORD|SECRET|API_TOKEN|TOKEN)$",
         re.IGNORECASE,
     )
     SECRET_PATTERNS = (
-        re.compile(r"sk-[a-zA-Z0-9_\-]{20,}"),
+        re.compile(r"sk-[a-zA-Z0-9_\-]{3,}"),
         re.compile(r"ghp_[a-zA-Z0-9]{20,}"),
         re.compile(r"AKIA[0-9A-Z]{16}"),
         re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY"),
     )
+
+    @classmethod
+    def _is_hardcoded_secret_literal(cls, raw_value: str) -> bool:
+        """True apenas para literais com cara de segredo real (não placeholder nem curto demais).
+
+        Exemplo:
+            >>> NeedleASTGuard._is_hardcoded_secret_literal("sk-live-12345")
+            True
+            >>> NeedleASTGuard._is_hardcoded_secret_literal("your_api_key_here")
+            False
+        """
+        val = raw_value.strip()
+        if len(val) < 3:
+            return False
+        placeholders = (
+            "dummy", "test", "fake", "placeholder", "xxx",
+            "your_", "example", "sample", "change_me",
+        )
+        return not any(p in val.lower() for p in placeholders)
 
     @classmethod
     def _detect_hardcoded_secrets(
@@ -383,42 +458,46 @@ class NeedleASTGuard:
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 # Caso 1: Nome da variável sugestivo (API_KEY, PASSWORD, etc.)
-                is_secret_var = False
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and cls.SECRET_VAR_NAMES.match(target.id):
-                        is_secret_var = True
-                        break
+                is_secret_var = any(
+                    isinstance(target, ast.Name) and cls.SECRET_VAR_NAMES.match(target.id)
+                    for target in node.targets
+                )
+                is_secret_literal = (
+                    isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                )
 
-                if is_secret_var and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                    val = node.value.value.strip()
-                    # Ignora strings vazias ou placeholders evidentes
-                    if len(val) >= 8 and not any(p in val.lower() for p in ("dummy", "test", "fake", "placeholder", "xxx", "your_")):
-                        violations.append(
-                            ASTViolation(
-                                file_path=file_path,
-                                line_number=node.lineno,
-                                rule_id="hardcoded_secret",
-                                category="seguranca",
-                                message="Credencial ou segredo hardcoded detectado em código de produção.",
-                                snippet=cls._get_snippet(lines, node.lineno),
-                            )
+                if is_secret_var and is_secret_literal and cls._is_hardcoded_secret_literal(node.value.value):
+                    violations.append(
+                        ASTViolation(
+                            file_path=file_path,
+                            line_number=node.lineno,
+                            rule_id="hardcoded_secret",
+                            category="seguranca",
+                            message="Credencial ou segredo hardcoded detectado em código de produção.",
+                            code_snippet=cls._get_snippet(lines, node.lineno),
                         )
-                        continue
+                    )
+                    continue
 
                 # Caso 2: Padrões regex de tokens conhecidos em qualquer string constante
-                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                    val = node.value.value
-                    if any(pat.search(val) for pat in cls.SECRET_PATTERNS):
-                        violations.append(
-                            ASTViolation(
-                                file_path=file_path,
-                                line_number=node.lineno,
-                                rule_id="hardcoded_secret",
-                                category="seguranca",
-                                message="Token de serviço ou chave privada reconhecida exposta no código.",
-                                snippet=cls._get_snippet(lines, node.lineno),
-                            )
+                is_string_literal = (
+                    isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                )
+                matches_known_token = (
+                    is_string_literal
+                    and any(pat.search(node.value.value) for pat in cls.SECRET_PATTERNS)
+                )
+                if matches_known_token:
+                    violations.append(
+                        ASTViolation(
+                            file_path=file_path,
+                            line_number=node.lineno,
+                            rule_id="hardcoded_secret",
+                            category="seguranca",
+                            message="Token de serviço ou chave privada reconhecida exposta no código.",
+                            code_snippet=cls._get_snippet(lines, node.lineno),
                         )
+                    )
 
         return violations
 
@@ -604,6 +683,9 @@ class NeedleASTGuard:
                     file_violations = cls.scan_content(content, df.path)
                     all_violations.extend(file_violations)
                 except Exception as e:
-                    logger.warning(f"Erro ao ler arquivo para varredura AST ({df.path}): {e}")
+                    logger.warning(
+                        f"Erro ao ler arquivo para varredura AST ({df.path}): {e}",
+                        exc_info=True,
+                    )
 
         return all_violations

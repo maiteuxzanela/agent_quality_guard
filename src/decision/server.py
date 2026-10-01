@@ -4,16 +4,20 @@ Expõe endpoints para noul, choice, score e monitoramento de saúde da GPU/VRAM.
 
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ..core.schemas import (
     ChoiceRequest,
     ChoiceResponse,
     HardwareUnavailableError,
     InferenceError,
+    Needle3Query,
+    Needle3Response,
+    NeedleSearchHttpRequest,
     NoulRequest,
     NoulResponse,
     OpenJevError,
@@ -21,8 +25,10 @@ from ..core.schemas import (
     ScoreRequest,
     ScoreResponse,
 )
+from ..memory.local_needle import LocalNeedleEngine
 from .engine import OpenJevEngine
 from .hardware import get_hardware_profile
+from .needle_ui_html import NEEDLE_UI_HTML
 
 logger = logging.getLogger("jev.server")
 
@@ -122,7 +128,10 @@ def create_app(
             try:
                 _engine.load_model()
             except Exception as e:
-                logger.error(f"Falha na carga automática do modelo Open Jev no startup: {e}")
+                logger.error(
+                    f"Falha na carga automática do modelo Open Jev no startup: {e}",
+                    exc_info=True,
+                )
         yield
         # Shutdown
         _engine.model = None
@@ -297,6 +306,52 @@ def create_app(
                 "recommended_dtype": profile.recommended_dtype,
             }
         }
+
+    # ==========================================================================
+    # Endpoints de Busca de Memória (Needle 3 UI & Search)
+    # ==========================================================================
+
+    @app.post(
+        "/v1/needle/search",
+        response_model=Needle3Response,
+        summary="Busca Cirúrgica de Código AST (Cactus Needle 3)",
+    )
+    async def needle_search(request: NeedleSearchHttpRequest) -> Needle3Response:
+        """Executa busca relacional de AST e léxica no repositório selecionado."""
+        target_ws = (request.workspace_path or ".").strip()
+        ws_path = Path(target_ws).resolve()
+        if not ws_path.exists() or not ws_path.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Caminho de repositório inválido ou inexistente: '{target_ws}'",
+            )
+
+        needle_engine = LocalNeedleEngine(workspace_root=str(ws_path))
+        query_obj = Needle3Query(
+            query=request.query,
+            scope=request.scope,
+            max_tokens=request.max_tokens,
+            relational_depth=request.relational_depth,
+        )
+        return await needle_engine.search(query_obj)
+
+    @app.get(
+        "/v1/needle/ui",
+        response_class=HTMLResponse,
+        summary="Interface Gráfica HTML para Consulta Needle 3",
+    )
+    async def needle_ui() -> HTMLResponse:
+        """Retorna a interface web simples para consulta ao repositório em linguagem natural."""
+        return HTMLResponse(content=NEEDLE_UI_HTML)
+
+    @app.get(
+        "/ui",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def needle_ui_shortcut() -> HTMLResponse:
+        """Atalho direto para a interface gráfica."""
+        return HTMLResponse(content=NEEDLE_UI_HTML)
 
     return app
 

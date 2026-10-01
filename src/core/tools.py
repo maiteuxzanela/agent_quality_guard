@@ -112,76 +112,47 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "openjev_score_and_diagnose",
+            "name": "needle_verify_delivery",
             "description": (
-                "Avalia a qualidade de um artefato técnico com score contínuo (1.0–5.0) usando "
-                "o Screener estrutural Needle 3 (10 categorias reais: 8 duras + 2 de análise) "
-                "arbitrado pelo JEV Noul (P >= 0.78), sem choice. Score >= corte: passed=true "
-                "(defeito duro confirmado ainda reprova). Score na banda de indiferença "
-                "[corte - 0.20, corte): passed=true com approved_with_caveat=true apenas com "
-                "zero suspeitas; abaixo da banda: passed=false mesmo sem suspeita. Suspeita "
-                "confirmada pelo Noul, ou não-resolvida com score < corte: passed=false com "
-                "diagnosis (categoria, arquivo, linhas e candidate_defects) para auto-correção "
-                "precisa — no segundo caso a suspeita deve ser INVESTIGADA mesmo com Noul "
-                "negativo. "
-                "Circuit breaker após 5 tentativas. "
-                "Ferramenta única de score do pipeline (a tool openjev_score foi expurgada). "
-                "Premissa: padrão 'Pedido | Resultado', "
-                "máximo 1500 caracteres; rubrica via task_type do catálogo fechado; retorna "
-                "score_margin/borderline."
+                "Validação de entrega de código 100% determinística. "
+                "Executa: 1º Pytest em 3-4 chunks sequenciais (ML isolado), "
+                "2º NeedleASTGuard (Camada 1: anti-mock, SQLi, eval, segredos), "
+                "3º NeedleASTScreener (Camada 2: qualidade de tipagem, docstrings, exceções). "
+                "Circuit breaker universal de 5 tentativas: se a 5ª tentativa for atingida "
+                "sem aprovação determinística, o código é aprovado com ressalva (EMERGENCY_RELEASE)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "premise": {
-                        "type": "string",
-                        "description": (
-                            "Pedido original concatenado com resultado executado (arquivos modificados, "
-                            "testes, commits), padrão factual 'Pedido do Prompt: ... | Resultado Executado: "
-                            "...', máximo 1500 caracteres."
-                        ),
-                    },
                     "task_type": {
                         "type": "string",
                         "default": "codigo_producao",
-                        "description": (
-                            "Chave do catálogo fechado RUBRIC_CATALOG: codigo_producao (padrão único). "
-                            "Rubrica livre é ignorada."
-                        ),
-                    },
-                    "rubric": {
-                        "type": "string",
-                        "description": (
-                            "DEPRECIADO e IGNORADO pelo servidor — a rubrica vem exclusivamente "
-                            "do catálogo fechado por task_type (rubric gaming proibido)."
-                        ),
+                        "description": "Tipo de tarefa (codigo_producao)."
                     },
                     "workspace": {
                         "type": "string",
-                        "description": "Caminho absoluto do repositório Git para rastreamento anti-premise gaming. Padrão: cwd.",
+                        "default": "",
+                        "description": "Caminho do repositório/workspace a validar (padrão: cwd)."
                     },
-                    "min_score": {"type": "number", "default": 1.0, "description": "Nota mínima da escala."},
-                    "max_score": {"type": "number", "default": 5.0, "description": "Nota máxima da escala."},
-                    "threshold": {
-                        "type": "number",
-                        "default": 3.40,
+                    "attempt_number": {
+                        "type": "integer",
+                        "default": 1,
                         "description": (
-                            "Nota de corte. Sem suspeita estrutural do Needle 3, score na banda de "
-                            "indiferença [3.20, 3.40) aprova com ressalva (approved_with_caveat); "
-                            "abaixo de 3.20 reprova mesmo sem suspeita; com suspeita (confirmada "
-                            "pelo Noul ou não-resolvida), score < threshold reprova e exige "
-                            "investigação. Padrão Laya calibrado: 3.40."
-                        ),
+                            "Informativo (1 a 5). A contagem de tentativas é exclusivamente "
+                            "server-side: o valor do chamador não participa do circuit breaker."
+                        )
                     },
-                    "reset_history": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Se verdadeiro, zera o histórico de tentativas e cache para iniciar um ciclo limpo na Tentativa 1.",
+                    "pedido": {
+                        "type": "string",
+                        "description": "Descrição do pedido original (opcional para audit log)."
                     },
-                },
-                "required": ["premise"],
-            },
-        },
+                    "resultado": {
+                        "type": "string",
+                        "description": "Descrição do resultado executado (opcional para audit log)."
+                    }
+                }
+            }
+        }
     },
     {
         "type": "function",

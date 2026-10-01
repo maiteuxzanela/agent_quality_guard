@@ -48,20 +48,37 @@ def sanitize_torch_dtype(requested_dtype: Any) -> Any:
 
 import fcntl
 
-_GPU_LOCK_FD: Optional[Any] = None
+@dataclass
+class _GpuLockState:
+    """Estado mutável do lock exclusivo de GPU (holder explícito, sem 'global')."""
+
+    handle: Optional[Any] = None
+
+
+_GPU_LOCK = _GpuLockState()
 
 
 def try_acquire_gpu_lock() -> bool:
-    """Tenta adquirir lock exclusivo na GPU para evitar que múltiplos processos saturem os 4GB de VRAM."""
-    global _GPU_LOCK_FD
-    if _GPU_LOCK_FD is not None:
+    """Tenta adquirir lock exclusivo na GPU para evitar que múltiplos processos saturem os 4GB de VRAM.
+
+    Exemplo:
+        >>> try_acquire_gpu_lock() in (True, False)
+        True
+    """
+    if _GPU_LOCK.handle is not None:
         return True
+    handle: Optional[Any] = None
     try:
-        f = open("/tmp/openjev_gpu.lock", "w")
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _GPU_LOCK_FD = f
+        handle = open("/tmp/openjev_gpu.lock", "w")
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _GPU_LOCK.handle = handle
         return True
     except (BlockingIOError, OSError):
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception as close_err:
+                logger.debug(f"Falha ao fechar arquivo de lock da GPU: {close_err}")
         return False
 
 
@@ -179,12 +196,17 @@ def build_max_memory_map(max_vram_mb: int = 3000, cpu_ram_gb: int = 12) -> Dict[
     }
 
 
-def clean_gpu_memory():
-    """Libera caches residuais da VRAM."""
+def clean_gpu_memory() -> None:
+    """Libera caches residuais da VRAM.
+
+    Exemplo:
+        >>> clean_gpu_memory() is None
+        True
+    """
     try:
         import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Falha ao limpar memória da GPU: {e}")

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import (
+    ASTViolation,
     ChoiceRequest,
     ChoiceResponse,
     ConsultaRequest,
@@ -11,10 +12,11 @@ from src.core.schemas import (
     Needle3Query,
     Needle3Response,
     Needle3Snippet,
+    NeedleVerifyDeliveryRequest,
+    NeedleVerifyDeliveryResponse,
     NoulRequest,
     NoulResponse,
-    ScoreRequest,
-    ScoreResponse,
+    PytestChunkResult,
 )
 
 
@@ -24,10 +26,70 @@ def test_noul_request_default_threshold_is_calibrated_078():
     assert req.threshold == 0.78
 
 
-def test_score_request_default_threshold_is_calibrated_340():
-    """Default do schema deve ser o corte calibrado Laya (3.40), não o DeBERTa 3.75."""
-    req = ScoreRequest(premise="Pedido: x | Resultado: y")
-    assert req.threshold == 3.40
+def test_needle_verify_delivery_request_defaults():
+    """Default do NeedleVerifyDeliveryRequest deve estar conforme a especificação."""
+    req = NeedleVerifyDeliveryRequest()
+    assert req.task_type == "codigo_producao"
+    assert req.workspace_path == "."
+    assert req.attempt_number == 1
+    assert req.pedido is None
+    assert req.resultado is None
+
+
+def test_needle_verify_delivery_request_attempt_number_validation():
+    """attempt_number deve ser int entre 1 e 5."""
+    with pytest.raises(ValidationError):
+        NeedleVerifyDeliveryRequest(attempt_number=0)
+    with pytest.raises(ValidationError):
+        NeedleVerifyDeliveryRequest(attempt_number=6)
+
+
+def test_pytest_chunk_result_and_ast_violation():
+    chunk = PytestChunkResult(
+        chunk_id="chunk_1_isolated_ml",
+        passed=True,
+        total_passed=15,
+        total_failed=0,
+        execution_time_seconds=2.34,
+    )
+    assert chunk.failure_details == []
+    assert chunk.passed is True
+
+    violation = ASTViolation(
+        rule_id="RULE_001",
+        category="SECURITY",
+        file_path="src/auth.py",
+        line_number=10,
+        code_snippet="eval(user_input)",
+        message="uso de eval proibido",
+        suggestion="usar ast.literal_eval",
+    )
+    assert violation.suggestion == "usar ast.literal_eval"
+
+
+def test_needle_verify_delivery_response():
+    chunk = PytestChunkResult(
+        chunk_id="chunk_1_isolated_ml",
+        passed=True,
+        total_passed=5,
+        total_failed=0,
+        execution_time_seconds=0.8,
+    )
+    resp = NeedleVerifyDeliveryResponse(
+        passed=True,
+        status="APPROVED",
+        attempt_number=1,
+        pytest_success=True,
+        pytest_chunks=[chunk],
+        blocking_ast_violations=[],
+        structural_ast_warnings=[],
+        total_files_scanned=12,
+        total_lines_scanned=1500,
+        message="Entrega aprovada com sucesso",
+    )
+    assert resp.passed is True
+    assert resp.status == "APPROVED"
+    assert len(resp.pytest_chunks) == 1
 
 
 def test_noul_request_and_response():
@@ -71,7 +133,6 @@ def test_choice_request_valid():
 
 
 def test_choice_request_com_criteria_e_instructions():
-    """Choice de diagnóstico serve descriptions como criteria e instrução própria."""
     req = ChoiceRequest(
         premise="Score 2.1 reprovado",
         options=["seguranca", "qualidade_de_testes"],
@@ -90,36 +151,6 @@ def test_choice_request_duplicate_options():
         ChoiceRequest(
             premise="Fix bug",
             options=["backend", "security", "backend"],  # Duplicata
-        )
-
-
-def test_score_request_valid():
-    req = ScoreRequest(
-        premise="def foo(): pass",
-        rubric="High test coverage, strict typing",
-        min_score=1.0,
-        max_score=5.0,
-        threshold=4.0,
-    )
-    assert req.threshold == 4.0
-
-
-def test_score_request_invalid_scale():
-    with pytest.raises(ValidationError):
-        ScoreRequest(
-            premise="test",
-            rubric="test",
-            min_score=5.0,
-            max_score=1.0,  # min >= max é inválido
-        )
-
-    with pytest.raises(ValidationError):
-        ScoreRequest(
-            premise="test",
-            rubric="test",
-            min_score=1.0,
-            max_score=5.0,
-            threshold=6.0,  # threshold fora da escala
         )
 
 
@@ -149,8 +180,6 @@ def test_needle3_query_and_response():
     assert len(resp.snippets) == 1
     assert resp.total_tokens == 120
 
-
-# ─── Consulta direta (indício textual, sem booleano de aprovação) ─────────────
 
 def test_consulta_request_and_response():
     req = ConsultaRequest(
@@ -198,7 +227,6 @@ def test_spawn_subagent_request_and_response_schemas():
     """Valida schemas de despacho de subagente com timeout opcional."""
     from src.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
 
-    # Default timeout deve ser None (desativado)
     req = SpawnSubagentRequest(
         persona="juliana",
         task="Desenvolver PWA médico",
@@ -207,7 +235,6 @@ def test_spawn_subagent_request_and_response_schemas():
     assert req.auto_validate is True
     assert req.persona == "juliana"
 
-    # Timeout customizado
     req_with_timeout = SpawnSubagentRequest(
         persona="juliana",
         task="Desenvolver PWA médico",
@@ -215,7 +242,6 @@ def test_spawn_subagent_request_and_response_schemas():
     )
     assert req_with_timeout.timeout == 180.0
 
-    # Response schema
     resp = SpawnSubagentResponse(
         success=True,
         persona="juliana",
@@ -230,23 +256,17 @@ def test_spawn_subagent_request_and_response_schemas():
 
 def test_needle3_query_scope_coercion():
     """Verifica coerção transparente de string, list ou None no campo scope do Needle3Query."""
-    # String única vira lista
     q1 = Needle3Query(query="def test", scope="src/decision")
     assert q1.scope == ["src/decision"]
 
-    # String com vírgulas vira lista separada
     q2 = Needle3Query(query="def test", scope="src/decision, src/memory")
     assert q2.scope == ["src/decision", "src/memory"]
 
-    # Lista de strings permanece lista
     q3 = Needle3Query(query="def test", scope=["src/core", "src/decision"])
     assert q3.scope == ["src/core", "src/decision"]
 
-    # None permanece None
     q4 = Needle3Query(query="def test", scope=None)
     assert q4.scope is None
 
-    # String vazia vira None
     q5 = Needle3Query(query="def test", scope="")
     assert q5.scope is None
-

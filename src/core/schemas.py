@@ -591,6 +591,73 @@ class ScoreDiagnoseResponse(BaseModel):
     ast_violations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Violações determinísticas de AST detectadas pelo Needle 3.")
 
 
+class NeedleVerifyDeliveryRequest(BaseModel):
+    """Requisição para homologação de entrega via tool needle_verify_delivery."""
+    task_type: str = "codigo_producao"
+    workspace_path: str = "."
+    attempt_number: int = Field(default=1, ge=1, le=5)
+    pedido: Optional[str] = None
+    resultado: Optional[str] = None
+
+
+class PytestChunkResult(BaseModel):
+    """Resultado da execução de um chunk isolado da suíte de testes pytest."""
+    chunk_id: str
+    passed: bool
+    total_passed: int
+    total_failed: int
+    execution_time_seconds: float
+    failure_details: List[str] = Field(default_factory=list)
+
+
+class ASTViolation(BaseModel):
+    """Violação ou alerta de análise estática de AST."""
+    rule_id: str
+    category: str
+    file_path: str
+    line_number: int
+    code_snippet: str
+    message: str
+    suggestion: Optional[str] = None
+
+
+class NeedleVerifyDeliveryResponse(BaseModel):
+    """Resposta unificada do quality gate needle_verify_delivery."""
+    passed: bool
+    status: str
+    attempt_number: int
+    pytest_success: bool
+    pytest_chunks: List[PytestChunkResult]
+    blocking_ast_violations: List[ASTViolation]
+    structural_ast_warnings: List[ASTViolation]
+    confirmed_defects: List[ASTViolation] = Field(
+        default_factory=list,
+        description="Defeitos estruturais confirmados pelo Laya RLCD (JEV Noul P >= 0.78)."
+    )
+    dismissed_warnings: List[ASTViolation] = Field(
+        default_factory=list,
+        description="Alertas estruturais descartados como falsos-positivos pelo Laya RLCD (JEV Noul P < 0.78)."
+    )
+    total_files_scanned: int
+    total_lines_scanned: int
+    approved_with_caveat: bool = Field(
+        default=False,
+        description=(
+            "true APENAS em EMERGENCY_RELEASE (Saída de Emergência da 5ª tentativa, "
+            "AGENTS.md §2) — entrega liberada com ressalva."
+        ),
+    )
+    pedido_audit: Optional[str] = Field(
+        default=None,
+        description="Transcrição auditável do pedido/requisito declarado na homologação."
+    )
+    resultado_audit: Optional[str] = Field(
+        default=None,
+        description="Resumo factual das alterações entregues para rastreabilidade de compliance."
+    )
+    message: str
+
+
 # ==============================================================================
 # Schemas Cactus Needle 3: Busca & Recuperação Cirúrgica Relacional
 # ==============================================================================
@@ -674,6 +741,26 @@ class Needle3Response(BaseModel):
         le=100.0,
         description="Percentual real de tokens economizados vs. indexar todos os blocos candidatos.",
     )
+
+
+class NeedleSearchHttpRequest(BaseModel):
+    """Requisição HTTP para consulta do Needle 3 com seleção de repositório (workspace_path)."""
+    query: str = Field(..., description="Termo ou pergunta técnica de busca em linguagem natural.")
+    workspace_path: Optional[str] = Field(default=".", description="Caminho do repositório a ser consultado.")
+    scope: Optional[List[str]] = Field(default=None, description="Filtro opcional de diretórios/pacotes/arquivos.")
+    max_tokens: int = Field(default=1000, gt=0, le=4096, description="Limite máximo de tokens do recorte retornado.")
+    relational_depth: int = Field(default=2, ge=0, le=5, description="Profundidade do grafo relacional AST.")
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def coerce_scope_to_list(cls, v: Any) -> Optional[List[str]]:
+        """Normaliza o campo scope para lista, reaproveitando a regra do schema Needle3Query.
+
+        Exemplo:
+            >>> NeedleSearchHttpRequest.coerce_scope_to_list("src/decision")
+            ['src/decision']
+        """
+        return Needle3Query.coerce_scope_to_list(v)
 
 
 # ==============================================================================

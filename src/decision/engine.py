@@ -61,7 +61,7 @@ class OpenJevEngine:
             logger.info("Detectado servidor IPC ativo na GPU. Conectando via Unix Domain Socket...")
             self.use_ipc = True
             self.target_device = "ipc:gpu"
-            self.is_ready = True
+            self.is_ready = False
             self.is_laya = True
             self.laya_adapter = None
             self.model = None

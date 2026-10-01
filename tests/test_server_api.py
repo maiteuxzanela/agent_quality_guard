@@ -80,3 +80,57 @@ def test_score_endpoint_rejects_bad_task_type(client):
     )
     assert response.status_code == 422
     assert "TASK_TYPE" in response.json()["detail"]
+
+
+def test_needle_ui_endpoint(client):
+    """Garante que as rotas da interface HTML do Needle 3 respondem 200 OK com HTML."""
+    res_v1 = client.get("/v1/needle/ui")
+    assert res_v1.status_code == 200
+    assert "text/html" in res_v1.headers["content-type"]
+    assert "Cactus Needle 3" in res_v1.text
+
+    res_shortcut = client.get("/ui")
+    assert res_shortcut.status_code == 200
+    assert "text/html" in res_shortcut.headers["content-type"]
+    assert "Cactus Needle 3" in res_shortcut.text
+
+
+def test_needle_search_endpoint_success(client):
+    """Testa a busca de AST do Needle 3 via endpoint HTTP FastAPI."""
+    payload = {
+        "query": "OpenJevEngine",
+        "workspace_path": ".",
+        "max_tokens": 500,
+        "relational_depth": 2,
+    }
+    response = client.post("/v1/needle/search", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "snippets" in data
+    assert "total_tokens" in data
+    assert "query_latency_ms" in data
+    assert "token_savings_pct" in data
+    assert isinstance(data["snippets"], list)
+    assert len(data["snippets"]) > 0
+
+
+def test_needle_search_endpoint_invalid_workspace(client):
+    """Garante 400 Bad Request se o repositório/workspace não existir."""
+    payload = {
+        "query": "test",
+        "workspace_path": "/caminho/invalido/inexistente_12345",
+    }
+    response = client.post("/v1/needle/search", json=payload)
+    assert response.status_code == 400
+    assert "Caminho de repositório inválido ou inexistente" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_engine_not_ready_raises_for_server_503_mapping():
+    """Caminho de erro real: a engine lança OpenJevNotReadyError e create_app mapeia para 503."""
+    from src.core.schemas import NoulRequest, OpenJevNotReadyError
+
+    engine = OpenJevEngine(device="cpu")
+    req = NoulRequest(premise="rm -rf /", hypothesis="Ação segura", threshold=0.78)
+    with pytest.raises(OpenJevNotReadyError):
+        await engine.evaluate_noul(req)

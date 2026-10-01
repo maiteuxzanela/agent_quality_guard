@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import warnings
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Silencia avisos
-os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ.setdefault("PYTHONWARNINGS", "ignore")
 warnings.filterwarnings("ignore")
 
 # Redireciona todos os logs para stderr (stdout exclusivo do protocolo MCP stdio)
@@ -45,19 +46,30 @@ from src.core.schemas import (
     NoulRequest,
     RUBRIC_CATALOG,
     ScoreRequest,
+    ScoreResponse,
     ScoreDiagnoseResponse,
     SpawnSubagentRequest,
     SpawnSubagentResponse,
     QUALITY_DEFECT_CATEGORIES,
+    NeedleVerifyDeliveryRequest,
+    NeedleVerifyDeliveryResponse,
+    PytestChunkResult,
+    ASTViolation,
 )
 from src.core.diff_inspector import extract_workspace_stages, format_stage_premise
 from src.memory.ast_diff_extractor import extract_workspace_ast_symbols, AstSymbolSlice
-from src.memory.needle_defect_screener import screen_workspace_symbols, DefectSuspicion, DEFECT_NOUL_HYPOTHESES
+from src.memory.needle_defect_screener import (
+    screen_workspace_symbols,
+    DefectSuspicion,
+    DEFECT_NOUL_HYPOTHESES,
+    _is_test_path,
+)
 from src.decision.engine import OpenJevEngine
-from src.decision.laya_adapter import evaluate_borderline_mass_gate
 from src.memory.local_needle import LocalNeedleEngine
 from src.memory.needle_ast_guard import NeedleASTGuard
 from src.orchestrator.subagent_runner import SubagentRunner
+from src.orchestrator.pytest_chunk_runner import PytestChunkRunner
+from src.orchestrator.multi_stack_runner import MultiStackRunner
 
 logger = logging.getLogger("jev.mcp")
 
@@ -353,10 +365,10 @@ from src.core.score_gate import (  # noqa: E402
     CAVEAT_BAND as _CAVEAT_BAND,
     caveat_decision as _caveat_decision,
     get_workspace_git_signature as _score_gate_git_signature,
-    history_clear as _history_clear,
     history_get as _history_get,
     history_increment_attempts as _history_increment_attempts,
     history_set as _history_set,
+    resolve_attempt_number as _resolve_attempt_number,
     resolve_task_rubric as _resolve_task_rubric,
     stages_cache_get as _stages_cache_get,
     stages_cache_set as _stages_cache_set,
@@ -644,531 +656,453 @@ def _caveat_message(delivery_score: float, threshold: float, zero_suspicions: bo
 # CAVEAT_BAND (src/core/score_gate.py).
 
 
+_CATEGORY_PRIORITY: Dict[str, int] = {
+    "seguranca": 1,
+    "robustez_excecoes_recursos": 2,
+    "logica_ou_regra": 3,
+    "contrato_ambiente": 4,
+    "requisito_incompleto_ou_ausente": 5,
+    "qualidade_de_testes": 6,
+    "performance_escopo_estilo": 7,
+    "documentacao_configuracao": 8,
+    "tipagem_ausente": 9,
+    "docstring_ausente": 10,
+}
+MAX_ARBITRATIONS: int = 10
+
+
 @app.tool(
-    name="openjev_score_and_diagnose",
+    name="needle_verify_delivery",
     description=(
-        "Avaliacao de qualidade com diagnostico estruturado de defeito, sem choice. "
-        "Pipeline: Needle 3 AST Guardrail (fail-fast) -> Screener estrutural sobre "
-        "10 categorias reais (8 duras + 2 de análise) -> JEV Noul (P >= 0.78) em "
-        "cada suspeita -> Score Laya. Score >= threshold: passed=true (defeito duro "
-        "confirmado pelo Noul ainda reprova). Score na banda de indiferença "
-        "[threshold - 0.20, threshold): passed=true com approved_with_caveat=true "
-        "APENAS com zero suspeitas do Screener (divulgar score_margin). Abaixo da "
-        "banda (< threshold - 0.20): passed=false mesmo com zero suspeitas. "
-        "Suspeita confirmada pelo Noul => passed=false com a categoria, arquivo, "
-        "linhas e candidate_defects; todas refutadas mas score < threshold => "
-        "passed=false e diagnosis aponta a suspeita de maior probabilidade para "
-        "INVESTIGACAO (mesmo com Noul negativo). "
-        "Circuito breaker apos 5 tentativas."
+        "Validação de entrega de código 100% determinística (Needle 3 + Pytest Real + JEV Noul Arbitrage). "
+        "Executa em ordem fail-fast: "
+        "1º Pytest em 3-4 chunks sequenciais com isolamento dos testes pesados de ML; "
+        "2º NeedleASTGuard (Camada 1: anti-mock em produção, SQL Injection, eval perigoso, segredos hardcoded); "
+        "3º NeedleASTScreener (Camada 2: alertas estruturais de tipagem, docstrings, exceções); "
+        "4º JEV Noul Arbitrage (Camada 3: Laya RLCD P >= 0.78 arbitra suspeitas em micro-premissas atômicas <= 150 tokens). "
+        "Circuit breaker universal de 5 tentativas: atinge a Saída de Emergência na 5ª tentativa."
     ),
 )
-async def openjev_score_and_diagnose(
-    premise: str,
-    workspace: str = "",
+async def needle_verify_delivery(
     task_type: str = "codigo_producao",
-    rubric: str = "",
-    min_score: float = 1.0,
-    max_score: float = 5.0,
-    threshold: float = 3.40,
-    reset_history: bool = False,
+    workspace: str = "",
+    attempt_number: int = 1,
+    pedido: str = "",
+    resultado: str = "",
+    engine: Any = None,
 ) -> dict:
-    """Score + diagnóstico via Screener Needle 3 (10 categorias) + Noul — sem choice.
+    """Validação determinística de entrega via Pytest em Chunks + Needle 3 AST + JEV Noul.
+
+    A contagem de tentativas é exclusivamente server-side
+    (`score_gate.resolve_attempt_number`, histórico persistido por workspace);
+    `attempt_number` é apenas informativo e NÃO participa da decisão do
+    circuit breaker. Não existe parâmetro de reset de histórico nesta tool.
 
     Exemplo:
-        resp = await openjev_score_and_diagnose(
-            premise="Pedido: add(a, b). | Resultado: add implementada e testada.",
-            workspace="/caminho/do/repositorio",
-        )
+        >>> import asyncio, tempfile
+        >>> with tempfile.TemporaryDirectory() as ws:
+        ...     out = asyncio.run(needle_verify_delivery(workspace=ws))
+        >>> out["status"] in {"APPROVED", "REJECTED", "EMERGENCY_RELEASE"}
+        True
     """
-    premise_error = _validate_score_premise(premise)
-    if premise_error:
-        return {"error": premise_error, "premise_rejected": True, "diagnosis": None}
-    resolved_rubric, rubric_error = _resolve_task_rubric(task_type)
-    if rubric_error:
-        return {"error": rubric_error, "task_type_rejected": True, "diagnosis": None}
-    task_type_key = "codigo_producao"
-
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
 
-    if reset_history:
-        _history_clear()
-        logger.info("Histórico e cache de etapas limpos via flag reset_history=True.")
-
-    current_git_state = _get_workspace_git_signature(target_workspace)
-
-    # ── 1. CIRCUIT BREAKER UNIVERSAL + 2. ANTI-PREMISE GAMING ────────────────
-    # Lógica plana extraída para _evaluation_gate (evita cadeia de if de
-    # nível 3 e predicado denso dentro da tool).
     hist = _history_get(target_workspace)
-    gate_response = _evaluation_gate(
-        target_workspace, hist, current_git_state, threshold
-    )
-    if gate_response is not None:
-        return gate_response
-
-    # ── Camada 1: Needle 3 AST Guardrail (Fail-Fast Determinístico) ───────────
-    ast_violations = NeedleASTGuard.scan_workspace(target_workspace)
-    if ast_violations:
-        # Reprovação Imediata Fail-Fast — não gasta inferência GPU/CPU
-        top_violation = ast_violations[0]
-        violation_details = "; ".join(
-            f"[{v.rule_id}] {v.file_path}:{v.line_number} — {v.message}"
-            for v in ast_violations
+    current_attempt = _resolve_attempt_number(hist)
+    if attempt_number != current_attempt:
+        logger.info(
+            "attempt_number do chamador (%s) é informativo; tentativa real server-side = %s.",
+            attempt_number,
+            current_attempt,
         )
-        logger.warning(f"🚨 [Needle 3 AST Guardrail] Violação determinística detectada: {violation_details}")
 
-        attempts = 1
-        if hist and not hist.get("passed", True):
-            attempts = hist.get("attempts", 1) + 1
-
+    # ── 1. CIRCUIT BREAKER UNIVERSAL (Limite de 5 Tentativas -> Saída de Emergência) ──
+    if current_attempt >= MAX_ATTEMPTS:
+        logger.warning(f"🚨 [Circuit Breaker] 5ª tentativa atingida em {target_workspace}. Saída de Emergência liberada.")
         _history_set(target_workspace, {
-            "passed": False,
-            "attempts": attempts,
-            "git_state": current_git_state,
-            "last_score": 1.0,
+            "passed": True,
+            "attempts": current_attempt,
+            "emergency": True
         })
-
-        diag_res = DiagnosisResult(
-            selected=top_violation.category,
-            confidence=1.0,
-            probabilities={top_violation.category: 1.0},
-            description=f"🚨 [Needle 3 AST Block]: {top_violation.message} ({top_violation.file_path}:{top_violation.line_number})",
-            candidate_defects=list(DEFECT_MEMBERS.get(top_violation.category, [])),
-            diagnosis_latency_ms=0.0,
-        )
-
-        return ScoreDiagnoseResponse(
-            score=1.0,
-            max_score=max_score,
-            normalized_score=0.0,
-            passed=False,
-            threshold=threshold,
-            breakdown={"critical flaws": 1.0, "poor quality": 0.0, "acceptable": 0.0, "good quality": 0.0, "exceptional": 0.0},
-            score_latency_ms=0.0,
-            score_margin=-1.0,
-            borderline=False,
-            task_type=task_type_key,
-            rubric_source=f"catalog:{task_type_key}",
-            diagnosis=diag_res,
-            approved_as_borderline=False,
-            stages=[],
-            total_stages=0,
-            passed_stages=0,
-            failed_stages=len(ast_violations),
-            attempts=attempts,
-            max_attempts=MAX_ATTEMPTS,
-            emergency_exit_unlocked=(attempts >= MAX_ATTEMPTS),
-            ast_blocked=True,
-            ast_violations=[v.to_dict() for v in ast_violations],
+        return NeedleVerifyDeliveryResponse(
+            passed=True,
+            status="EMERGENCY_RELEASE",
+            attempt_number=current_attempt,
+            approved_with_caveat=True,
+            pedido_audit=pedido or None,
+            resultado_audit=resultado or None,
+            pytest_success=False,
+            pytest_chunks=[],
+            blocking_ast_violations=[],
+            structural_ast_warnings=[],
+            confirmed_defects=[],
+            dismissed_warnings=[],
+            total_files_scanned=0,
+            total_lines_scanned=0,
+            message=(
+                f"🚨 [Circuit Breaker] Saída de Emergência ativada na tentativa "
+                f"{current_attempt}/{MAX_ATTEMPTS}. Entrega liberada COM RESSALVA "
+                "(pytest/Guard/Screener NÃO executados nesta chamada)."
+            )
         ).model_dump()
 
-    engine = await _get_engine_async()
+    target_path = Path(target_workspace)
+    stack = MultiStackRunner.detect_stack(target_path)
+    tmp_dir = Path(tempfile.gettempdir()) / "needle_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Camada 2: Extração de Símbolos AST e Arbitragem Noul Universal ────────
-    # NOTA: sem importlib.reload — recarregar recria as classes (ex.:
-    # AstSymbolSlice) e quebra isinstance nos módulos já importados no mesmo
-    # processo (poluição de identidade entre lotes de teste / hot-reload).
-    import src.memory.ast_diff_extractor as _ade
-    _extract_symbols = _ade.extract_workspace_ast_symbols
+    if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "PYTHON_FATURAMENTO", "PYTHON_PREDICTERA"):
+        # Execução Multi-Stack especializada
+        test_res = MultiStackRunner.run_tests(target_path, stack, tmp_dir)
+        test_success = test_res.get("passed", False)
+        pytest_chunks_typed = [PytestChunkResult(
+            chunk_id=f"chunk_multistack_{stack.lower()}",
+            passed=test_success,
+            total_passed=test_res.get("total_passed", 0),
+            total_failed=test_res.get("total_failed", 0),
+            execution_time_seconds=test_res.get("duration", 0.0),
+            failure_details=test_res.get("failure_details", []),
+        )]
 
-    import src.memory.needle_defect_screener as _nds
-    _screen_symbols = _nds.screen_workspace_symbols
-
-    ast_symbols = _extract_symbols(target_workspace)
-
-    if ast_symbols:
-        suspicions_by_symbol = _screen_symbols(ast_symbols)
-        t_start_noul = time.perf_counter()
-        confirmed_defects: List[Dict[str, Any]] = []
-        quality_confirmed: List[Dict[str, Any]] = []
-        refuted_suspicions: List[Dict[str, Any]] = []
-
-        # Indexa os símbolos por chave para busca O(1) imediata e laço plano linear
-        symbols_by_key = {f"{s.file_path}::{s.symbol_name}": s for s in ast_symbols}
-        all_screened_items = [
-            (symbols_by_key[k], susp)
-            for k, susps in suspicions_by_symbol.items()
-            if k in symbols_by_key
-            for susp in susps
-        ]
-
-        # Se o Needle 3 detectou indícios estruturais, submete cada hipótese ao JEV Noul em laço plano
-        for symbol, susp in all_screened_items:
-            noul_premise = (
-                f"Código do símbolo {symbol.file_path}::{symbol.symbol_name} "
-                f"(linhas {symbol.start_line}-{symbol.end_line}):\n"
-                f"{symbol.full_context[:1200]}"
-            )
-            noul_req = NoulRequest(
-                premise=noul_premise,
-                hypothesis=susp.noul_hypothesis,
-                threshold=0.78,
-            )
-            noul_resp = await engine.evaluate_noul(noul_req)
-            if noul_resp.passed and noul_resp.probability >= 0.78:
-                entry = {
-                    "category": susp.category,
-                    "symbol_name": symbol.symbol_name,
-                    "file_path": symbol.file_path,
-                    "start_line": symbol.start_line,
-                    "end_line": symbol.end_line,
-                    "probability": round(noul_resp.probability, 4),
-                    "evidence": susp.trigger_evidence,
-                    "description": DEFECT_DESCRIPTIONS.get(susp.category, ""),
-                    "candidate_defects": list(DEFECT_MEMBERS.get(susp.category, [])),
-                }
-                # Tier de análise (tipagem/docstring): confirmado só reprova
-                # quando a nota está abaixo do corte (não veta score >= corte).
-                bucket = (
-                    quality_confirmed
-                    if susp.category in QUALITY_DEFECT_CATEGORIES
-                    else confirmed_defects
-                )
-                bucket.append(entry)
-            else:
-                refuted_suspicions.append({
-                    "category": susp.category,
-                    "symbol_name": symbol.symbol_name,
-                    "file_path": symbol.file_path,
-                    "start_line": symbol.start_line,
-                    "end_line": symbol.end_line,
-                    "probability": round(noul_resp.probability, 4),
-                    "evidence": susp.trigger_evidence,
-                })
-
-        # Monta a premissa factual enriquecida com o código real dos símbolos
-        # alterados (seleção orçamentária com garantia de cobertura de testes).
-        code_context = _build_code_context(premise, ast_symbols)
-        combined_premise = premise
-        if code_context:
-            combined_premise = f"{premise}\n\nSímbolos alterados:\n{code_context}"
-        if len(combined_premise) > 1480:
-            combined_premise = combined_premise[:1480]
-
-        # Avaliação de Score base para a premissa de entrega
-        score_req = ScoreRequest(
-            premise=combined_premise,
-            rubric=resolved_rubric,
-            min_score=min_score,
-            max_score=max_score,
-            threshold=threshold,
-        )
-        score_resp = await engine.evaluate_score(score_req)
-        delivery_score = round(score_resp.score, 2)
-        score_borderline = bool(score_resp.borderline)
-
-        mass_ok, p_healthy, p_flawed = evaluate_borderline_mass_gate(
-            score_resp.breakdown,
-            healthy_min=BORDERLINE_HEALTHY_MIN_MASS,
-            flawed_max=BORDERLINE_FLAWED_MAX_MASS,
-        )
-
-        # Monta stages sintéticos por símbolo para auditoria com suporte a cache
-        symbols_map = {f"{s.file_path}::{s.symbol_name}": s for s in ast_symbols}
-        evaluated_stages = []
-        for s in ast_symbols[:20]:  # Limite de telemetria
-            st_id = f"{s.file_path}::{s.symbol_name}"
-            s_hash = hashlib.sha256(s.content.encode("utf-8")).hexdigest()
-            cached_entry = _stages_cache_get(target_workspace, st_id)
-            is_cached = False
-            if cached_entry and cached_entry.get("hash") == s_hash and cached_entry.get("passed", False):
-                is_cached = True
-
-            st_passed = is_cached or (not any(d["file_path"] == s.file_path and d["symbol_name"] == s.symbol_name for d in confirmed_defects))
-            evaluated_stages.append(
-                DiffStageResult(
-                    stage_id=st_id,
-                    file_path=s.file_path,
-                    part_index=1,
-                    total_parts=1,
-                    score=cached_entry.get("score", delivery_score) if is_cached else delivery_score,
-                    passed=st_passed,
-                    borderline=score_borderline,
-                    cached=is_cached,
-                    diagnosis=None,
-                )
-            )
-
-        # Se todas as etapas já foram aprovadas anteriormente e o workspace permanece idêntico
-        all_stages_cached = bool(evaluated_stages and all(st.cached for st in evaluated_stages))
-        if all_stages_cached and hist and hist.get("passed", False):
-            delivery_score = max(delivery_score, float(hist.get("last_score", threshold)))
-
-        # ── Decisão final (sem choice) ───────────────────────────────────────
-        # 1. Defeito DURO confirmado pelo Noul (P >= 0.78) => reprova sempre
-        #    (categoria de análise confirmada não veta score >= corte).
-        # 2. score >= threshold => aprova (suspeitas refutadas não vetam).
-        # 3. Banda de indiferença [threshold - CAVEAT_BAND, threshold) com ZERO
-        #    suspeitas => aprova com ressalva (approved_with_caveat).
-        # 4. Qualquer suspeita estrutural + nota < corte => REPROVA com
-        #    diagnosis para investigação — mesmo com Noul negativo.
-        # 5. Nota abaixo da banda => REPROVA mesmo com zero suspeitas (corte
-        #    estrito da zona de indiferença — decisão da fundadora, set/2026).
-        zero_suspicions = not all_screened_items
-        score_ok = delivery_score >= threshold
-        band_decision = _caveat_decision(delivery_score, threshold)
-
-        if confirmed_defects:
-            passed_delivery = False
-        elif score_ok or all_stages_cached:
-            passed_delivery = True
-        elif band_decision == "caveat" and zero_suspicions:
-            passed_delivery = True
-        else:
-            passed_delivery = False
-
-        is_caveat = passed_delivery and (not score_ok)
-
-        # Na reprovação por suspeita não-resolvida (duras refutadas ou de
-        # análise confirmada), marca as etapas afetadas para o refino.
-        if not passed_delivery and not confirmed_defects:
-            _flag_suspect_failed_stages(
-                evaluated_stages, refuted_suspicions + quality_confirmed
-            )
-
-        failed_keys = {st.stage_id for st in evaluated_stages if not st.passed}
-        failed_keys |= {f"{d['file_path']}::{d['symbol_name']}" for d in confirmed_defects}
-        total_syms = len(ast_symbols)
-        failed_syms = len(failed_keys)
-        passed_syms = total_syms - failed_syms
-
-        if passed_delivery:
-            caveat_msg = _caveat_message(delivery_score, threshold, zero_suspicions)
-
-            # Persiste estágios aprovados no cache do workspace
-            _cache_passed_stages(evaluated_stages, symbols_map, target_workspace)
-
-            _history_set(target_workspace, {
-                "passed": True,
-                "attempts": 0,
-                "git_state": current_git_state,
-                "last_score": delivery_score,
-            })
-            return ScoreDiagnoseResponse(
-                score=delivery_score,
-                max_score=max_score,
-                normalized_score=round((delivery_score - min_score) / (max_score - min_score), 4),
-                passed=True,
-                threshold=threshold,
-                breakdown=score_resp.breakdown,
-                score_latency_ms=round((time.perf_counter() - t_start_noul) * 1000.0, 2),
-                score_margin=round(delivery_score - threshold, 4),
-                borderline=score_borderline,
-                task_type=task_type_key,
-                rubric_source=f"catalog:{task_type_key}",
-                diagnosis=None,
-                approved_as_borderline=is_caveat and bool(mass_ok),
-                approved_with_caveat=is_caveat,
-                stages=evaluated_stages,
-                total_stages=total_syms,
-                passed_stages=passed_syms,
-                failed_stages=failed_syms,
-                attempts=0,
-                max_attempts=MAX_ATTEMPTS,
-                emergency_exit_unlocked=False,
-                message=caveat_msg,
-            ).model_dump()
-        else:
-            # Reprovado: defeito duro confirmado pelo Noul, categoria de
-            # análise confirmada, suspeita não-resolvida com nota < corte, ou
-            # nota abaixo da banda de indiferença. Montagem extraída para
-            # _build_failure_diagnosis (profundidade de condicional <= 2).
-            latency_ms = round((time.perf_counter() - t_start_noul) * 1000.0, 2)
-            global_diag, diag_msg = (
-                _build_failure_diagnosis(
-                    confirmed_defects,
-                    refuted_suspicions,
-                    delivery_score,
-                    threshold,
-                    latency_ms,
-                    quality_confirmed,
-                )
-                if all_screened_items
-                else (
-                    None,
-                    f"Score insuficiente ({delivery_score:.2f}/{threshold:.2f}): abaixo da banda "
-                    f"de indiferença [{threshold - _CAVEAT_BAND:.2f}, {threshold:.2f}) da nota de "
-                    "corte. Mesmo sem nenhuma suspeita do Screener, o corte é estrito — refatore "
-                    "o artefato no disco e reavalie.",
-                )
-            )
-
-            prev_attempts = hist.get("attempts", 0) if hist else 0
-            new_attempts = prev_attempts + 1
+        if not test_success:
             _history_set(target_workspace, {
                 "passed": False,
-                "attempts": new_attempts,
-                "git_state": current_git_state,
-                "last_score": delivery_score,
+                "attempts": current_attempt
             })
-            return ScoreDiagnoseResponse(
-                score=delivery_score,
-                max_score=max_score,
-                normalized_score=round((delivery_score - min_score) / (max_score - min_score), 4),
+            return NeedleVerifyDeliveryResponse(
                 passed=False,
-                threshold=threshold,
-                breakdown=score_resp.breakdown,
-                score_latency_ms=round((time.perf_counter() - t_start_noul) * 1000.0, 2),
-                score_margin=round(delivery_score - threshold, 4),
-                borderline=score_borderline,
-                task_type=task_type_key,
-                rubric_source=f"catalog:{task_type_key}",
-                diagnosis=global_diag,
-                approved_as_borderline=False,
-                approved_with_caveat=False,
-                stages=evaluated_stages,
-                total_stages=total_syms,
-                passed_stages=passed_syms,
-                failed_stages=failed_syms,
-                attempts=new_attempts,
-                max_attempts=MAX_ATTEMPTS,
-                emergency_exit_unlocked=new_attempts >= MAX_ATTEMPTS,
-                message=(
-                    f"🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA] (Tentativa {new_attempts}/{MAX_ATTEMPTS}): "
-                    f"Limite de {MAX_ATTEMPTS} tentativas consecutivas atingido. "
-                    "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
-                ) if new_attempts >= MAX_ATTEMPTS else diag_msg,
+                status="REJECTED",
+                attempt_number=current_attempt,
+                pytest_success=False,
+                pytest_chunks=pytest_chunks_typed,
+                blocking_ast_violations=[],
+                structural_ast_warnings=[],
+                confirmed_defects=[],
+                dismissed_warnings=[],
+                total_files_scanned=0,
+                total_lines_scanned=0,
+                pedido_audit=pedido or None,
+                resultado_audit=resultado or None,
+                message=f"🚨 [{stack} Fail-Fast] Suíte de testes reais falhou: {test_res.get('summary', '')}."
             ).model_dump()
 
-    # ── CAMINHO FALLBACK MONO-ETAPA (quando repositório limpo ou sem diffs de código) ─
-    score_req = ScoreRequest(
-        premise=premise,
-        rubric=resolved_rubric,
-        min_score=min_score,
-        max_score=max_score,
-        threshold=threshold,
-    )
-    score_resp = await engine.evaluate_score(score_req)
+        if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE"):
+            ast_scan = MultiStackRunner.scan_js_ast(target_path, stack)
+            blocking_violations = [ASTViolation(
+                rule_id=b["rule_id"],
+                category=b["category"],
+                file_path=b["file_path"],
+                line_number=b["line_number"],
+                code_snippet=b["code_snippet"],
+                message=b["message"],
+                suggestion=None,
+            ) for b in ast_scan.get("blocking", [])]
 
-    # Etapa sintética para preenchimento de contrato
-    mono_stage = DiffStageResult(
-        stage_id="mono_stage_premise",
-        file_path="workspace",
-        part_index=1,
-        total_parts=1,
-        score=round(score_resp.score, 2),
-        passed=score_resp.passed,
-        borderline=bool(score_resp.borderline),
-        cached=False,
-        diagnosis=None,
-    )
+            structural_warnings = [ASTViolation(
+                rule_id=w["rule_id"],
+                category=w["category"],
+                file_path=w["file_path"],
+                line_number=w["line_number"],
+                code_snippet=w["code_snippet"],
+                message=w["message"],
+                suggestion=None,
+            ) for w in ast_scan.get("warnings", [])]
 
-    if score_resp.passed:
+            passed = len(blocking_violations) == 0
+            _history_set(target_workspace, {
+                "passed": passed,
+                "attempts": current_attempt
+            })
+            return NeedleVerifyDeliveryResponse(
+                passed=passed,
+                status="APPROVED" if passed else "REJECTED",
+                attempt_number=current_attempt,
+                pytest_success=True,
+                pytest_chunks=pytest_chunks_typed,
+                blocking_ast_violations=blocking_violations,
+                structural_ast_warnings=structural_warnings,
+                confirmed_defects=[],
+                dismissed_warnings=[],
+                total_files_scanned=ast_scan.get("total_files", 0),
+                total_lines_scanned=0,
+                pedido_audit=pedido or None,
+                resultado_audit=resultado or None,
+                message=f"{'✅' if passed else '🚨'} [{stack}] {test_res.get('summary', '')} | AST: {len(blocking_violations)} bloqueios, {len(structural_warnings)} alertas."
+            ).model_dump()
+
+    # ── Etapa 0: Execução Sequencial de Testes Reais em Chunks (Pytest 1º Lugar) ──
+    pytest_out = PytestChunkRunner.run_all_chunks(workspace_path=target_workspace)
+    pytest_success = pytest_out.get("pytest_success", False)
+
+    pytest_chunks_typed = []
+    for c in pytest_out.get("chunks", []):
+        pytest_chunks_typed.append(PytestChunkResult(
+            chunk_id=c["chunk_id"],
+            passed=c["passed"],
+            total_passed=c["total_passed"],
+            total_failed=c["total_failed"],
+            execution_time_seconds=c["execution_time_seconds"],
+            failure_details=c.get("failure_details", []),
+        ))
+
+    if not pytest_chunks_typed:
         _history_set(target_workspace, {
-            "passed": True,
-            "attempts": 0,
-            "git_state": current_git_state,
-            "last_score": round(score_resp.score, 2),
+            "passed": False,
+            "attempts": current_attempt
         })
-        return ScoreDiagnoseResponse(
-            score=round(score_resp.score, 2),
-            max_score=max_score,
-            normalized_score=round(score_resp.normalized_score, 4),
-            passed=True,
-            threshold=threshold,
-            breakdown=score_resp.breakdown,
-            score_latency_ms=round(score_resp.latency_ms, 2),
-            score_margin=score_resp.score_margin,
-            borderline=score_resp.borderline,
-            task_type=task_type_key,
-            rubric_source=f"catalog:{task_type_key}",
-            diagnosis=None,
-            approved_as_borderline=False,
-            stages=[mono_stage],
-            total_stages=1,
-            passed_stages=1,
-            failed_stages=0,
-            attempts=0,
-            max_attempts=MAX_ATTEMPTS,
-            emergency_exit_unlocked=False,
-        ).model_dump()
-
-    # Banda de indiferença (caminho mono, sem Screener para triar): nota na
-    # faixa [threshold - CAVEAT_BAND, threshold) => aprova com ressalva; o
-    # Borderline Mass Gate vira telemetria (approved_as_borderline).
-    if _caveat_decision(round(score_resp.score, 2), threshold) == "caveat":
-        mass_approved, p_healthy, p_flawed = evaluate_borderline_mass_gate(
-            score_resp.breakdown,
-            healthy_min=BORDERLINE_HEALTHY_MIN_MASS,
-            flawed_max=BORDERLINE_FLAWED_MAX_MASS,
-        )
-        _history_set(target_workspace, {
-            "passed": True,
-            "attempts": 0,
-            "git_state": current_git_state,
-            "last_score": round(score_resp.score, 2),
-        })
-        mono_stage.passed = True
-        return ScoreDiagnoseResponse(
-            score=round(score_resp.score, 2),
-            max_score=max_score,
-            normalized_score=round(score_resp.normalized_score, 4),
-            passed=True,
-            threshold=threshold,
-            breakdown=score_resp.breakdown,
-            score_latency_ms=round(score_resp.latency_ms, 2),
-            score_margin=score_resp.score_margin,
-            borderline=score_resp.borderline,
-            task_type=task_type_key,
-            rubric_source=f"catalog:{task_type_key}",
-            diagnosis=None,
-            approved_as_borderline=bool(mass_approved),
-            approved_with_caveat=True,
-            stages=[mono_stage],
-            total_stages=1,
-            passed_stages=1,
-            failed_stages=0,
-            attempts=0,
-            max_attempts=MAX_ATTEMPTS,
-            emergency_exit_unlocked=False,
+        return NeedleVerifyDeliveryResponse(
+            passed=False,
+            status="REJECTED",
+            attempt_number=current_attempt,
+            pytest_success=False,
+            pytest_chunks=[],
+            blocking_ast_violations=[],
+            structural_ast_warnings=[],
+            confirmed_defects=[],
+            dismissed_warnings=[],
+            total_files_scanned=0,
+            total_lines_scanned=0,
+            pedido_audit=pedido or None,
+            resultado_audit=resultado or None,
             message=(
-                f"Entrega aprovada com ressalva (caminho mono): score "
-                f"{round(score_resp.score, 2):.2f} caiu na banda de indiferença "
-                f"[{threshold - _CAVEAT_BAND:.2f}, {threshold:.2f}) abaixo do corte de "
-                f"{threshold:.2f}, sem símbolos AST no diff para triagem estrutural."
-            ),
+                "🚨 [Pytest Fail-Fast: TESTES OBRIGATÓRIOS NÃO ENCONTRADOS]\n"
+                f"Nenhum teste coletado em tests/ — workspace '{target_workspace}' sem "
+                "suíte real não pode ser homologado (aprovação sem executar teste é proibida).\n"
+                "👉 AÇÃO OBRIGATÓRIA DO AGENTE: Crie imediatamente o arquivo de teste 'tests/test_<funcionalidade>.py' "
+                "com testes automatizados reais (sem mocks em src/) cobrindo os caminhos críticos e submeta novamente."
+            )
         ).model_dump()
 
-    prev_attempts = hist.get("attempts", 0) if hist else 0
-    new_attempts = prev_attempts + 1
+    if not pytest_success:
+        _history_set(target_workspace, {
+            "passed": False,
+            "attempts": current_attempt
+        })
+        return NeedleVerifyDeliveryResponse(
+            passed=False,
+            status="REJECTED",
+            attempt_number=current_attempt,
+            pytest_success=False,
+            pytest_chunks=pytest_chunks_typed,
+            blocking_ast_violations=[],
+            structural_ast_warnings=[],
+            confirmed_defects=[],
+            dismissed_warnings=[],
+            total_files_scanned=0,
+            total_lines_scanned=0,
+            pedido_audit=pedido or None,
+            resultado_audit=resultado or None,
+            message="🚨 [Pytest Fail-Fast] Suíte de testes reais falhou em um ou mais chunks. Resolva as falhas de teste antes de prosseguir."
+        ).model_dump()
+
+    # ── Etapa 1: NeedleASTGuard (Camada 1: Bloqueios de Segurança/Integridade) ──
+    ast_violations = NeedleASTGuard.scan_workspace(target_workspace)
+    blocking_violations = []
+    for v in ast_violations:
+        blocking_violations.append(ASTViolation(
+            rule_id=v.rule_id,
+            category=v.category,
+            file_path=v.file_path,
+            line_number=v.line_number,
+            code_snippet=v.snippet,
+            message=v.message,
+            suggestion=None,
+        ))
+
+    if blocking_violations:
+        _history_set(target_workspace, {
+            "passed": False,
+            "attempts": current_attempt
+        })
+        return NeedleVerifyDeliveryResponse(
+            passed=False,
+            status="REJECTED",
+            attempt_number=current_attempt,
+            pytest_success=True,
+            pytest_chunks=pytest_chunks_typed,
+            blocking_ast_violations=blocking_violations,
+            structural_ast_warnings=[],
+            confirmed_defects=[],
+            dismissed_warnings=[],
+            total_files_scanned=len(ast_violations),
+            total_lines_scanned=0,
+            pedido_audit=pedido or None,
+            resultado_audit=resultado or None,
+            message=f"🚨 [Needle 3 AST Guardrail] {len(blocking_violations)} violação(ões) de segurança/integridade bloqueante(s) detectada(s)."
+        ).model_dump()
+
+    # ── Etapa 2: NeedleASTScreener (Camada 2: Alertas de Qualidade Estrutural) ──
+    symbols = extract_workspace_ast_symbols(target_workspace)
+    suspicions_map = screen_workspace_symbols(symbols, workspace_root=target_workspace)
+    structural_warnings = []
+    all_suspicions = []
+
+    suspicions_pairs = [
+        (sym_key, s)
+        for sym_key, suspicions_list in suspicions_map.items()
+        for s in suspicions_list
+    ]
+    for sym_key, s in suspicions_pairs:
+        file_path = sym_key.split("::")[0] if "::" in sym_key else target_workspace
+        warning = ASTViolation(
+            rule_id=f"screener_{s.category}",
+            category=s.category,
+            file_path=s.file_path or file_path,
+            line_number=s.line_number,
+            code_snippet=s.snippet or s.trigger_evidence or "",
+            message=s.trigger_evidence or f"Alerta de qualidade estrutural: {s.category}",
+            suggestion=f"Refatorar símbolo em {sym_key} para resolver alerta de {s.category}."
+        )
+        structural_warnings.append(warning)
+        all_suspicions.append((sym_key, s, warning))
+
+    # ── Etapa 3: JEV Noul Arbitrage (Camada 3: Laya RLCD P >= 0.78) ──
+    confirmed_defects = []
+    dismissed_warnings = []
+
+    if all_suspicions:
+        active_engine = engine
+        if active_engine is None:
+            try:
+                active_engine = await _get_engine_async()
+            except Exception as e:
+                logger.debug(f"Motor JEV não disponível para arbitragem Noul: {e}")
+                active_engine = None
+
+        is_engine_ready = active_engine is not None and getattr(active_engine, "is_ready", False)
+
+        if not is_engine_ready:
+            # Política Fail-Safe: Se o motor Laya não estiver pronto na memória,
+            # relata os alertas como telemetria sem abortar a entrega por indisponibilidade de pesos.
+            logger.info("Motor JEV descarregado: alertas do Screener mantidos como telemetria.")
+            _history_set(target_workspace, {
+                "passed": True,
+                "attempts": current_attempt
+            })
+            return NeedleVerifyDeliveryResponse(
+                passed=True,
+                status="APPROVED",
+                attempt_number=current_attempt,
+                pytest_success=True,
+                pytest_chunks=pytest_chunks_typed,
+                blocking_ast_violations=[],
+                structural_ast_warnings=structural_warnings,
+                confirmed_defects=[],
+                dismissed_warnings=[],
+                total_files_scanned=len(symbols),
+                total_lines_scanned=sum(sym.end_line - sym.start_line + 1 for sym in symbols),
+                pedido_audit=pedido or None,
+                resultado_audit=resultado or None,
+                message=(
+                    f"Entrega aprovada deterministicamente por testes reais (pytest) e Needle 3 AST Guard. "
+                    f"({len(structural_warnings)} alerta(s) estrutural(is) registrado(s) como telemetria - motor Laya descarregado)."
+                )
+            ).model_dump()
+
+        # Ordena suspeitas por prioridade técnica (segurança e robustez primeiro)
+        all_suspicions.sort(key=lambda item: _CATEGORY_PRIORITY.get(item[1].category, 99))
+        to_arbitrate = all_suspicions[:MAX_ARBITRATIONS]
+        leftover = all_suspicions[MAX_ARBITRATIONS:]
+
+        # Engine pronta: avalia cada suspeita prioritária em micro-premissa atômica (<= 150 tokens)
+        for sym_key, s, warning in to_arbitrate:
+            scope_desc = "Código de Teste" if _is_test_path(s.file_path) else "Código de Produção"
+            code_body = s.snippet or s.trigger_evidence or "Sem trecho disponível"
+            premise = (
+                f"Símbolo: {sym_key}\n"
+                f"Escopo: {scope_desc}\n"
+                f"Evidência: {s.trigger_evidence}\n"
+                f"Trecho AST:\n{code_body}"
+            )
+            hypothesis = (
+                s.noul_hypothesis
+                or DEFECT_NOUL_HYPOTHESES.get(s.category, "")
+                or f"O código em {sym_key} apresenta defeito concreto de {s.category}."
+            )
+
+            try:
+                noul_req = NoulRequest(
+                    premise=premise,
+                    hypothesis=hypothesis,
+                    threshold=0.78,
+                )
+                noul_resp = await active_engine.evaluate_noul(noul_req)
+                prob = round(noul_resp.probability, 4)
+                is_confirmed = noul_resp.passed  # prob >= 0.78
+
+                bucket = confirmed_defects if is_confirmed else dismissed_warnings
+                rule_prefix = "confirmed" if is_confirmed else "dismissed"
+                verdict = (
+                    f"[Laya Noul P={prob:.2f} >= 0.78] Defeito confirmado"
+                    if is_confirmed
+                    else f"[Laya Noul P={prob:.2f} < 0.78] Falso-positivo descartado"
+                )
+                bucket.append(ASTViolation(
+                    rule_id=f"{rule_prefix}_{s.category}",
+                    category=s.category,
+                    file_path=warning.file_path,
+                    line_number=warning.line_number,
+                    code_snippet=warning.code_snippet,
+                    message=f"{verdict}: {warning.message}",
+                    suggestion=warning.suggestion if is_confirmed else None,
+                ))
+            except Exception as eval_err:
+                logger.warning(f"Falha na avaliação Noul para {sym_key}: {eval_err}")
+                dismissed_warnings.append(warning)
+
+        if confirmed_defects:
+            _history_set(target_workspace, {
+                "passed": False,
+                "attempts": current_attempt
+            })
+            return NeedleVerifyDeliveryResponse(
+                passed=False,
+                status="REJECTED",
+                attempt_number=current_attempt,
+                pytest_success=True,
+                pytest_chunks=pytest_chunks_typed,
+                blocking_ast_violations=[],
+                structural_ast_warnings=structural_warnings,
+                confirmed_defects=confirmed_defects,
+                dismissed_warnings=dismissed_warnings,
+                total_files_scanned=len(symbols),
+                total_lines_scanned=sum(sym.end_line - sym.start_line + 1 for sym in symbols),
+                pedido_audit=pedido or None,
+                resultado_audit=resultado or None,
+                message=(
+                    f"🚨 [JEV Noul Arbitrage] {len(confirmed_defects)} defeito(s) estrutural(is) "
+                    f"confirmado(s) pelo Laya RLCD (P >= 0.78). {len(dismissed_warnings)} alerta(s) descartado(s)."
+                )
+            ).model_dump()
+
+    # ── Aprovação Determinística com Arbitragem Noul ──
     _history_set(target_workspace, {
-        "passed": False,
-        "attempts": new_attempts,
-        "git_state": current_git_state,
-        "last_score": round(score_resp.score, 2),
+        "passed": True,
+        "attempts": current_attempt
     })
 
-    return ScoreDiagnoseResponse(
-        score=round(score_resp.score, 2),
-        max_score=max_score,
-        normalized_score=round(score_resp.normalized_score, 4),
-        passed=False,
-        threshold=threshold,
-        breakdown=score_resp.breakdown,
-        score_latency_ms=round(score_resp.latency_ms, 2),
-        score_margin=score_resp.score_margin,
-        borderline=score_resp.borderline,
-        task_type=task_type_key,
-        rubric_source=f"catalog:{task_type_key}",
-        diagnosis=None,
-        approved_as_borderline=False,
-        stages=[mono_stage],
-        total_stages=1,
-        passed_stages=0,
-        failed_stages=1,
-        attempts=new_attempts,
-        max_attempts=MAX_ATTEMPTS,
-        emergency_exit_unlocked=new_attempts >= MAX_ATTEMPTS,
-        message=(
-            f"🚨 [SAÍDA DE EMERGÊNCIA DESBLOQUEADA] (Tentativa {new_attempts}/{MAX_ATTEMPTS}): "
-            f"Limite de {MAX_ATTEMPTS} tentativas consecutivas atingido. "
-            "O agente está autorizado a emitir Laudo de Inviabilidade Técnica."
-        ) if new_attempts >= MAX_ATTEMPTS else (
-            f"Score insuficiente ({round(score_resp.score, 2)}/{threshold:.2f}) no caminho mono "
-            f"(workspace sem símbolos AST no diff para triagem estrutural): abaixo da banda de "
-            f"indiferença [{threshold - _CAVEAT_BAND:.2f}, {threshold:.2f}), não há suspeita do "
-            "Needle 3 para diagnosticar — refatore o artefato no disco e reavalie."
-        ),
+    approval_msg = (
+        f"Entrega 100% aprovada deterministicamente por testes reais (pytest), Needle 3 AST Guard "
+        f"e arbitragem JEV Noul ({len(dismissed_warnings)} alerta(s) descartado(s) como falso-positivo)."
+        if dismissed_warnings else
+        "Entrega 100% aprovada deterministicamente por testes reais (pytest) e Needle 3 AST Guard."
+    )
+
+    return NeedleVerifyDeliveryResponse(
+        passed=True,
+        status="APPROVED",
+        attempt_number=current_attempt,
+        pytest_success=True,
+        pytest_chunks=pytest_chunks_typed,
+        blocking_ast_violations=[],
+        structural_ast_warnings=structural_warnings,
+        confirmed_defects=[],
+        dismissed_warnings=dismissed_warnings,
+        total_files_scanned=len(symbols),
+        total_lines_scanned=sum(sym.end_line - sym.start_line + 1 for sym in symbols),
+        pedido_audit=pedido or None,
+        resultado_audit=resultado or None,
+        message=approval_msg,
     ).model_dump()
 
 

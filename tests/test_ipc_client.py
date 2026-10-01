@@ -9,7 +9,7 @@ from src.client.jev_ipc_client import (
     DEFAULT_SOCKET_PATH,
     call_jev_ipc,
     is_ipc_available,
-    request_score_and_diagnose,
+    request_verify_delivery,
 )
 
 
@@ -49,24 +49,15 @@ class TestJevIpcClient(unittest.TestCase):
         self.assertIn("device", res)
 
     @unittest.skipUnless(is_ipc_available(DEFAULT_SOCKET_PATH), "Servidor IPC Open Jev não está ativo em /tmp/openjev_ipc.sock")
-    def test_request_score_and_diagnose_integration(self):
-        """Valida que o cliente leve despacha a avaliação oficial e retorna estrutura ScoreDiagnoseResponse."""
-        premise = (
-            "Pedido do Prompt: Validar integridade dos contratos e suites de testes. | "
-            "Resultado Executado: Testes reais 100% verdes sem mocks em tests/."
-        )
-        res = request_score_and_diagnose(
-            premise=premise,
+    def test_request_verify_delivery_integration(self):
+        """Valida que o cliente leve despacha a homologação determinística e retorna estrutura NeedleVerifyDeliveryResponse."""
+        res = request_verify_delivery(
             workspace="/home/maiteuxzanela/projeto JEV",
-            threshold=3.40,
-            reset_history=True,
+            attempt_number=1,
         )
-        self.assertIn("score", res)
         self.assertIn("passed", res)
-        self.assertIn("attempts", res)
-        self.assertIn("stages", res)
-        self.assertGreaterEqual(res["score"], 1.0)
-        self.assertLessEqual(res["score"], 5.0)
+        self.assertIn("status", res)
+        self.assertIn("pytest_chunks", res)
 
 
 if __name__ == "__main__":

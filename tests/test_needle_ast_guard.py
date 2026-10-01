@@ -122,12 +122,47 @@ class TestNeedleASTGuard(unittest.TestCase):
         code = (
             "def setup_client():\n"
             "    API_KEY = 'sk-proj-1234567890abcdef1234567890'\n"
+            "    PASSWORD = '123456'\n"
             "    return API_KEY\n"
         )
         violations = NeedleASTGuard.scan_content(code, "src/client.py")
         self.assertTrue(len(violations) >= 1)
         self.assertEqual(violations[0].rule_id, "hardcoded_secret")
         self.assertEqual(violations[0].category, "seguranca")
+        # Garante que code_snippet está presente no objeto e no to_dict()
+        v_dict = violations[0].to_dict()
+        self.assertIn("code_snippet", v_dict)
+        self.assertIn("rule_id", v_dict)
+        self.assertIn("category", v_dict)
+        self.assertIn("file_path", v_dict)
+        self.assertIn("line_number", v_dict)
+        self.assertIn("message", v_dict)
+
+    def test_screener_suppressions(self):
+        """Valida supressões inteligentes do NeedleASTScreener (pyi, dunder, @property, @abstractmethod)."""
+        from src.memory.needle_defect_screener import NeedleASTScreener, AstSymbolSlice
+
+        # Stub .pyi file
+        stub_slice = AstSymbolSlice(
+            file_path="src/types.pyi",
+            symbol_name="Interface",
+            symbol_type="class",
+            start_line=1,
+            end_line=5,
+            content="class Interface:\n    def run(self) -> None: ...\n",
+        )
+        self.assertEqual(len(NeedleASTScreener.screen_symbol(stub_slice)), 0)
+
+        # Decorators @property and @abstractmethod
+        property_slice = AstSymbolSlice(
+            file_path="src/models.py",
+            symbol_name="value",
+            symbol_type="method",
+            start_line=1,
+            end_line=5,
+            content="@property\ndef value(self):\n    return self._val\n",
+        )
+        self.assertEqual(len(NeedleASTScreener.screen_symbol(property_slice)), 0)
 
     def test_detect_command_injection(self):
         code = (
@@ -173,13 +208,19 @@ class TestNeedleASTGuard(unittest.TestCase):
         self.assertEqual(violations[0].category, "seguranca")
 
 
+    def test_scan_content_fails_fast_on_non_string_source(self):
+        """Caminho de erro real: fonte não-string estoura em vez de silenciar a varredura."""
+        with self.assertRaises((TypeError, AttributeError)):
+            NeedleASTGuard.scan_content(123, "src/bad.py")
+
+
 class TestNeedleASTGuardMCPIntegration(unittest.IsolatedAsyncioTestCase):
-    """Garante que o openjev_score_and_diagnose no MCP Server reprova fail-fast."""
+    """Garante que a verificação de entrega no MCP Server reprova fail-fast em violação AST."""
 
     async def test_mcp_fails_fast_on_sqli_with_zero_inference(self):
         import subprocess
         import tempfile
-        from src.mcp_server import openjev_score_and_diagnose
+        from src.mcp_server import needle_verify_delivery
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Inicializa repo Git real
@@ -204,23 +245,26 @@ class TestNeedleASTGuardMCPIntegration(unittest.IsolatedAsyncioTestCase):
                 encoding="utf-8",
             )
 
+            # Suíte real mínima: a Etapa 0 exige testes coletáveis (workspace sem
+            # testes é REJECTED antes da Camada 1 — ver test_workspace_without_tests_is_rejected)
+            tests_dir = Path(tmp_dir) / "tests"
+            tests_dir.mkdir(parents=True, exist_ok=True)
+            (tests_dir / "test_users.py").write_text(
+                "def test_users_smoke():\n    assert True\n",
+                encoding="utf-8",
+            )
+
             # Executa avaliação no workspace real
-            resp = await openjev_score_and_diagnose(
-                premise="Pedido do Prompt: busca de usuarios. | Resultado Executado: criado src/users.py com busca.",
+            resp = await needle_verify_delivery(
                 workspace=tmp_dir,
-                task_type="entrega",
-                threshold=3.40,
+                attempt_number=1,
             )
 
             # Asserções determinísticas de fail-fast
-            self.assertEqual(resp["score"], 1.0)
             self.assertFalse(resp["passed"])
-            self.assertTrue(resp["ast_blocked"])
-            self.assertIsNotNone(resp["diagnosis"])
-            self.assertEqual(resp["diagnosis"]["selected"], "seguranca")
-            self.assertEqual(resp["diagnosis"]["confidence"], 1.0)
-            self.assertTrue(len(resp["ast_violations"]) >= 1)
-            self.assertEqual(resp["ast_violations"][0]["rule_id"], "sql_injection")
+            self.assertEqual(resp["status"], "REJECTED")
+            self.assertTrue(len(resp["blocking_ast_violations"]) >= 1)
+            self.assertEqual(resp["blocking_ast_violations"][0]["rule_id"], "sql_injection")
 
 
 if __name__ == "__main__":

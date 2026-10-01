@@ -14,6 +14,7 @@ import logging
 import re
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.memory.ast_diff_extractor import AstSymbolSlice
@@ -73,15 +74,100 @@ def _needs_usage_example(node: ast.FunctionDef | ast.AsyncFunctionDef, all_args:
         return False
     return True
 
+
+def _has_mutable_field_default(node: ast.Call) -> bool:
+    """Verifica se chamada a Field/field possui argumento default mutável."""
+    if _call_name(node) not in {"Field", "field"}:
+        return False
+    for kw in node.keywords:
+        if kw.arg == "default" and isinstance(kw.value, (ast.List, ast.Dict, ast.Set)):
+            return True
+    return False
+
+
+def _has_field_factory(node: ast.Call) -> bool:
+    """Verifica se chamada a Field/field possui argumento default_factory."""
+    if _call_name(node) not in {"Field", "field"}:
+        return False
+    return any(kw.arg == "default_factory" for kw in node.keywords)
+
+
+def _check_naked_raise(handler: ast.ExceptHandler) -> Optional[int]:
+    """Retorna lineno de raise de novo erro sem 'from err' em handler genérico."""
+    for sub in ast.walk(handler):
+        if sub is not handler and isinstance(sub, ast.Raise):
+            if sub.exc is not None and sub.cause is None:
+                return sub.lineno
+    return None
+
+
+def _check_unlogged_error(handler: ast.ExceptHandler) -> Optional[int]:
+    """Retorna lineno de logger.error sem exc_info=True em handler de 1 instrução."""
+    if len(handler.body) != 1:
+        return None
+    stmt = handler.body[0]
+    if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+        return None
+    c = stmt.value
+    target = _call_name(c)
+    if target not in {"error", "warning", "critical"}:
+        return None
+    has_exc = any(
+        kw.arg == "exc_info"
+        and ((isinstance(kw.value, ast.Constant) and bool(kw.value.value)) or isinstance(kw.value, ast.Name))
+        for kw in c.keywords
+    )
+    return None if has_exc else handler.lineno
+
+
+def _get_blocking_async_call_desc(node: ast.Call) -> str:
+    """Retorna descrição da chamada síncrona bloqueante se aplicável."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        if func.id == "open":
+            return "open"
+        return ""
+    if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
+        return ""
+    mod = func.value.id
+    attr = func.attr
+    if mod == "time" and attr == "sleep":
+        return "time.sleep"
+    if mod == "requests" and attr in {"get", "post", "put", "delete", "patch", "head", "options", "request"}:
+        return f"requests.{attr}"
+    if mod == "subprocess" and attr in {"run", "call", "Popen", "check_output", "check_call"}:
+        return f"subprocess.{attr}"
+    return ""
+
+
+def _get_session_lifecycle_target(node: ast.Call) -> str:
+    """Retorna identificador de recurso de sessão HTTP ou conexão de banco."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        if func.id in {"Client", "AsyncClient", "ClientSession"}:
+            return func.id
+        return ""
+    if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
+        return ""
+    mod = func.value.id
+    attr = func.attr
+    if mod == "httpx" and attr in {"Client", "AsyncClient"}:
+        return f"httpx.{attr}"
+    if mod == "aiohttp" and attr == "ClientSession":
+        return "aiohttp.ClientSession"
+    if mod in {"sqlite3", "psycopg2"} and attr == "connect":
+        return f"{mod}.connect"
+    return ""
+
 # Hipóteses calibradas universais para cada uma das 10 categorias reais do Laya Noul
 DEFECT_NOUL_HYPOTHESES: Dict[str, str] = {
     "logica_ou_regra": (
-        "O código desta função possui erro lógico de controle de fluxo, inconsistência de estado "
-        "ou regra de negócio com predicado incorreto."
+        "O código desta função possui erro lógico de controle de fluxo, estado mutável compartilhado "
+        "em argumento padrão, inconsistência de estado ou regra de negócio com predicado incorreto."
     ),
     "robustez_excecoes_recursos": (
-        "O código desta função apresenta risco de vazamento de recursos, falta de fechamento seguro "
-        "ou ausência de tratamento defensivo de exceção."
+        "O código desta função apresenta risco de vazamento de recursos ou sessões, falta de fechamento seguro, "
+        "ausência de context manager, perda de rastreabilidade de stack trace ou tratamento defensivo deficiente de exceção."
     ),
     "seguranca": (
         "O código desta função apresenta vulnerabilidade de segurança, sanitização insuficiente "
@@ -94,7 +180,8 @@ DEFECT_NOUL_HYPOTHESES: Dict[str, str] = {
         "Esta função quebra o contrato de tipos, assinatura de parâmetros ou schema de dados esperado pelo sistema."
     ),
     "performance_escopo_estilo": (
-        "Esta implementação introduz gargalo severo de desempenho, computação redundante ou desvio injustificado de escopo."
+        "Esta implementação introduz gargalo severo de desempenho, chamada síncrona bloqueante em rotina assíncrona, "
+        "aninhamento cognitivo excessivo ou desvio injustificado de escopo."
     ),
     "requisito_incompleto_ou_ausente": (
         "A implementação deste símbolo deixou de atender a um dos comportamentos expressamente requeridos na demanda."
@@ -122,20 +209,62 @@ class DefectSuspicion:
     line_number: int
     trigger_evidence: str
     noul_hypothesis: str
+    snippet: str = ""
+
+
+def _extract_atomic_snippet(content: str, start_line: int, target_line: int, window: int = 5) -> str:
+    """Extrai trecho atômico (10-15 linhas) em torno de target_line a partir do conteúdo do símbolo."""
+    lines = content.splitlines()
+    if not lines:
+        return ""
+    idx = target_line - start_line
+    if idx < 0 or idx >= len(lines):
+        return "\n".join(lines[:15])
+    start_idx = max(0, idx - window)
+    end_idx = min(len(lines), idx + window + 1)
+    snippet_lines = lines[start_idx:end_idx]
+    return "\n".join(snippet_lines)
 
 
 def _is_test_path(file_path: str) -> bool:
     """True quando o símbolo pertence a código de teste (gatilhos de análise não valem lá)."""
-    parts = [p.lower() for p in file_path.replace("\\", "/").split("/")]
-    for part in parts[:-1]:
-        if part == "tests" or part.startswith("test_"):
-            return True
-    return bool(parts) and parts[-1].startswith("test_")
+    parts = [p.lower() for p in file_path.replace("\\", "/").split("/") if p]
+    if not parts:
+        return False
+    # `test_` só qualifica o arquivo, nunca diretório: `src/test_utils/x.py`
+    # é produção e segue sujeita a todos os gatilhos do Screener.
+    dir_parts, filename = parts[:-1], parts[-1]
+    if any(p in ("tests", "test", "__tests__", "spec") for p in dir_parts):
+        return True
+    return filename.startswith("test_") or filename.endswith("_test.py")
+
+
+def _is_stub_file(file_path: str) -> bool:
+    """True quando o arquivo é um stub de tipos (.pyi)."""
+    return file_path.lower().endswith(".pyi")
 
 
 def _is_dunder(name: str) -> bool:
-    """True para métodos mágicos (`__init__`, `__str__`, ...) — anotações/docstring por convenção."""
+    """True para métodos mágicos (`__init__`, `__str__`, `__repr__`, `__call__`, ...) — anotações/docstring por convenção."""
     return name.startswith("__") and name.endswith("__")
+
+
+def _has_suppression_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True quando a função é decorada com @property, @abstractmethod, @setter, @getter, @overload, etc."""
+    for deco in node.decorator_list:
+        deco_name = ""
+        if isinstance(deco, ast.Name):
+            deco_name = deco.id
+        elif isinstance(deco, ast.Attribute):
+            deco_name = deco.attr
+        elif isinstance(deco, ast.Call):
+            if isinstance(deco.func, ast.Name):
+                deco_name = deco.func.id
+            elif isinstance(deco.func, ast.Attribute):
+                deco_name = deco.func.attr
+        if deco_name in ("property", "abstractmethod", "setter", "getter", "deleter", "overload"):
+            return True
+    return False
 
 
 class SymbolAstVisitor(ast.NodeVisitor):
@@ -149,6 +278,7 @@ class SymbolAstVisitor(ast.NodeVisitor):
         self._with_depth = 0
         self._in_try_block = False
         self._is_test_file = _is_test_path(symbol_slice.file_path)
+        self._is_stub_file = _is_stub_file(symbol_slice.file_path)
         # Estado dos gatilhos Grupo A (set/2026)
         self._class_depth = 0
         self._func_depth = 0
@@ -159,10 +289,16 @@ class SymbolAstVisitor(ast.NodeVisitor):
         self._str_params: Set[str] = set()
         self._docstring_nodes: Set[int] = set()
         self._str_vars: Set[str] = set()
+        # Novos estados das Regras A11-A15 (Camada 2 avançada)
+        self._async_func_depth = 0
+        self._control_nesting_depth = 0
+        self._current_func: Optional[str] = None
+        self._is_assigning_to_self_init = False
 
     def _add_suspicion(self, category: str, line_no: int, evidence: str) -> None:
         """Registra uma suspeita da categoria indicada para o símbolo atual."""
         hypothesis = DEFECT_NOUL_HYPOTHESES.get(category, "")
+        snippet = _extract_atomic_snippet(self.slice.content, self.slice.start_line, line_no)
         self.suspicions.append(
             DefectSuspicion(
                 category=category,
@@ -171,6 +307,7 @@ class SymbolAstVisitor(ast.NodeVisitor):
                 line_number=line_no,
                 trigger_evidence=evidence,
                 noul_hypothesis=hypothesis,
+                snippet=snippet,
             )
         )
 
@@ -179,6 +316,13 @@ class SymbolAstVisitor(ast.NodeVisitor):
         is_elif = getattr(node, "_is_elif", False)
         if not is_elif:
             self._if_depth += 1
+            self._control_nesting_depth += 1
+            if not self._is_test_file and self._control_nesting_depth >= 4:
+                self._add_suspicion(
+                    "performance_escopo_estilo",
+                    node.lineno,
+                    f"Complexidade cognitiva excessiva: bloco de controle aninhado em nível {self._control_nesting_depth} (>= 4) na função '{self._current_func or self.slice.symbol_name}'.",
+                )
 
         # Bloco `if __name__ == "__main__":` — saída de CLI é legítima (A13).
         is_main = (
@@ -216,10 +360,18 @@ class SymbolAstVisitor(ast.NodeVisitor):
         self._in_main_guard = prev_main
         if not is_elif:
             self._if_depth -= 1
+            self._control_nesting_depth -= 1
 
     def visit_For(self, node: ast.For) -> None:
         """Varre um laço for, rastreando profundidade de aninhamento."""
         self._loop_depth += 1
+        self._control_nesting_depth += 1
+        if not self._is_test_file and self._control_nesting_depth >= 4:
+            self._add_suspicion(
+                "performance_escopo_estilo",
+                node.lineno,
+                f"Complexidade cognitiva excessiva: bloco de controle aninhado em nível {self._control_nesting_depth} (>= 4) na função '{self._current_func or self.slice.symbol_name}'.",
+            )
         if self._loop_depth >= 2:
             self._add_suspicion(
                 "performance_escopo_estilo",
@@ -228,10 +380,18 @@ class SymbolAstVisitor(ast.NodeVisitor):
             )
         self.generic_visit(node)
         self._loop_depth -= 1
+        self._control_nesting_depth -= 1
 
     def visit_While(self, node: ast.While) -> None:
         """Varre um laço while, marcando 'while True' sem quebra evidente."""
         self._loop_depth += 1
+        self._control_nesting_depth += 1
+        if not self._is_test_file and self._control_nesting_depth >= 4:
+            self._add_suspicion(
+                "performance_escopo_estilo",
+                node.lineno,
+                f"Complexidade cognitiva excessiva: bloco de controle aninhado em nível {self._control_nesting_depth} (>= 4) na função '{self._current_func or self.slice.symbol_name}'.",
+            )
         # While True com manipulação de ponteiros ou break condicional
         if isinstance(node.test, ast.Constant) and node.test.value is True:
             self._add_suspicion(
@@ -241,6 +401,7 @@ class SymbolAstVisitor(ast.NodeVisitor):
             )
         self.generic_visit(node)
         self._loop_depth -= 1
+        self._control_nesting_depth -= 1
 
     def visit_With(self, node: ast.With) -> None:
         """Varre um bloco with síncrono rastreando profundidade de gerenciadores."""
@@ -332,6 +493,20 @@ class SymbolAstVisitor(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         """Registra `f = open(...)` (A3) e locais de string (A7) do símbolo."""
+        is_self_init = (
+            self._current_func == "__init__"
+            and self._class_depth > 0
+            and any(
+                isinstance(t, ast.Attribute)
+                and isinstance(t.value, ast.Name)
+                and t.value.id == "self"
+                for t in node.targets
+            )
+        )
+        prev_assign_self_init = self._is_assigning_to_self_init
+        if is_self_init:
+            self._is_assigning_to_self_init = True
+
         if _is_open_call(node.value):
             for t in node.targets:
                 if isinstance(t, ast.Name):
@@ -353,21 +528,44 @@ class SymbolAstVisitor(ast.NodeVisitor):
                 if isinstance(t, ast.Name):
                     self._str_vars.add(t.id)
         self.generic_visit(node)
+        self._is_assigning_to_self_init = prev_assign_self_init
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         """Registra `f: IO = open(...)` para o gatilho A3."""
+        is_self_init = (
+            self._current_func == "__init__"
+            and self._class_depth > 0
+            and isinstance(node.target, ast.Attribute)
+            and isinstance(node.target.value, ast.Name)
+            and node.target.value.id == "self"
+        )
+        prev_assign_self_init = self._is_assigning_to_self_init
+        if is_self_init:
+            self._is_assigning_to_self_init = True
+
         if _is_open_call(node.value) and isinstance(node.target, ast.Name):
             self._open_assigned.append((node.target.id, node.lineno))
         self.generic_visit(node)
+        self._is_assigning_to_self_init = prev_assign_self_init
 
     def visit_Call(self, node: ast.Call) -> None:
         """Varre chamadas, marcando exec/execfile e subprocess com shell=True."""
         func_name = _call_name(node)
 
+        # Regra A14 — unbounded_session_lifecycle
+        session_target = _get_session_lifecycle_target(node)
+        if session_target and not self._is_test_file:
+            if self._with_depth == 0 and not self._is_assigning_to_self_init:
+                self._add_suspicion(
+                    "robustez_excecoes_recursos",
+                    getattr(node, "lineno", self.slice.start_line),
+                    f"Instanciação de sessão/conexão '{session_target}()' fora de context manager ('with') e não vinculada a 'self' em '__init__'.",
+                )
+
         # 1. Robustez de E/S e Recursos
         io_triggers = {"open", "seek", "connect", "socket", "acquire"}
         is_protected = self._in_try_block or self._with_depth > 0
-        if func_name in io_triggers and not is_protected:
+        if func_name in io_triggers and not is_protected and not session_target:
             self._add_suspicion(
                 "robustez_excecoes_recursos",
                 getattr(node, "lineno", self.slice.start_line),
@@ -426,6 +624,16 @@ class SymbolAstVisitor(ast.NodeVisitor):
                 f"Chamada de saída/deburação '{func_name}()' em produção fora de bloco CLI (use logging).",
             )
 
+        # Regra A11 — async_blocking_call
+        if self._async_func_depth > 0 and not self._is_test_file:
+            blocking_desc = _get_blocking_async_call_desc(node)
+            if blocking_desc:
+                self._add_suspicion(
+                    "performance_escopo_estilo",
+                    getattr(node, "lineno", self.slice.start_line),
+                    f"Chamada síncrona bloqueante '{blocking_desc}()' dentro de função assíncrona '{self._current_func or self.slice.symbol_name}' (bloqueia o loop de eventos).",
+                )
+
         self.generic_visit(node)
 
     def _is_str_param_open(self, node: ast.Call) -> bool:
@@ -436,10 +644,20 @@ class SymbolAstVisitor(ast.NodeVisitor):
         return isinstance(first, ast.Name) and first.id in self._str_params
 
     def visit_Try(self, node: ast.Try) -> None:
-        """Varre blocos try/except, marcando bare except e exceções silenciadas."""
+        """Varre blocos try/except, marcando bare except, exceções silenciadas e reraise sem encadeamento."""
+        self._control_nesting_depth += 1
+        if not self._is_test_file and self._control_nesting_depth >= 4:
+            self._add_suspicion(
+                "performance_escopo_estilo",
+                node.lineno,
+                f"Complexidade cognitiva excessiva: bloco de controle aninhado em nível {self._control_nesting_depth} (>= 4) na função '{self._current_func or self.slice.symbol_name}'.",
+            )
         prev_try = self._in_try_block
         self._in_try_block = True
         for handler in node.handlers:
+            is_generic = handler.type is None or (
+                isinstance(handler.type, ast.Name) and handler.type.id in {"Exception", "BaseException"}
+            )
             # Captura bare except ou except Exception genérico
             if handler.type is None:
                 self._add_suspicion(
@@ -470,8 +688,27 @@ class SymbolAstVisitor(ast.NodeVisitor):
                         handler.lineno,
                         "Exceção engolida por 'continue' silencioso (descarta o erro sem log nem re-raise).",
                     )
+
+            # Regra A13 — naked_exception_reraise (em blocos except genéricos)
+            if is_generic and not self._is_test_file:
+                naked_raise_line = _check_naked_raise(handler)
+                if naked_raise_line is not None:
+                    self._add_suspicion(
+                        "robustez_excecoes_recursos",
+                        naked_raise_line,
+                        f"Exceção genérica relançada como novo erro sem encadeamento explícito ('raise ... from err') na linha {naked_raise_line}.",
+                    )
+                unlogged_line = _check_unlogged_error(handler)
+                if unlogged_line is not None:
+                    self._add_suspicion(
+                        "robustez_excecoes_recursos",
+                        unlogged_line,
+                        f"Captura de exceção genérica contendo apenas registro de erro sem 'exc_info=True' ou re-raise na linha {unlogged_line} (perda de rastreabilidade).",
+                    )
+
         self.generic_visit(node)
         self._in_try_block = prev_try
+        self._control_nesting_depth -= 1
 
     def visit_Raise(self, node: ast.Raise) -> None:
         """Varre raise, marcando NotImplementedError como funcionalidade incompleta."""
@@ -495,7 +732,9 @@ class SymbolAstVisitor(ast.NodeVisitor):
         símbolos dunder (convenção de anotação própria). Não reprovam entregas
         com score >= threshold (QUALITY_DEFECT_CATEGORIES no mcp_server).
         """
-        if self._is_test_file or _is_dunder(node.name):
+        if self._is_test_file or self._is_stub_file:
+            return
+        if _is_dunder(node.name) or _has_suppression_decorator(node):
             return
         missing: List[str] = []
         all_args = [
@@ -538,18 +777,29 @@ class SymbolAstVisitor(ast.NodeVisitor):
             )
 
     def _screen_function_extras(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        """Gatilhos estruturais por função: default mutável (A5), stub (A10) e teste de classe (A12)."""
-        # A5 — argumento padrão mutável (bug de estado em qualquer arquivo)
+        """Gatilhos estruturais por função: default mutável (A12/A5), stub (A10) e teste de classe (A12)."""
+        # A12 / A5 — argumento padrão mutável (bug de estado em qualquer arquivo)
         default_values = [
             *node.args.defaults,
             *[d for d in node.args.kw_defaults if d is not None],
         ]
         for dv in default_values:
+            if isinstance(dv, ast.Call):
+                if _has_field_factory(dv):
+                    continue
+                if _has_mutable_field_default(dv):
+                    self._add_suspicion(
+                        "logica_ou_regra",
+                        node.lineno,
+                        f"Argumento padrão mutável via '{_call_name(dv)}(default=...)' em '{node.name}': use 'default_factory'.",
+                    )
+                continue
+
             if isinstance(dv, (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)):
                 self._add_suspicion(
                     "logica_ou_regra",
                     node.lineno,
-                    f"Argumento padrão mutável em '{node.name}': estado compartilhado entre chamadas.",
+                    f"Argumento padrão mutável em '{node.name}': estado compartilhado mutável entre invocações.",
                 )
                 break
 
@@ -614,6 +864,10 @@ class SymbolAstVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Aplica os screeneres de estrutura/qualidade e desce nos nós filhos do símbolo."""
+        prev_func = self._current_func
+        self._current_func = node.name
+        prev_nesting = self._control_nesting_depth
+        self._control_nesting_depth = 0
         self._screen_function_extras(node)
         prev_params = self._str_params
         own_str: Set[str] = set()
@@ -633,25 +887,37 @@ class SymbolAstVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self._func_depth -= 1
         self._str_params = prev_params
+        self._current_func = prev_func
+        self._control_nesting_depth = prev_nesting
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         """Aplica os screeneres de estrutura/qualidade e desce nos nós filhos do símbolo async."""
+        prev_func = self._current_func
+        self._current_func = node.name
+        prev_nesting = self._control_nesting_depth
+        self._control_nesting_depth = 0
+        self._async_func_depth += 1
         self._screen_function_extras(node)
-        self._str_params = set()
+        prev_params = self._str_params
+        own_str: Set[str] = set()
         all_args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
         for a in all_args:
             if a.annotation is not None and "str" in ast.unparse(a.annotation):
-                self._str_params.add(a.arg)
+                own_str.add(a.arg)
+        self._str_params = own_str
         self._screen_quality_signature(node)
         self._func_depth += 1
         self.generic_visit(node)
         self._func_depth -= 1
-        self._str_params = set()
+        self._str_params = prev_params
+        self._async_func_depth -= 1
+        self._current_func = prev_func
+        self._control_nesting_depth = prev_nesting
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        """Checa docstring da classe (fora de testes e de símbolos dunder) e rastreia escopo."""
+        """Checa docstring da classe (fora de testes, stubs e de símbolos dunder) e rastreia escopo."""
         self._class_depth += 1
-        if not self._is_test_file and not _is_dunder(node.name):
+        if not self._is_test_file and not self._is_stub_file and not _is_dunder(node.name):
             if ast.get_docstring(node) is None:
                 self._add_suspicion(
                     "docstring_ausente",
@@ -666,9 +932,13 @@ def screen_symbol_defects(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]
     """Analisa o símbolo sintático via AST e retorna todas as suspeitas concretas identificadas.
 
     Exemplo:
-        >>> suspeitas = screen_symbol_defects(sl)
-        >>> [s.category for s in suspeitas]
-        []
+        >>> sl = AstSymbolSlice(
+        ...     file_path="app.py", symbol_name="calc", symbol_type="function",
+        ...     start_line=1, end_line=3,
+        ...     content="def calc(a: int, b: int) -> int:\\n    return a + b\\n",
+        ... )
+        >>> isinstance(screen_symbol_defects(sl), list)
+        True
     """
     content_to_parse = textwrap.dedent(symbol_slice.content)
     try:
@@ -683,6 +953,7 @@ def screen_symbol_defects(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]
                 line_number=symbol_slice.start_line,
                 trigger_evidence=f"Erro de sintaxe AST: {e}",
                 noul_hypothesis=DEFECT_NOUL_HYPOTHESES["contrato_ambiente"],
+                snippet="\n".join(symbol_slice.content.splitlines()[:15]),
             )
         ]
 
@@ -692,6 +963,7 @@ def screen_symbol_defects(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]
     # A3: recurso aberto e nunca fechado nem vinculado a `with` no mesmo símbolo
     for name, lineno in visitor._open_assigned:
         if name not in visitor._closed_names and name not in visitor._with_names:
+            snippet = _extract_atomic_snippet(symbol_slice.content, symbol_slice.start_line, lineno)
             visitor.suspicions.append(
                 DefectSuspicion(
                     category="robustez_excecoes_recursos",
@@ -700,6 +972,7 @@ def screen_symbol_defects(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]
                     line_number=lineno,
                     trigger_evidence=f"Recurso aberto em '{name} = open(...)' sem .close() nem bloco with no mesmo símbolo.",
                     noul_hypothesis=DEFECT_NOUL_HYPOTHESES["robustez_excecoes_recursos"],
+                    snippet=snippet,
                 )
             )
 
@@ -707,6 +980,7 @@ def screen_symbol_defects(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]
     for i, line in enumerate(symbol_slice.content.splitlines(), start=symbol_slice.start_line):
         stripped = line.strip()
         if _TODO_RE.match(line):
+            snippet = _extract_atomic_snippet(symbol_slice.content, symbol_slice.start_line, i)
             visitor.suspicions.append(
                 DefectSuspicion(
                     category="requisito_incompleto_ou_ausente",
@@ -715,6 +989,7 @@ def screen_symbol_defects(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]
                     line_number=i,
                     trigger_evidence=f"Marcador de pendência encontrado: {line.strip()}",
                     noul_hypothesis=DEFECT_NOUL_HYPOTHESES["requisito_incompleto_ou_ausente"],
+                    snippet=snippet,
                 )
             )
 
@@ -729,10 +1004,13 @@ def screen_symbol_defects(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]
     return unique_suspicions
 
 
-def screen_workspace_symbols(slices: List[AstSymbolSlice]) -> Dict[str, List[DefectSuspicion]]:
+def screen_workspace_symbols(
+    slices: List[AstSymbolSlice], workspace_root: Optional[str] = None
+) -> Dict[str, List[DefectSuspicion]]:
     """Varre todos os símbolos extraídos e retorna mapa {symbol_key: lista_de_suspeitas}.
 
     Exemplo:
+        >>> from src.memory.ast_diff_extractor import extract_workspace_ast_symbols
         >>> mapa = screen_workspace_symbols(extract_workspace_ast_symbols("."))
         >>> isinstance(mapa, dict)
         True
@@ -743,17 +1021,62 @@ def screen_workspace_symbols(slices: List[AstSymbolSlice]) -> Dict[str, List[Def
         suspicions = screen_symbol_defects(s)
         if suspicions:
             result[key] = suspicions
-    _screen_test_files_without_error_paths(slices, result)
+    _screen_test_files_without_error_paths(slices, result, workspace_root)
     return result
 
 
+def _module_source_for_a1(
+    file_path: str, slices: List[AstSymbolSlice], workspace_root: Optional[str]
+) -> str:
+    """Carrega o módulo inteiro do disco (com fallback para os slices) para a regra A1.
+
+    Exemplo:
+        >>> isinstance(_module_source_for_a1("tests/inexistente.py", [], None), str)
+        True
+    """
+    candidates: List[Path] = []
+    path_obj = Path(file_path)
+    if path_obj.is_absolute():
+        candidates.append(path_obj)
+    else:
+        if workspace_root:
+            candidates.append(Path(workspace_root) / path_obj)
+        candidates.append(path_obj)
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                return candidate.read_text(encoding="utf-8", errors="replace")
+            except OSError as read_err:
+                logger.debug("A1: falha ao ler %s: %s", candidate, read_err)
+                break
+    return "\n".join(s.content for s in slices if s.file_path == file_path)
+
+
+def _has_error_path_test(source: str) -> bool:
+    """True se o código fonte contém `pytest.raises(...)`/`assertRaises(...)` reais (AST, não texto).
+
+    Exemplo:
+        >>> _has_error_path_test("import pytest\\nwith pytest.raises(ValueError):\\n    f()\\n")
+        True
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return "pytest.raises" in source or "assertRaises" in source
+    return any(
+        isinstance(node, ast.Attribute) and node.attr in ("raises", "assertRaises")
+        for node in ast.walk(tree)
+    )
+
+
 def _screen_test_files_without_error_paths(
-    slices: List[AstSymbolSlice], result: Dict[str, List[DefectSuspicion]]
+    slices: List[AstSymbolSlice], result: Dict[str, List[DefectSuspicion]], workspace_root: Optional[str] = None
 ) -> None:
     """A1: arquivo de teste sem nenhum caminho de erro — uma suspeita por módulo.
 
-    Procura 'pytest.raises'/'assertRaises' em qualquer símbolo do arquivo; se
-    ausente, registra uma única suspeita no símbolo de menor linha (representante).
+    Lê o módulo inteiro do disco (fallback: slices) e detecta via AST um
+    `pytest.raises(...)`/`assertRaises(...)` real; se ausente, registra uma
+    única suspeita no símbolo de menor linha (representante).
     """
     by_file: Dict[str, List[AstSymbolSlice]] = {}
     for s in slices:
@@ -761,8 +1084,12 @@ def _screen_test_files_without_error_paths(
     for fpath, file_slices in by_file.items():
         if not _is_test_path(fpath):
             continue
-        joined = "\n".join(s.content for s in file_slices)
-        if "pytest.raises" in joined or "assertRaises" in joined:
+        if Path(fpath).name == "conftest.py":
+            # A12 não se aplica: conftest.py é infraestrutura do pytest
+            # (fixtures/hooks de sessão), não módulo de teste — não há caminho
+            # de erro de teste a exercitar nele.
+            continue
+        if _has_error_path_test(_module_source_for_a1(fpath, file_slices, workspace_root)):
             continue
         rep = min(file_slices, key=lambda s: s.start_line)
         key = f"{rep.file_path}::{rep.symbol_name}"
@@ -778,5 +1105,56 @@ def _screen_test_files_without_error_paths(
                 line_number=rep.start_line,
                 trigger_evidence="Arquivo de teste sem nenhum caminho de erro: 'pytest.raises'/'assertRaises' ausente em todo o módulo.",
                 noul_hypothesis=DEFECT_NOUL_HYPOTHESES["qualidade_de_testes"],
+                snippet="\n".join(rep.content.splitlines()[:15]),
             ),
         ]
+
+
+class NeedleASTScreener:
+    """Screener estrutural de defeitos de AST (Cactus Needle 3)."""
+
+    @staticmethod
+    def screen_symbol(symbol_slice: AstSymbolSlice) -> List[DefectSuspicion]:
+        """Inspeciona um símbolo sintático via AST e retorna suspeitas identificadas.
+
+        Exemplo:
+            >>> sl = AstSymbolSlice(
+            ...     file_path="app.py", symbol_name="calc", symbol_type="function",
+            ...     start_line=1, end_line=3,
+            ...     content="def calc(a: int, b: int) -> int:\\n    return a + b\\n",
+            ... )
+            >>> isinstance(NeedleASTScreener.screen_symbol(sl), list)
+            True
+        """
+        return screen_symbol_defects(symbol_slice)
+
+    @staticmethod
+    def screen_workspace(slices: List[AstSymbolSlice]) -> Dict[str, List[DefectSuspicion]]:
+        """Varre todos os símbolos extraídos do workspace e retorna o mapa de suspeitas.
+
+        Exemplo:
+            >>> mapa = NeedleASTScreener.screen_workspace([])
+            >>> isinstance(mapa, dict)
+            True
+        """
+        return screen_workspace_symbols(slices)
+
+    @staticmethod
+    def is_test_file(file_path: str) -> bool:
+        """Determina se um caminho pertence à suíte de testes.
+
+        Exemplo:
+            >>> NeedleASTScreener.is_test_file("tests/test_foo.py")
+            True
+        """
+        return _is_test_path(file_path)
+
+    @staticmethod
+    def is_stub_file(file_path: str) -> bool:
+        """Determina se um caminho é um arquivo de stub (.pyi).
+
+        Exemplo:
+            >>> NeedleASTScreener.is_stub_file("types.pyi")
+            True
+        """
+        return _is_stub_file(file_path)

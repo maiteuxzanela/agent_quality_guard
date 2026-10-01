@@ -222,7 +222,7 @@ class TestLayaLoad:
         from src.core.schemas import InferenceError
 
         adapter = LayaAdapter(
-            checkpoint="english", device="cuda:9", allow_cpu_fallback=False
+            checkpoint="english", device="invalid_device_xyz", allow_cpu_fallback=False
         )
         with pytest.raises(InferenceError):
             adapter.load()

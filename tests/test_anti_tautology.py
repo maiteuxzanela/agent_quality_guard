@@ -49,23 +49,6 @@ class TestSuiteAntiTautologia(unittest.TestCase):
             + "\n".join(violacoes),
         )
 
-    def test_golden_set_mantem_casos_negativos_reais(self):
-        """Sem premissas negativas no golden set, os testes positivos virariam
-        aprovação circular (sempre-verdadeiro). Cobertura mínima exigida."""
-        from tests.test_score_calibration import (
-            NEGATIVE_CASES,
-            ORDER_PAIRS,
-            POSITIVE_CASES,
-            STABILITY_PAIRS,
-        )
-        self.assertGreaterEqual(len(POSITIVE_CASES), 3)
-        self.assertGreaterEqual(len(NEGATIVE_CASES), 4)
-        self.assertGreaterEqual(len(ORDER_PAIRS), 2)
-        self.assertGreaterEqual(len(STABILITY_PAIRS), 2)
-        nomes_pos = {name for name, *_ in POSITIVE_CASES}
-        nomes_neg = {name for name, *_ in NEGATIVE_CASES}
-        self.assertTrue(nomes_pos.isdisjoint(nomes_neg))
-
     def test_fonte_nao_utf8_propaga_unicode_decode_error(self):
         """Caminho de erro real: a varredura lê toda fonte em UTF-8; bytes
         inválidos não podem ser engolidos silenciosamente (fail-fast)."""

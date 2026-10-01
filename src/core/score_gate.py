@@ -62,10 +62,24 @@ _stages_cache: Dict[str, Dict[str, dict]] = {}
 _score_history_lock = threading.Lock()
 
 
+def _state_base_dir() -> Path:
+    """Diretório base do estado persistido.
+
+    `JEV_STATE_DIR` (lido a cada chamada) permite isolar o estado por
+    execução de teste — sem ele, `history_clear()` de uma suíte apagava o
+    circuit breaker e o registro de homologação de TODOS os workspaces.
+    """
+    override = os.environ.get("JEV_STATE_DIR", "").strip()
+    if override:
+        return Path(override)
+    return Path(tempfile.gettempdir()) / "openjev_state"
+
+
 def _get_state_path(workspace: str) -> Path:
+    """Arquivo JSON de estado do workspace, sob `JEV_STATE_DIR` (ou o tmp padrão)."""
     target = str(Path(workspace).resolve()) if workspace else "default"
     ws_hash = hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
-    base_dir = Path(tempfile.gettempdir()) / "openjev_state"
+    base_dir = _state_base_dir()
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir / f"score_state_{ws_hash}.json"
 
@@ -134,11 +148,55 @@ def history_increment_attempts(workspace: str) -> int:
         return hist["attempts"]
 
 
-def history_clear() -> None:
+def resolve_attempt_number(hist: Optional[dict]) -> int:
+    """Próxima tentativa derivada EXCLUSIVAMENTE do histórico persistido.
+
+    O valor enviado pelo chamador nunca participa do cálculo: aceitá-lo como
+    piso liberava a Saída de Emergência na 1ª chamada (`attempt_number=5`)
+    sem executar pytest, Guard nem Screener.
+
+    - última tentativa aprovada → mantém a contagem (revalidação não consome tentativa);
+    - última tentativa reprovada ou inexistente → avança +1.
+
+    Exemplo:
+        >>> resolve_attempt_number(None)
+        1
+        >>> resolve_attempt_number({"passed": False, "attempts": 4})
+        5
+        >>> resolve_attempt_number({"passed": True, "attempts": 2})
+        2
+    """
+    prev = int((hist or {}).get("attempts", 0))
+    if hist and hist.get("passed", False):
+        return max(prev, 1)
+    return prev + 1
+
+
+def history_clear(workspace: Optional[str] = None) -> None:
+    """Zera o histórico de tentativas.
+
+    Com `workspace`, o reset é **escopado** ao estado daquele workspace
+    (memória + arquivo). Sem `workspace`, limpa tudo — reservado a setup de
+    teste com `JEV_STATE_DIR` isolado; nunca usado pelo caminho de homologação.
+
+    Exemplo:
+        >>> history_clear("/workspace/que_nao_existe") is None
+        True
+    """
     with _score_history_lock:
+        if workspace is not None:
+            _score_history.pop(workspace, None)
+            _stages_cache.pop(workspace, None)
+            state_file = _get_state_path(workspace)
+            if state_file.is_file():
+                try:
+                    state_file.unlink()
+                except OSError as unlink_err:
+                    logger.debug("Falha ao remover arquivo de estado %s: %s", state_file, unlink_err)
+            return
         _score_history.clear()
         _stages_cache.clear()
-        base_dir = Path(tempfile.gettempdir()) / "openjev_state"
+        base_dir = _state_base_dir()
         if base_dir.is_dir():
             for f in base_dir.glob("score_state_*.json"):
                 try:

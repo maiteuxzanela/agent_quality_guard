@@ -9,12 +9,12 @@ from .jev_ipc_client import (
     DEFAULT_SOCKET_PATH,
     call_jev_ipc,
     is_ipc_available,
-    request_score_and_diagnose,
+    request_verify_delivery,
 )
 
 __all__ = [
     "DEFAULT_SOCKET_PATH",
     "call_jev_ipc",
     "is_ipc_available",
-    "request_score_and_diagnose",
+    "request_verify_delivery",
 ]

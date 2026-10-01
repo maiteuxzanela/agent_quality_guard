@@ -133,24 +133,42 @@ def test_format_ast_rejection_many_violations_truncation():
     assert "... e mais 3 violação(ões) detectada(s)." in reason
 
 
-def test_score_diagnose_response_schema_message_serialization():
-    from src.core.schemas import ScoreDiagnoseResponse
+def test_needle_verify_delivery_response_schema_message_serialization():
+    from src.core.schemas import NeedleVerifyDeliveryResponse
 
-    resp = ScoreDiagnoseResponse(
-        score=3.20,
-        max_score=5.0,
-        normalized_score=0.55,
-        passed=False,
-        threshold=3.40,
-        breakdown={},
-        score_latency_ms=10.5,
-        attempts=5,
-        emergency_exit_unlocked=True,
+    resp = NeedleVerifyDeliveryResponse(
+        passed=True,
+        status="EMERGENCY_RELEASE",
+        attempt_number=5,
+        pytest_success=True,
+        pytest_chunks=[],
+        blocking_ast_violations=[],
+        structural_ast_warnings=[],
+        total_files_scanned=10,
+        total_lines_scanned=500,
         message="🚨 Saída de Emergência Autorizada.",
     )
     data = resp.model_dump()
     assert data["message"] == "🚨 Saída de Emergência Autorizada."
-    assert data["emergency_exit_unlocked"] is True
+    assert data["status"] == "EMERGENCY_RELEASE"
     # Valida deserialização
-    loaded = ScoreDiagnoseResponse.model_validate(data)
+    loaded = NeedleVerifyDeliveryResponse.model_validate(data)
     assert loaded.message == resp.message
+
+
+def test_ast_violation_payload_rejects_non_numeric_line_number():
+    """Caminho de erro real: payload inválido de violação é rejeitado pelo schema que o formatador consome."""
+    import pytest
+    from pydantic import ValidationError
+
+    from src.core.schemas import ASTViolation
+
+    with pytest.raises(ValidationError):
+        ASTViolation(
+            rule_id="swallowed_exception",
+            category="robustez_excecoes_recursos",
+            file_path="src/auth.py",
+            line_number="nao_e_inteiro",
+            code_snippet="...",
+            message="Exceção engolida silenciosamente.",
+        )

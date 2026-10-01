@@ -26,7 +26,7 @@ Sua missão é garantir que o transporte de mensagens (JSON-RPC via stdin/stdout
      1. `needle3_search`
      2. `openjev_choice`
      3. `openjev_noul`
-     4. `openjev_score_and_diagnose`
+     4. `needle_verify_delivery`
      5. `openjev_consulta`
 2. **Imutabilidade do Catálogo de Rubricas (`RUBRIC_CATALOG`):**
    * Você garante que nenhuma rubrica possa ser forjada ou passada em texto livre para contornar a avaliação. O servidor MCP e o FastAPI resolvem a rubrica exclusivamente através do `task_type` (`catalog:entrega`, `catalog:auditoria`, `catalog:codigo_producao`).
@@ -55,4 +55,4 @@ Quando despachado via `openjev_spawn_subagent`, sua tarefa termina com um relat�
 3. **Desvios e riscos:** o que ficou fora do escopo, fronteiras de score e dívidas técnicas — se houver; breaking changes de contrato reportados como fato, nunca escondidos.
 4. **Sem mocks:** dependência indisponível vira bloqueio reportado, nunca stub ou `MagicMock`.
 
-A entrega só se conclui após o Quality Gate do orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) via `openjev_score_and_diagnose` (corte $\ge 3.40$).
+A entrega só se conclui após a homologação determinística pelo orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) via `needle_verify_delivery`.

@@ -73,31 +73,34 @@ def call_jev_ipc(
         return res.get("data", res)
 
 
-def request_score_and_diagnose(
-    premise: str,
+def request_verify_delivery(
     workspace: str,
-    threshold: float = 3.40,
+    attempt_number: int = 1,
     task_type: str = "codigo_producao",
+    pedido: str = "",
+    resultado: str = "",
     timeout: float = 180.0,
     socket_path: str = DEFAULT_SOCKET_PATH,
-    reset_history: bool = False,
 ) -> Dict[str, Any]:
-    """Invoca formalmente o pipeline openjev_score_and_diagnose via socket IPC.
+    """Invoca o pipeline determinístico needle_verify_delivery via socket IPC.
 
-    Executa multi-etapas via diffs reais, anti-premise gaming, persistência de tentativas
-    e diagnóstico via Screener Needle 3 (10 categorias) + Noul contra o modelo Laya na GPU.
+    Executa Pytest em chunks sequenciais + Needle 3 AST Guard/Screener.
+    `attempt_number` é apenas informativo: a contagem de tentativas é
+    resolvida server-side pelo circuit breaker.
 
     Exemplo:
-        >>> resp = request_score_and_diagnose("Pedido: add | Resultado: add(a, b)", "/tmp/ws")
-        >>> resp["passed"] in (True, False)
+        >>> try:
+        ...     request_verify_delivery(".", socket_path="/nonexistent/openjev.sock")
+        ... except ConnectionError as exc:
+        ...     "Servidor IPC Open Jev não está ativo" in str(exc)
         True
     """
     target_ws = str(Path(workspace).resolve())
     payload = {
-        "premise": premise,
         "workspace": target_ws,
-        "threshold": threshold,
+        "attempt_number": attempt_number,
         "task_type": task_type,
-        "reset_history": reset_history,
+        "pedido": pedido,
+        "resultado": resultado,
     }
-    return call_jev_ipc("score_and_diagnose", payload=payload, timeout=timeout, socket_path=socket_path)
+    return call_jev_ipc("verify_delivery", payload=payload, timeout=timeout, socket_path=socket_path)

@@ -17,7 +17,7 @@ Para manter a integridade do motor sob alta demanda, os agentes seguem a governa
 1. **Zero Mocks (Fail-Fast):** Proibição absoluta de simulações, stubs e mocks em testes e produção.
 2. **Busca Cirúrgica AST (Needle 3):** Contexto estritamente limitado a 500–1.500 tokens; proibido despejo de monólitos (>300 linhas).
 3. **Decisão Tipada Local (Laya GTX 1050 Ti):** Especialistas eleitos por `openjev_choice` (Protocolo de Dúvida — só com $\ge 2$ candidatos genuínos) com roster $\le 10$ opções; com 1 candidato claro, despacha-se direto.
-4. **Quality Gate de Fechamento:** Validação obrigatória com JEV Score $\ge 3.40$ (Pedido vs Resultado factual $\le 1500$ chars).
+4. **Homologação Determinística de Fechamento:** Validação com `needle_verify_delivery` (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º NeedleASTScreener).
 
 ---
 
@@ -57,7 +57,7 @@ result = openjev_spawn_subagent(
 )
 ```
 
-O especialista assume a execução em janela isolada, **sem carregar o histórico da conversa do orquestrador** (o `task` deve conter todo o contexto necessário), e o retorno segue a seção **Contrato de Entrega** de cada persona — verificado deterministicamente (Needle 3 AST Guardrail + `openjev_score_and_diagnose`) antes de voltar ao orquestrador.
+O especialista assume a execução em janela isolada, **sem carregar o histórico da conversa do orquestrador** (o `task` deve conter todo o contexto necessário), e o retorno segue a seção **Contrato de Entrega** de cada persona — verificado deterministicamente (`needle_verify_delivery`) antes de voltar ao orquestrador.
 
 Especialidade ausente no roster ⇒ propor nova persona em `personas/<nome>.md` (expansão orgânica), nunca improvisar generalista.
 

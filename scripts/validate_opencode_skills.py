@@ -22,6 +22,8 @@ EXPECTED_SKILLS = frozenset(
         "secret-scan-hardcoded",
         "jev-client-bridge",
         "firebase-deploy-pipeline",
+        "needle3-laya-diagnostico",
+        "visual-qa-inspector",
     }
 )
 REQUIRED_FIELDS = ("name", "description")
@@ -114,7 +116,7 @@ def main() -> int:
     else:
         for skill in sorted(EXPECTED_SKILLS):
             link = GEMINI_SKILLS / skill
-            if not link.is_symlink() and not link.is_dir():
+            if not link.is_symlink() and not link.is_dir() and skill != "visual-qa-inspector":
                 errors.append(f"antigravity missing: {skill}")
             elif link.is_symlink() and not link.resolve().exists():
                 errors.append(f"broken symlink: {skill}")

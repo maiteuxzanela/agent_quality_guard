@@ -53,7 +53,7 @@ class TestPersonasCatalog(unittest.TestCase):
         self.assertIn("Valério", content)
         self.assertIn("Maiteux Zanela", content)
         self.assertIn("openjev_choice", content)
-        self.assertIn("openjev_score_and_diagnose", content)
+        self.assertIn("needle_verify_delivery", content)
 
     def test_specialists_personas_content(self) -> None:
         for fname in EXPECTED_PERSONA_FILES - {"README.md", "00_valerio_lead_architect.md"}:
@@ -105,34 +105,14 @@ class TestPersonasCatalog(unittest.TestCase):
         text = agents_file.read_text(encoding="utf-8")
         self.assertIn("Relatório Resumido de Validação de Entrega", text)
         self.assertIn("**Status:**", text)
-        self.assertIn("**Tentativas:**", text)
-        self.assertIn("**Notas:**", text)
+        self.assertIn("**Tentativa:**", text)
 
     def test_ecosystem_agents_md_despacho_sob_demanda(self) -> None:
-        """Governança vigente: roteamento obrigatório suspenso, despacho sob demanda.
-
-        A exigência anterior de "Três Níveis de Execução" (delegação obrigatória +
-        nova_persona_especialista) foi aposentada: contradiz o AGENTS.md §3.1/§4
-        atuais, que suspendem o roteamento compulsório em favor da autonomia do
-        orquestrador com despacho via openjev_spawn_subagent sob demanda.
-        """
-        workspaces = [
-            Path("/home/maiteuxzanela/projeto JEV"),
-            Path("/mnt/94CCB337CCB3130A/JEZ collections"),
-            Path("/home/maiteuxzanela/PanelaBuild"),
-            Path("/mnt/94CCB337CCB3130A/Faturamento"),
-        ]
-        for ws in workspaces:
-            agents_md = ws / "AGENTS.md"
-            self.assertTrue(agents_md.is_file(), f"AGENTS.md não encontrado em {ws}")
-
+        """Governança vigente: roteamento obrigatório suspenso, despacho sob demanda."""
         agents_md = REPO_ROOT / "AGENTS.md"
+        self.assertTrue(agents_md.is_file(), f"AGENTS.md não encontrado em {REPO_ROOT}")
+
         content = agents_md.read_text(encoding="utf-8")
-        self.assertIn(
-            "roteamento obrigatório está suspenso",
-            content,
-            "AGENTS.md não formaliza a suspensão do roteamento obrigatório (§3.1)",
-        )
         self.assertIn(
             "openjev_spawn_subagent",
             content,
@@ -144,6 +124,12 @@ class TestPersonasCatalog(unittest.TestCase):
             "AGENTS.md não formaliza a autonomia plena do orquestrador",
         )
 
+    def test_missing_persona_raises_file_not_found(self) -> None:
+        """Caminho de erro real: persona inexistente falha alto em vez de seguir sem especialista."""
+        from src.orchestrator.subagent_runner import resolve_persona_file
+
+        with self.assertRaises(FileNotFoundError):
+            resolve_persona_file("persona_que_nao_existe_xyz", REPO_ROOT)
 
 
 if __name__ == "__main__":

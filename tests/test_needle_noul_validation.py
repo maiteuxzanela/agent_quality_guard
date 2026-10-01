@@ -6,7 +6,7 @@ from typing import List
 
 import pytest
 
-from src.core.schemas import ScoreDiagnoseResponse
+from src.core.schemas import NeedleVerifyDeliveryResponse
 from src.memory.ast_diff_extractor import (
     AstSymbolSlice,
     extract_workspace_ast_symbols,
@@ -167,29 +167,27 @@ def test_defect_hypotheses_cobrem_as_10_categorias():
     assert all(h.strip() for h in DEFECT_NOUL_HYPOTHESES.values())
 
 
-def test_score_diagnose_response_approved_with_caveat():
-    """Valida que o contrato Pydantic serializa approved_with_caveat corretamente."""
-    resp = ScoreDiagnoseResponse(
-        score=3.24,
-        max_score=5.0,
-        normalized_score=0.56,
+def test_needle_verify_delivery_response_approved():
+    """Valida que o contrato Pydantic serializa NeedleVerifyDeliveryResponse corretamente."""
+    resp = NeedleVerifyDeliveryResponse(
         passed=True,
-        threshold=3.40,
-        breakdown={},
-        score_latency_ms=15.0,
-        attempts=0,
-        approved_with_caveat=True,
-        message="Entrega aprovada com ressalva: Nenhuma falha estrutural detectada pelo Needle 3.",
+        status="APPROVED",
+        attempt_number=1,
+        pytest_success=True,
+        pytest_chunks=[],
+        blocking_ast_violations=[],
+        structural_ast_warnings=[],
+        total_files_scanned=5,
+        total_lines_scanned=250,
+        message="Entrega aprovada deterministicamente.",
     )
     data = resp.model_dump()
     assert data["passed"] is True
-    assert data["approved_with_caveat"] is True
-    assert "ressalva" in data["message"].lower()
+    assert data["status"] == "APPROVED"
 
-    # Deserialização e validação
-    parsed = ScoreDiagnoseResponse.model_validate(data)
-    assert parsed.approved_with_caveat is True
+    parsed = NeedleVerifyDeliveryResponse.model_validate(data)
     assert parsed.passed is True
+    assert parsed.status == "APPROVED"
 
 
 def test_ast_diff_extractor_class_methods_and_dedent(tmp_path: Path):
@@ -388,3 +386,13 @@ def test_a13_print_em_producao_fora_do_cli():
     assert "performance_escopo_estilo" in _cats(bad, name="f")
     assert "performance_escopo_estilo" not in _cats(good, name="app")
 
+
+
+def test_noul_request_rejects_out_of_range_threshold():
+    """Caminho de erro real: threshold fora de [0, 1] é recusado pelo schema (fail-fast)."""
+    from pydantic import ValidationError
+
+    from src.core.schemas import NoulRequest
+
+    with pytest.raises(ValidationError):
+        NoulRequest(premise="Premissa", hypothesis="Hipótese", threshold=1.5)
