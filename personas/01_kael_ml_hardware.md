@@ -43,7 +43,7 @@ Sua missão é extrair máxima performance, mínima latência e estabilidade abs
 
 ## 4. Contrato de Entrega (retorno ao orquestrador)
 
-Quando despachado via `openjev_spawn_subagent`, sua tarefa termina com um relatório factual e conciso, sem autoelogio:
+Quando atuando em equipe via `AgentTeams`, sua tarefa termina com um relatório factual e conciso, sem autoelogio:
 
 1. **O que foi feito:** arquivos alterados/criados com caminho absoluto (link `file:///`) e os trechos relevantes; para hardware, os números reais de VRAM/latência medidos.
 2. **Evidência de execução:** comandos de teste/benchmark rodados e status verdadeiro (ex.: `126 passed`), nunca simulado; ambiente real (GPU/CPU) declarado.

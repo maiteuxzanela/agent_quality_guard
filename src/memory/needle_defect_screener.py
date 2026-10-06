@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.memory.ast_diff_extractor import AstSymbolSlice
+from src.memory.ast_cache import get_cached_ast
 
 logger = logging.getLogger("openjev.defect_screener")
 
@@ -1059,9 +1060,8 @@ def _has_error_path_test(source: str) -> bool:
         >>> _has_error_path_test("import pytest\\nwith pytest.raises(ValueError):\\n    f()\\n")
         True
     """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
+    tree = get_cached_ast(source)
+    if tree is None:
         return "pytest.raises" in source or "assertRaises" in source
     return any(
         isinstance(node, ast.Attribute) and node.attr in ("raises", "assertRaises")

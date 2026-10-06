@@ -185,7 +185,7 @@ Este catálogo formaliza todas as invariantes e regras de negócio do motor Open
 * **Módulos Relacionados:**  
   * [`AGENTS.md`](file:///home/maiteuxzanela/projeto%20JEV/AGENTS.md)
 * **Testes Associados:**  
-  * Auditoria do Revisor Crítico (`critical-reviewer`).
+  * Verificação determinística via `needle_verify_delivery`.
 
 ---
 

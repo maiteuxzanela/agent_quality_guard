@@ -1,7 +1,11 @@
 """Testes do score_gate: defaults pinados, lock de histórico e validação de premissa."""
 
+import os
+import subprocess
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 
 from src.core.score_gate import (
     CAVEAT_BAND,
@@ -171,6 +175,76 @@ class TestHistoryLock(unittest.TestCase):
         # Incremento em novo ciclo preserva a sequência (3 -> 4)
         next_attempts = history_increment_attempts(ws)
         self.assertEqual(next_attempts, 4)
+
+
+class TestWorkspaceGitHeadInvalidation(unittest.TestCase):
+    """Garante que a mudança de commit Git (novo ciclo de entrega) reseta o histórico."""
+
+    def setUp(self):
+        history_clear()
+
+    def tearDown(self):
+        history_clear()
+
+    def test_git_head_resets_history_on_new_commit(self):
+        import subprocess
+        import tempfile
+        from src.core.score_gate import get_workspace_head, resolve_attempt_number
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # 1. Workspace sem git -> get_workspace_head é None
+            self.assertIsNone(get_workspace_head(tmp_dir))
+
+            # 2. Inicializa repositório git e faz commit 1
+            subprocess.run(["git", "init"], cwd=tmp_dir, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=tmp_dir, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_dir, check=True)
+            subprocess.run(["git", "commit", "--allow-empty", "-m", "commit 1"], cwd=tmp_dir, capture_output=True, check=True)
+
+            head_1 = get_workspace_head(tmp_dir)
+            self.assertIsNotNone(head_1)
+
+            # 3. Registra 4 tentativas falhas no commit 1
+            history_set(tmp_dir, {"passed": False, "attempts": 4})
+            hist_1 = history_get(tmp_dir)
+            self.assertIsNotNone(hist_1)
+            self.assertEqual(hist_1["attempts"], 4)
+            self.assertEqual(hist_1["git_head"], head_1)
+            self.assertEqual(resolve_attempt_number(hist_1), 5)
+
+            # 4. Faz commit 2 (novo ciclo de entrega após merge/conclusão)
+            subprocess.run(["git", "commit", "--allow-empty", "-m", "commit 2"], cwd=tmp_dir, capture_output=True, check=True)
+            head_2 = get_workspace_head(tmp_dir)
+            self.assertNotEqual(head_1, head_2)
+
+            # 5. history_get detecta commit novo e invalida automaticamente
+            hist_2 = history_get(tmp_dir)
+            self.assertIsNone(hist_2)
+            self.assertEqual(resolve_attempt_number(hist_2), 1)
+
+    def test_workspace_path_normalization_relative_vs_absolute(self):
+        """Valida que caminhos relativos e absolutos convergem para o mesmo estado em memória e disco."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            abs_path = str(Path(tmp_dir).resolve())
+            history_clear(abs_path)
+            history_set(abs_path, {"passed": False, "attempts": 2})
+
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(abs_path)
+                hist_rel = history_get(".")
+                self.assertIsNotNone(hist_rel)
+                self.assertEqual(hist_rel["attempts"], 2)
+
+                inc_val = history_increment_attempts(".")
+                self.assertEqual(inc_val, 3)
+
+                hist_abs = history_get(abs_path)
+                self.assertIsNotNone(hist_abs)
+                self.assertEqual(hist_abs["attempts"], 3)
+            finally:
+                os.chdir(orig_cwd)
+                history_clear(abs_path)
 
 
 if __name__ == "__main__":

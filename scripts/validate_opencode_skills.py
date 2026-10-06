@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Valida as 9 skills globais OpenCode/Antigravity e o command jev-fecha.
+"""Valida as 12 skills globais OpenCode/Antigravity e o command jev-fecha.
 
 Fail-fast: exit 1 em qualquer violação. Sem mocks — lê o disco real.
 """
@@ -24,6 +24,7 @@ EXPECTED_SKILLS = frozenset(
         "firebase-deploy-pipeline",
         "needle3-laya-diagnostico",
         "visual-qa-inspector",
+        "blender-visual-loop",
     }
 )
 REQUIRED_FIELDS = ("name", "description")

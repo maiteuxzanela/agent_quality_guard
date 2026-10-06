@@ -18,3 +18,5 @@ from pathlib import Path
 
 _TEST_STATE_DIR = Path(tempfile.mkdtemp(prefix="jev_test_state_"))
 os.environ["JEV_STATE_DIR"] = str(_TEST_STATE_DIR)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"

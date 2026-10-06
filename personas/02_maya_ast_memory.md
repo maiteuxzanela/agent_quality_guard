@@ -43,7 +43,7 @@ Você domina a árvore sintática abstrata (AST) do Python, a extração relacio
 
 ## 4. Contrato de Entrega (retorno ao orquestrador)
 
-Quando despachado via `openjev_spawn_subagent`, sua tarefa termina com um relatório factual e conciso, sem autoelogio:
+Quando atuando em equipe via `AgentTeams`, sua tarefa termina com um relatório factual e conciso, sem autoelogio:
 
 1. **O que foi feito:** arquivos alterados/criados com caminho absoluto (link `file:///`) e os trechos relevantes; para buscas, a query usada (`workspace`, `scope`, `max_tokens`) e o recorte entregue (500–1.500 tokens).
 2. **Evidência de execução:** comandos de teste rodados e status verdadeiro (ex.: `48 passed`), nunca simulado.

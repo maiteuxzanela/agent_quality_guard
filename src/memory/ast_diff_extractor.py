@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .ast_cache import get_cached_ast
+
 logger = logging.getLogger("openjev.ast_diff_extractor")
 
 # NOTA (set/2026): "tests"/"test" NÃO entram neste ignore — alinhado ao
@@ -214,7 +216,9 @@ def _extract_class_symbol_slices(
     raw_text = "\n".join(lines[cb_start - 1 : cb_end])
     dedented = textwrap.dedent(raw_text).strip()
     is_class_decl = dedented.startswith("class ") or dedented.startswith("@")
-    candidate = dedented if is_class_decl else f"class {node.name}:\n" + textwrap.indent(dedented, "    ")
+    class_doc = ast.get_docstring(node)
+    doc_prefix = f'    """{class_doc}"""\n' if class_doc else ""
+    candidate = dedented if is_class_decl else f"class {node.name}:\n{doc_prefix}" + textwrap.indent(dedented, "    ")
 
     try:
         ast.parse(candidate)
@@ -257,14 +261,23 @@ def extract_ast_symbols_from_file(
     full_path: Path,
     changed_lines: Set[int],
 ) -> List[AstSymbolSlice]:
-    """Analisa a AST do arquivo e retorna os símbolos cujas linhas interceptam o git diff."""
+    """Analisa a AST do arquivo e retorna os símbolos cujas linhas interceptam o git diff.
+
+    Exemplo:
+        >>> from pathlib import Path
+        >>> symbols = extract_ast_symbols_from_file("foo.py", Path("tests/test_schemas.py"), {1, 2})
+        >>> isinstance(symbols, list)
+        True
+    """
     if not full_path.is_file() or full_path.suffix != ".py":
         return []
 
     try:
         source_code = full_path.read_text(encoding="utf-8", errors="replace")
         lines = source_code.splitlines()
-        tree = ast.parse(source_code, filename=str(full_path))
+        tree = get_cached_ast(source_code, filename=str(full_path))
+        if tree is None:
+            return []
     except Exception as e:
         logger.debug(f"Falha ao parsear AST de {rel_path}: {e}")
         return []

@@ -72,8 +72,8 @@ class TestPersonasCatalog(unittest.TestCase):
                 f"{fname} deve definir a seção Contrato de Entrega (retorno ao orquestrador)",
             )
             self.assertIn(
-                "openjev_spawn_subagent", text,
-                f"{fname} deve situar o contrato no fluxo de spawn",
+                "AgentTeams", text,
+                f"{fname} deve situar o contrato no fluxo de equipe AgentTeams",
             )
 
     def test_valerio_persona_retires_mandatory_routing(self) -> None:
@@ -108,20 +108,15 @@ class TestPersonasCatalog(unittest.TestCase):
         self.assertIn("**Tentativa:**", text)
 
     def test_ecosystem_agents_md_despacho_sob_demanda(self) -> None:
-        """Governança vigente: roteamento obrigatório suspenso, despacho sob demanda."""
+        """Governança vigente: orquestração de squad mandatoriamente via AgentTeams."""
         agents_md = REPO_ROOT / "AGENTS.md"
         self.assertTrue(agents_md.is_file(), f"AGENTS.md não encontrado em {REPO_ROOT}")
 
         content = agents_md.read_text(encoding="utf-8")
         self.assertIn(
-            "openjev_spawn_subagent",
+            "AgentTeams",
             content,
-            "AGENTS.md não formaliza o despacho sob demanda via openjev_spawn_subagent",
-        )
-        self.assertIn(
-            "autonomia plena",
-            content,
-            "AGENTS.md não formaliza a autonomia plena do orquestrador",
+            "AGENTS.md não formaliza o protocolo de squad via AgentTeams",
         )
 
     def test_missing_persona_raises_file_not_found(self) -> None:

@@ -58,6 +58,30 @@ class DiffStage:
     lines_count: int
 
 
+def normalize_workspace_relpath(path: str | Path, workspace_root: str | Path) -> str:
+    """Normaliza qualquer caminho para caminho relativo POSIX canônico ao workspace.
+
+    Exemplo:
+        >>> normalize_workspace_relpath("/repo/src/mod.py", "/repo")
+        'src/mod.py'
+        >>> normalize_workspace_relpath("./src/mod.py", "/repo")
+        'src/mod.py'
+    """
+    p = Path(path)
+    w = Path(workspace_root).resolve()
+    try:
+        if p.is_absolute():
+            return str(p.resolve().relative_to(w)).replace("\\", "/")
+        resolved = (w / p).resolve()
+        if resolved.is_relative_to(w):
+            return str(resolved.relative_to(w)).replace("\\", "/")
+        clean = str(p).replace("\\", "/")
+        return clean[2:] if clean.startswith("./") else clean
+    except Exception:
+        clean = str(p).replace("\\", "/")
+        return clean[2:] if clean.startswith("./") else clean
+
+
 def is_ignored_path(rel_path: str) -> bool:
     """Verifica se o caminho relativo pertence a diretórios ou extensões ignoradas."""
     p = Path(rel_path)

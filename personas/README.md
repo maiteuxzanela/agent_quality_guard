@@ -23,7 +23,7 @@ Para manter a integridade do motor sob alta demanda, os agentes seguem a governa
 
 ## 2. Matriz da Equipe e Especialistas
 
-> **Nota (set/2026):** [Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md) é o **Orquestrador** — não é subagente e **não deve ser despachado** via `openjev_spawn_subagent` (colocá-lo em janela isolada inverte a arquitetura). A matriz abaixo lista apenas os especialistas despacháveis.
+> **Nota (set/2026):** [Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md) é o **Orquestrador** — atua como Capitão nas sessões de equipe do AgentTeams e não deve ser despachado como subagente. A matriz abaixo lista os especialistas do squad.
 
 | Subagente | Documento de Persona | Especialidade | Quando Acionar |
 | :--- | :--- | :--- | :--- |
@@ -35,29 +35,21 @@ Para manter a integridade do motor sob alta demanda, os agentes seguem a governa
 
 ---
 
-## 3. Despacho de Subagentes Sob Demanda (Choice Opcional)
+## 3. Orquestração Mandatória de Squad via AgentTeams
 
-O roteamento obrigatório está **suspenso** (Global AGENTS.md §3.1): o Orquestrador Valério tem autonomia plena para executar diretamente e aciona especialistas via `openjev_spawn_subagent` **sob demanda**, quando o isolamento de contexto ou a especialidade pontual for conveniente.
+Em conformidade com o Protocolo Mandatório de Multi-Agente (~/.dsh/AGENTS.md), tarefas que exijam debate técnico, múltiplos papéis ou colaboração de squad devem operar compulsoriamente via plugin **AgentTeams** (`agent_teams_create`).
 
-Havendo **dúvida genuína** entre $\ge 2$ especialistas plausíveis, a eleição é formalizada com `openjev_choice` (Protocolo de Dúvida); havendo **1 candidato claro**, despacha-se direto:
+Havendo **dúvida genuína** entre $\ge 2$ especialistas plausíveis para compor o time, a eleição pode ser auxiliada probabilisticamente com `openjev_choice`:
 
 ```python
-# 1. (Opcional) Eleição formal via Laya RLCD — só com dúvida genuína
+# Eleição formal via Laya RLCD (opcional — em caso de dúvida na formação do squad)
 selected = openjev_choice(
     premise="Implementar novo endpoint de streaming no FastAPI",
     options=["kael", "maya", "tulio", "clara", "otavio"]
 )
-
-# 2. Despacho em contexto isolado, com contrato de entrega da persona
-result = openjev_spawn_subagent(
-    persona=selected,            # ex.: "clara" (resolve persona do projeto ou catálogo global)
-    task="Criar rota SSE em src/decision/server.py com testes unitários reais",
-    workspace="/home/maiteuxzanela/projeto JEV",
-    auto_validate=True           # AST Guardrail + Score no retorno
-)
 ```
 
-O especialista assume a execução em janela isolada, **sem carregar o histórico da conversa do orquestrador** (o `task` deve conter todo o contexto necessário), e o retorno segue a seção **Contrato de Entrega** de cada persona — verificado deterministicamente (`needle_verify_delivery`) antes de voltar ao orquestrador.
+Cada especialista atua com sua persona carregada diretamente no motor do AgentTeams, trocando mensagens técnicas via mailbox durável sob governança por DAG. O retorno técnico é verificado deterministicamente (`needle_verify_delivery`) antes da homologação final.
 
 Especialidade ausente no roster ⇒ propor nova persona em `personas/<nome>.md` (expansão orgânica), nunca improvisar generalista.
 

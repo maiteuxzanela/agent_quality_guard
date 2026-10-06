@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Set
 
-from ..core.diff_inspector import get_workspace_diff_files, is_ignored_path
+from ..core.diff_inspector import get_workspace_diff_files, is_ignored_path, normalize_workspace_relpath
+from .ast_cache import get_cached_ast
 
 logger = logging.getLogger("jev.needle.ast_guard")
 
@@ -44,6 +45,7 @@ class ASTViolation:
     message: str
     code_snippet: str = ""
     snippet: str = ""
+    suggestion: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.code_snippet and self.snippet:
@@ -66,11 +68,155 @@ class ASTViolation:
             "code_snippet": self.code_snippet,
             "message": self.message,
             "snippet": self.snippet,
+            "suggestion": self.suggestion,
         }
 
 
 class NeedleASTGuard:
     """Guardião determinístico de AST baseado no motor do Cactus Needle 3."""
+
+    RULE_SUGGESTIONS: dict[str, str] = {
+        "sql_injection": "Utilize queries parametrizadas com placeholders (?, %s ou :param). Nunca interpole variáveis via f-strings ou concatenação de strings.",
+        "SQL_INJECTION": "Utilize queries parametrizadas com placeholders (?, %s ou :param). Nunca interpole variáveis via f-strings ou concatenação de strings.",
+        "mock_in_production": "Remova unittest.mock, MagicMock ou patch de código de produção. Mocks pertencem exclusivamente aos arquivos em tests/.",
+        "PROD_MOCK": "Remova unittest.mock, MagicMock ou patch de código de produção. Mocks pertencem exclusivamente aos arquivos em tests/.",
+        "swallowed_exception": "Trate a exceção explicitamente, registre com logging.exception() ou utilize 'raise' para propagar o erro.",
+        "SWALLOWED_EXCEPTION": "Trate a exceção explicitamente, registre com logging.exception() ou utilize 'raise' para propagar o erro.",
+        "tautological_test": "Substitua a asserção tautológica (ex: assert True) por uma verificação real do resultado da função ou estado esperado.",
+        "TEST_TAUTOLOGY": "Substitua a asserção tautológica (ex: assert True) por uma verificação real do resultado da função ou estado esperado.",
+        "hardcoded_secret": "Mova a credencial/chave para variáveis de ambiente (.env) ou adicione '# needle-ignore: HARDCODED_SECRET' se for um valor de teste/desenvolvimento.",
+        "HARDCODED_SECRET": "Mova a credencial/chave para variáveis de ambiente (.env) ou adicione '# needle-ignore: HARDCODED_SECRET' se for um valor de teste/desenvolvimento.",
+        "command_injection": "Evite shell=True com comandos dinâmicos; passe argumentos como lista de strings (ex: ['cmd', arg1, arg2]).",
+        "COMMAND_INJECTION": "Evite shell=True com comandos dinâmicos; passe argumentos como lista de strings (ex: ['cmd', arg1, arg2]).",
+        "insecure_deserialization": "Evite pickle.loads() com dados não confiáveis; utilize json ou formatos seguros de serialização. Para YAML, use yaml.safe_load().",
+        "INSECURE_DESERIALIZATION": "Evite pickle.loads() com dados não confiáveis; utilize json ou formatos seguros de serialização. Para YAML, use yaml.safe_load().",
+        "dangerous_eval_exec": "Remova eval() ou exec(). Utilize ast.literal_eval() para dados literais ou funções estruturadas.",
+        "DANGEROUS_EVAL_EXEC": "Remova eval() ou exec(). Utilize ast.literal_eval() para dados literais ou funções estruturadas.",
+        "insecure_ssl_verify": "Mantenha verify=True para conexões seguras. Em ambientes de desenvolvimento/teste isolados, utilize certificados confiáveis locais.",
+        "INSECURE_SSL": "Mantenha verify=True para conexões seguras. Em ambientes de desenvolvimento/teste isolados, utilize certificados confiáveis locais.",
+    }
+
+    @classmethod
+    def _get_file_suppressed_rules(cls, lines: List[str]) -> set[str]:
+        """Extrai regras suprimidas globalmente no arquivo via diretiva de cabeçalho.
+
+        Exemplo:
+            >>> "SECURITY_EVAL" in NeedleASTGuard._get_file_suppressed_rules(["# needle-ignore-file: SECURITY_EVAL"])
+            True
+        """
+        suppressed: set[str] = set()
+        file_pat = re.compile(
+            r"(?://|/\*|#)\s*needle-ignore-file:\s*([A-Za-z0-9_,\s]+)",
+            re.IGNORECASE,
+        )
+        all_pat = re.compile(
+            r"(?://|/\*|#)\s*needle-ignore-all\b",
+            re.IGNORECASE,
+        )
+        header_lines = lines[:15]
+        for line in header_lines:
+            line_clean = line.strip()
+            if all_pat.search(line_clean):
+                suppressed.add("ALL")
+                return suppressed
+            m = file_pat.search(line_clean)
+            if m:
+                tokens = [r.strip().upper() for r in m.group(1).split(",") if r.strip()]
+                suppressed.update(tokens)
+
+        # Expansão de aliases fora do loop de linhas para zero aninhamento
+        all_aliases: set[str] = set()
+        for tok in list(suppressed):
+            all_aliases.update(cls._get_rule_aliases(tok))
+        suppressed.update(all_aliases)
+        return suppressed
+
+    @classmethod
+    def _is_suppressed(
+        cls,
+        rule_id: str,
+        line_number: int,
+        lines: List[str],
+        file_suppressed: Optional[set[str]] = None,
+    ) -> bool:
+        """Verifica se a linha, linha anterior ou arquivo possui anotação needle-ignore.
+
+        Exemplo:
+            >>> NeedleASTGuard._is_suppressed("SQL_INJECTION", 1, ["# needle-ignore: SQL_INJECTION"])
+            True
+        """
+        target = rule_id.upper()
+        match_targets = cls._get_rule_aliases(target)
+
+        if file_suppressed and ("ALL" in file_suppressed or any(t in file_suppressed for t in match_targets)):
+            return True
+
+        curr_idx = line_number - 1
+        if 0 <= curr_idx < len(lines):
+            if cls._line_matches_inline(lines[curr_idx], match_targets):
+                return True
+
+        prev_idx = line_number - 2
+        if 0 <= prev_idx < len(lines):
+            if cls._line_matches_prev(lines[prev_idx], match_targets):
+                return True
+
+        return False
+
+    @staticmethod
+    def _get_rule_aliases(target: str) -> set[str]:
+        """Retorna conjunto de aliases conhecidos para a regra informada."""
+        aliases = {
+            "MOCK_IN_PRODUCTION": ["PROD_MOCK", "MOCK_IN_PRODUCTION"],
+            "PROD_MOCK": ["PROD_MOCK", "MOCK_IN_PRODUCTION"],
+            "TAUTOLOGICAL_TEST": ["TEST_TAUTOLOGY", "TAUTOLOGICAL_TEST"],
+            "TEST_TAUTOLOGY": ["TEST_TAUTOLOGY", "TAUTOLOGICAL_TEST"],
+            "INSECURE_SSL_VERIFY": ["INSECURE_SSL", "INSECURE_SSL_VERIFY"],
+            "INSECURE_SSL": ["INSECURE_SSL", "INSECURE_SSL_VERIFY"],
+        }
+        result = set(aliases.get(target, [target]))
+        result.add(target)
+        return result
+
+    @staticmethod
+    def _line_matches_inline(line: str, match_targets: set[str]) -> bool:
+        """Verifica se linha atual contém anotação inline needle-ignore válida."""
+        pat = re.compile(
+            r"(?://|/\*|#)\s*needle-ignore:\s*([A-Za-z0-9_,\s]+)",
+            re.IGNORECASE,
+        )
+        m = pat.search(line)
+        if not m:
+            return False
+        rules = [r.strip().upper() for r in m.group(1).split(",")]
+        return any(t in rules for t in match_targets) or "ALL" in rules
+
+    @staticmethod
+    def _line_matches_prev(prev_line: str, match_targets: set[str]) -> bool:
+        """Verifica se linha anterior contém anotação needle-ignore ou next-line."""
+        stripped = prev_line.strip()
+        next_pat = re.compile(
+            r"(?://|/\*|#)\s*needle-ignore-next-line:\s*([A-Za-z0-9_,\s]+)",
+            re.IGNORECASE,
+        )
+        m_next = next_pat.search(stripped)
+        if m_next:
+            rules = [r.strip().upper() for r in m_next.group(1).split(",")]
+            if any(t in rules for t in match_targets) or "ALL" in rules:
+                return True
+
+        if not stripped.startswith(("//", "/*", "#", "*")):
+            return False
+
+        inline_pat = re.compile(
+            r"(?://|/\*|#)\s*needle-ignore:\s*([A-Za-z0-9_,\s]+)",
+            re.IGNORECASE,
+        )
+        m_inline = inline_pat.search(stripped)
+        if not m_inline:
+            return False
+        rules = [r.strip().upper() for r in m_inline.group(1).split(",")]
+        return any(t in rules for t in match_targets) or "ALL" in rules
 
     @staticmethod
     def is_test_file(rel_path: str) -> bool:
@@ -97,10 +243,8 @@ class NeedleASTGuard:
         if not content.strip() or not file_path.endswith(".py"):
             return []
 
-        try:
-            tree = ast.parse(content, filename=file_path)
-        except SyntaxError as e:
-            logger.debug(f"Ignorando arquivo com erro de sintaxe AST ({file_path}): {e}")
+        tree = get_cached_ast(content, filename=file_path)
+        if tree is None:
             return []
 
         lines = content.splitlines()
@@ -139,7 +283,15 @@ class NeedleASTGuard:
         # 9. Detecção de Desativação de Verificação SSL (verify=False)
         violations.extend(cls._detect_insecure_ssl(tree, lines, file_path))
 
-        return violations
+        file_suppressed = cls._get_file_suppressed_rules(lines)
+        filtered_violations: List[ASTViolation] = []
+        for v in violations:
+            if not cls._is_suppressed(v.rule_id, v.line_number, lines, file_suppressed):
+                if not v.suggestion:
+                    v.suggestion = cls.RULE_SUGGESTIONS.get(v.rule_id)
+                filtered_violations.append(v)
+
+        return filtered_violations
 
     @classmethod
     def _get_snippet(cls, lines: List[str], lineno: int) -> str:
@@ -661,30 +813,56 @@ class NeedleASTGuard:
 
 
     @classmethod
-    def scan_workspace(cls, workspace_dir: str) -> List[ASTViolation]:
-        """Varre os arquivos modificados e novos do workspace Git via AST."""
+    def scan_workspace(cls, workspace_dir: str, audit_mode: str = "delta") -> List[ASTViolation]:
+        """Varre os arquivos do workspace via AST (modo delta por diff do Git ou full para varredura completa).
+
+        Exemplo:
+            >>> NeedleASTGuard.scan_workspace(".", audit_mode="delta")
+            []
+        """
         root = Path(workspace_dir).resolve()
         if not root.is_dir():
             return []
 
-        diff_files = get_workspace_diff_files(str(root))
         all_violations: List[ASTViolation] = []
 
-        for df in diff_files:
-            if df.is_binary or not df.path.endswith(".py"):
-                continue
-            if is_ignored_path(df.path):
-                continue
-
-            full_p = root / df.path
-            if full_p.is_file():
+        if audit_mode == "full":
+            py_files = [
+                p
+                for p in root.rglob("*.py")
+                if not is_ignored_path(str(p.relative_to(root)))
+            ]
+            for full_p in py_files:
+                rel_path = str(full_p.relative_to(root))
                 try:
                     content = full_p.read_text(encoding="utf-8", errors="replace")
-                    file_violations = cls.scan_content(content, df.path)
+                    file_violations = cls.scan_content(content, rel_path)
                     all_violations.extend(file_violations)
                 except Exception as e:
                     logger.warning(
-                        f"Erro ao ler arquivo para varredura AST ({df.path}): {e}",
+                        f"Erro ao ler arquivo para varredura AST ({rel_path}): {e}",
+                        exc_info=True,
+                    )
+            return all_violations
+
+        # Default: audit_mode == "delta"
+        diff_files = get_workspace_diff_files(str(root))
+        for df in diff_files:
+            rel_norm = normalize_workspace_relpath(df.path, str(root))
+            if df.is_binary or not rel_norm.endswith(".py"):
+                continue
+            if is_ignored_path(rel_norm):
+                continue
+
+            full_p = root / rel_norm
+            if full_p.is_file():
+                try:
+                    content = full_p.read_text(encoding="utf-8", errors="replace")
+                    file_violations = cls.scan_content(content, rel_norm)
+                    all_violations.extend(file_violations)
+                except Exception as e:
+                    logger.warning(
+                        f"Erro ao ler arquivo para varredura AST ({rel_norm}): {e}",
                         exc_info=True,
                     )
 

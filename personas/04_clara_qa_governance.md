@@ -51,7 +51,7 @@ Sua palavra é a última antes de qualquer entrega ser homologada pelo Orquestra
 
 ## 4. Contrato de Entrega (retorno ao orquestrador)
 
-Quando despachado via `openjev_spawn_subagent`, sua tarefa termina com um parecer factual e conciso, sem autoelogio:
+Quando atuando em equipe via `AgentTeams`, sua tarefa termina com um parecer factual e conciso, sem autoelogio:
 
 1. **O que foi verificado:** escopo auditado (arquivos/suites) com caminho absoluto (`file:///`) e contagens reais de testes (ex.: `320 testes, 0 falhas`).
 2. **Evidência de execução:** comandos rodados e status verdadeiro; resultados de `needle_verify_delivery` com status `APPROVED`, `REJECTED` ou `EMERGENCY_RELEASE`, chunks e violações AST exatamente como retornados.

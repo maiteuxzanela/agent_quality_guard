@@ -23,7 +23,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from ..core.schemas import (
     ChoiceRequest,
@@ -210,6 +210,22 @@ def _resolve_checkpoint_target(checkpoint_key: str, cfg: Dict[str, Any]) -> tupl
     return cfg["repo"], subfolder
 
 
+_SHARED_AGENT_CACHE: Dict[Tuple[str, Optional[str], str], Any] = {}
+_AGENT_CACHE_LOCK = threading.Lock()
+_AGENT_PREDICT_LOCK = threading.Lock()
+
+
+def clear_laya_agent_cache() -> None:
+    """Limpa o cache em memória dos agentes Laya instanciados.
+
+    Exemplo:
+        >>> clear_laya_agent_cache() is None
+        True
+    """
+    with _AGENT_CACHE_LOCK:
+        _SHARED_AGENT_CACHE.clear()
+
+
 class LayaAdapter:
     """Adaptador que expõe as primitivas JEV via API nativa do Laya.
 
@@ -274,7 +290,8 @@ class LayaAdapter:
         self.is_ready = False
         # Serializa inferência: o agente Laya não é reentrante e o predict
         # roda em worker thread (asyncio.to_thread) para não travar o event loop.
-        self._predict_lock = threading.Lock()
+        # Usa lock global a nível de processo para proteger instâncias em cache.
+        self._predict_lock = _AGENT_PREDICT_LOCK
 
         # Thresholds recalibrados
         self.noul_threshold = noul_threshold_override or LAYA_NOUL_THRESHOLD_DEFAULT
@@ -297,7 +314,13 @@ class LayaAdapter:
             ) from e
 
         cfg = self._checkpoint_cfg
-        target_device = self._device or "cuda"
+        target_device = self._device
+        if target_device is None:
+            try:
+                import torch
+                target_device = "cuda" if torch.cuda.is_available() else "cpu"
+            except Exception:
+                target_device = "cpu"
 
         logger.info(
             f"Carregando Laya '{self._checkpoint_key}' "
@@ -306,12 +329,20 @@ class LayaAdapter:
         )
 
         model_target, subfolder_target = _resolve_checkpoint_target(self._checkpoint_key, cfg)
+        cache_key = (str(model_target), subfolder_target, target_device)
+
+        with _AGENT_CACHE_LOCK:
+            if cache_key in _SHARED_AGENT_CACHE:
+                self._agent = _SHARED_AGENT_CACHE[cache_key]
+                self.is_ready = True
+                logger.info(f"Laya '{self._checkpoint_key}' reutilizado do cache em {target_device}.")
+                return
 
         if target_device == "cpu":
             try:
                 import torch
                 torch.set_num_threads(min(2, os.cpu_count() or 1))
-                logger.info("Execução em CPU detectada: limitando PyTorch para no máximo 2 threads para proteger a estabilidade do host.")
+                logger.info("Execução em CPU detectada: limitando PyTorch a 2 threads (RN-JEV-002).")
             except Exception as thread_err:
                 logger.debug(f"Não foi possível ajustar limite de threads PyTorch: {thread_err}")
 
@@ -322,6 +353,8 @@ class LayaAdapter:
                 subfolder=subfolder_target,
             )
             self.is_ready = True
+            with _AGENT_CACHE_LOCK:
+                _SHARED_AGENT_CACHE[cache_key] = self._agent
             logger.info(f"Laya '{self._checkpoint_key}' carregado com sucesso em {target_device}.")
         except Exception as gpu_err:
             if self._allow_cpu_fallback:
@@ -329,6 +362,13 @@ class LayaAdapter:
                     f"Falha ao carregar Laya na GPU ({gpu_err}). "
                     "Ativando fallback para CPU."
                 )
+                cpu_cache_key = (str(model_target), subfolder_target, "cpu")
+                with _AGENT_CACHE_LOCK:
+                    if cpu_cache_key in _SHARED_AGENT_CACHE:
+                        self._agent = _SHARED_AGENT_CACHE[cpu_cache_key]
+                        self.is_ready = True
+                        logger.info("Laya reutilizado do cache em CPU (fallback).")
+                        return
                 try:
                     import torch
                     torch.set_num_threads(min(2, os.cpu_count() or 1))
@@ -341,6 +381,8 @@ class LayaAdapter:
                         subfolder=subfolder_target,
                     )
                     self.is_ready = True
+                    with _AGENT_CACHE_LOCK:
+                        _SHARED_AGENT_CACHE[cpu_cache_key] = self._agent
                     logger.info("Laya carregado em CPU (fallback).")
                 except Exception as cpu_err:
                     raise OpenJevNotReadyError(

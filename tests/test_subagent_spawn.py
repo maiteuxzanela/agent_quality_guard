@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from src.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
-from src.mcp_server import openjev_spawn_subagent
 from src.orchestrator.subagent_runner import (
     SubagentRunner,
     classify_execution_level,
@@ -180,31 +179,6 @@ async def test_subagent_runner_ast_guard_intercepts_sqli(temp_git_workspace: Pat
     assert resp.score == 1.00
     assert resp.passed is False
     assert any(v["rule_id"] == "sql_injection" for v in resp.ast_violations)
-
-
-@pytest.mark.asyncio
-async def test_mcp_openjev_spawn_subagent_tool(temp_git_workspace: Path):
-    """Testa a tool MCP openjev_spawn_subagent diretamente."""
-    # Validação de argumentos obrigatórios
-    with pytest.raises(ValueError, match="exige o parametro 'persona'"):
-        await openjev_spawn_subagent(persona="", task="teste")
-
-    with pytest.raises(ValueError, match="exige o parametro 'task'"):
-        await openjev_spawn_subagent(persona="lumi", task="   ")
-
-    # Execução limpa com timeout desativado explicitamente
-    res = await openjev_spawn_subagent(
-        persona="lumi",
-        task="Testar criação de componente limpo",
-        workspace=str(temp_git_workspace),
-        auto_validate=True,
-        timeout=None,
-    )
-
-    assert isinstance(res, dict)
-    assert res["success"] is True
-    assert res["ast_blocked"] is False
-    assert res["persona"] == "lumi_ui_ux_frontend"
 
 
 def test_three_levels_persona_resolution():

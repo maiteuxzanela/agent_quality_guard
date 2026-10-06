@@ -67,7 +67,7 @@ A validação de entrega não utiliza mais notas contínuas probabilísticas (1.
 > **Fundadora & Engenheira Líder:** [Maiteux Zanela](file:///home/maiteuxzanela/projeto%20JEV/AGENTS.md)  
 > **Diretório Oficial de Personas:** [personas/README.md](file:///home/maiteuxzanela/projeto%20JEV/personas/README.md)
 
-O Orquestrador Valério possui autonomia plena para desenvolver, planejar e refatorar diretamente, acionando especialistas sob demanda via `openjev_spawn_subagent`.
+O Orquestrador Valério opera sob o Protocolo Mandatório de Multi-Agente (~/.dsh/AGENTS.md): tarefas de colaboração e alinhamento de squad operam compulsoriamente via plugin **AgentTeams** com DAG e mailbox durável.
 
 | Subagente | Documento de Persona | Domínio Técnico | Quando Acionar |
 | :--- | :--- | :--- | :--- |

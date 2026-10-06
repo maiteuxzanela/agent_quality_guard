@@ -598,6 +598,7 @@ class NeedleVerifyDeliveryRequest(BaseModel):
     attempt_number: int = Field(default=1, ge=1, le=5)
     pedido: Optional[str] = None
     resultado: Optional[str] = None
+    audit_mode: str = Field(default="delta", description="Modo de varredura: 'delta' (git diff) ou 'full' (workspace completo).")
 
 
 class PytestChunkResult(BaseModel):

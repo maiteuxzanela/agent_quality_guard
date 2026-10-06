@@ -17,8 +17,10 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Silencia avisos
+# Silencia avisos e garante carregamento local rápido sem chamadas de rede no HuggingFace Hub
 os.environ.setdefault("PYTHONWARNINGS", "ignore")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 warnings.filterwarnings("ignore")
 
 # Redireciona todos os logs para stderr (stdout exclusivo do protocolo MCP stdio)
@@ -33,6 +35,7 @@ PROJECT_DIR = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_DIR))
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from src.core.schemas import (
     BORDERLINE_FLAWED_MAX_MASS,
     BORDERLINE_HEALTHY_MIN_MASS,
@@ -48,8 +51,6 @@ from src.core.schemas import (
     ScoreRequest,
     ScoreResponse,
     ScoreDiagnoseResponse,
-    SpawnSubagentRequest,
-    SpawnSubagentResponse,
     QUALITY_DEFECT_CATEGORIES,
     NeedleVerifyDeliveryRequest,
     NeedleVerifyDeliveryResponse,
@@ -66,8 +67,8 @@ from src.memory.needle_defect_screener import (
 )
 from src.decision.engine import OpenJevEngine
 from src.memory.local_needle import LocalNeedleEngine
+from src.memory.qmd_search import QmdHybridSearchEngine
 from src.memory.needle_ast_guard import NeedleASTGuard
-from src.orchestrator.subagent_runner import SubagentRunner
 from src.orchestrator.pytest_chunk_runner import PytestChunkRunner
 from src.orchestrator.multi_stack_runner import MultiStackRunner
 
@@ -135,6 +136,41 @@ def get_engine() -> OpenJevEngine:
 async def _get_engine_async() -> OpenJevEngine:
     """Carrega/busca o motor fora do event loop (load pesado não trava o MCP)."""
     return await asyncio.to_thread(get_engine)
+
+
+@app.tool(
+    name="qmd_search",
+    description=(
+        "Busca hibrida cirurgica (Ripgrep + Needle 3 + RRF em CPU). "
+        "Ferramenta primaria obrigatoria para explorar codigo, funcoes, regras de negocio e investigacao de bugs. "
+        "Combina busca lexica exata com analise semantica/AST e ranqueamento Reciprocal Rank Fusion."
+    ),
+)
+async def qmd_search(
+    query: str,
+    workspace: str = "",
+    scope: str = "",
+    max_tokens: int = 1200,
+    depth: int = 2,
+) -> dict:
+    """Executa busca híbrida de código via QMD (Ripgrep + Needle 3 + RRF).
+
+    Exemplo:
+        >>> import asyncio
+        >>> res = asyncio.run(qmd_search(query="needle_verify_delivery"))
+        >>> isinstance(res, dict)
+        True
+    """
+    target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
+    engine = QmdHybridSearchEngine(workspace_root=target_workspace)
+    scope_list = [s.strip() for s in scope.split(",") if s.strip()] if scope else None
+
+    return await engine.search(
+        query=query,
+        scope=scope_list,
+        max_tokens=max_tokens,
+        depth=depth,
+    )
 
 
 @app.tool(
@@ -311,49 +347,6 @@ async def openjev_consulta(premise: str, question: str) -> dict:
         confidence=round(resp.confidence, 4),
         latency_ms=round(resp.latency_ms, 2),
     ).model_dump()
-
-
-@app.tool(
-    name="openjev_spawn_subagent",
-    description=(
-        "Instancia e executa um subagente especialista em janela de contexto isolada "
-        "(zero historico do orquestrador), utilizando o system prompt da persona "
-        "e validando deterministicamente a entrega via Needle 3 AST Guardrail e Open Jev Score."
-    ),
-)
-async def openjev_spawn_subagent(
-    persona: str,
-    task: str,
-    workspace: str = "",
-    auto_validate: bool = True,
-    timeout: Optional[float] = None,
-) -> dict:
-    """Executa um subagente especialista em contexto isolado com auto-validacao AST + Score.
-
-    Args:
-        persona: Identificador da persona especialista (ex: 'lumi', 'kael', 'juliana').
-        task: Descricao cirurgica e detalhada da tarefa tecnica a ser executada.
-        workspace: Diretorio absoluto do repositorio alvo (vazio assume o workspace corrente).
-        auto_validate: Se True, executa auditoria fail-fast do Needle AST e do Laya Score.
-        timeout: Limite de tempo em segundos. Se None ou <= 0, o timeout fica completamente desativado.
-    """
-    if not persona.strip():
-        raise ValueError("openjev_spawn_subagent exige o parametro 'persona' preenchido.")
-    if not task.strip():
-        raise ValueError("openjev_spawn_subagent exige o parametro 'task' com a descricao da tarefa.")
-
-    engine = await _get_engine_async() if auto_validate else None
-    runner = SubagentRunner(engine=engine)
-    req = SpawnSubagentRequest(
-        persona=persona,
-        task=task,
-        workspace=workspace,
-        auto_validate=auto_validate,
-        timeout=timeout,
-    )
-    resp = await runner.spawn(req)
-    return resp.model_dump()
-
 
 
 DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["codigo_producao"]
@@ -690,6 +683,8 @@ async def needle_verify_delivery(
     pedido: str = "",
     resultado: str = "",
     engine: Any = None,
+    audit_mode: str = "delta",
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Validação determinística de entrega via Pytest em Chunks + Needle 3 AST + JEV Noul.
 
@@ -718,7 +713,28 @@ async def needle_verify_delivery(
 
     # ── 1. CIRCUIT BREAKER UNIVERSAL (Limite de 5 Tentativas -> Saída de Emergência) ──
     if current_attempt >= MAX_ATTEMPTS:
-        logger.warning(f"🚨 [Circuit Breaker] 5ª tentativa atingida em {target_workspace}. Saída de Emergência liberada.")
+        already_emergency = bool(hist and hist.get("emergency"))
+        if already_emergency:
+            logger.warning(
+                f"🚨 [Circuit Breaker - STATUS TERMINAL] Saída de Emergência já liberada anteriormente "
+                f"para {target_workspace}. Re-execução sem novo commit bloqueada; mantendo liberação com ressalva."
+            )
+            msg = (
+                f"🚨 [Circuit Breaker - STATUS TERMINAL] Saída de Emergência ativada na tentativa "
+                f"{current_attempt}/{MAX_ATTEMPTS}. Entrega liberada COM RESSALVA. "
+                "Ciclo de tentativas ENCERRADO. NÃO re-execute needle_verify_delivery para este mesmo commit. "
+                "Comite as alterações (git commit) para iniciar novo ciclo, ou proceda imediatamente "
+                "para a auditoria do Revisor Crítico (subagent_adversarial) acompanhada do Laudo Técnico."
+            )
+        else:
+            logger.warning(f"🚨 [Circuit Breaker] 5ª tentativa atingida em {target_workspace}. Saída de Emergência liberada.")
+            msg = (
+                f"🚨 [Circuit Breaker - STATUS TERMINAL] Saída de Emergência ativada na tentativa "
+                f"{current_attempt}/{MAX_ATTEMPTS}. Entrega liberada COM RESSALVA "
+                "(pytest/Guard/Screener NÃO executados nesta chamada). Ciclo de tentativas encerrado: "
+                "proceda imediatamente com a auditoria do Revisor Crítico e Laudo Técnico de Inviabilidade."
+            )
+
         _history_set(target_workspace, {
             "passed": True,
             "attempts": current_attempt,
@@ -739,11 +755,7 @@ async def needle_verify_delivery(
             dismissed_warnings=[],
             total_files_scanned=0,
             total_lines_scanned=0,
-            message=(
-                f"🚨 [Circuit Breaker] Saída de Emergência ativada na tentativa "
-                f"{current_attempt}/{MAX_ATTEMPTS}. Entrega liberada COM RESSALVA "
-                "(pytest/Guard/Screener NÃO executados nesta chamada)."
-            )
+            message=msg
         ).model_dump()
 
     target_path = Path(target_workspace)
@@ -787,7 +799,7 @@ async def needle_verify_delivery(
             ).model_dump()
 
         if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE"):
-            ast_scan = MultiStackRunner.scan_js_ast(target_path, stack)
+            ast_scan = MultiStackRunner.scan_js_ast(target_path, stack, audit_mode=audit_mode)
             blocking_violations = [ASTViolation(
                 rule_id=b["rule_id"],
                 category=b["category"],
@@ -795,7 +807,7 @@ async def needle_verify_delivery(
                 line_number=b["line_number"],
                 code_snippet=b["code_snippet"],
                 message=b["message"],
-                suggestion=None,
+                suggestion=b.get("suggestion"),
             ) for b in ast_scan.get("blocking", [])]
 
             structural_warnings = [ASTViolation(
@@ -805,7 +817,7 @@ async def needle_verify_delivery(
                 line_number=w["line_number"],
                 code_snippet=w["code_snippet"],
                 message=w["message"],
-                suggestion=None,
+                suggestion=w.get("suggestion"),
             ) for w in ast_scan.get("warnings", [])]
 
             passed = len(blocking_violations) == 0
@@ -831,7 +843,27 @@ async def needle_verify_delivery(
             ).model_dump()
 
     # ── Etapa 0: Execução Sequencial de Testes Reais em Chunks (Pytest 1º Lugar) ──
-    pytest_out = PytestChunkRunner.run_all_chunks(workspace_path=target_workspace)
+    if ctx:
+        try:
+            await ctx.report_progress(1, 4)
+        except Exception as ctx_err:
+            logger.debug(f"Progress report etapa 0 falhou: {ctx_err}")
+
+    try:
+        import importlib
+        import src.orchestrator.pytest_chunk_runner as pcr_mod
+        pcr_mod = importlib.reload(pcr_mod)
+        runner_cls = getattr(pcr_mod, "PytestChunkRunner", PytestChunkRunner)
+    except Exception as reload_err:
+        logger.debug(f"Recorrendo ao PytestChunkRunner em memória: {reload_err}")
+        runner_cls = PytestChunkRunner
+
+    pytest_out = runner_cls.run_all_chunks(
+        workspace_path=target_workspace,
+        audit_mode=audit_mode,
+        timeout_per_chunk=60,
+        max_total_timeout=120,
+    )
     pytest_success = pytest_out.get("pytest_success", False)
 
     pytest_chunks_typed = []
@@ -896,7 +928,13 @@ async def needle_verify_delivery(
         ).model_dump()
 
     # ── Etapa 1: NeedleASTGuard (Camada 1: Bloqueios de Segurança/Integridade) ──
-    ast_violations = NeedleASTGuard.scan_workspace(target_workspace)
+    if ctx:
+        try:
+            await ctx.report_progress(2, 4)
+        except Exception as ctx_err:
+            logger.debug(f"Progress report etapa 1 falhou: {ctx_err}")
+
+    ast_violations = NeedleASTGuard.scan_workspace(target_workspace, audit_mode=audit_mode)
     blocking_violations = []
     for v in ast_violations:
         blocking_violations.append(ASTViolation(
@@ -906,7 +944,7 @@ async def needle_verify_delivery(
             line_number=v.line_number,
             code_snippet=v.snippet,
             message=v.message,
-            suggestion=None,
+            suggestion=v.suggestion,
         ))
 
     if blocking_violations:
@@ -932,6 +970,12 @@ async def needle_verify_delivery(
         ).model_dump()
 
     # ── Etapa 2: NeedleASTScreener (Camada 2: Alertas de Qualidade Estrutural) ──
+    if ctx:
+        try:
+            await ctx.report_progress(3, 4)
+        except Exception as ctx_err:
+            logger.debug(f"Progress report etapa 2 falhou: {ctx_err}")
+
     symbols = extract_workspace_ast_symbols(target_workspace)
     suspicions_map = screen_workspace_symbols(symbols, workspace_root=target_workspace)
     structural_warnings = []
@@ -1076,6 +1120,12 @@ async def needle_verify_delivery(
             ).model_dump()
 
     # ── Aprovação Determinística com Arbitragem Noul ──
+    if ctx:
+        try:
+            await ctx.report_progress(4, 4)
+        except Exception as ctx_err:
+            logger.debug(f"Progress report final falhou: {ctx_err}")
+
     _history_set(target_workspace, {
         "passed": True,
         "attempts": current_attempt

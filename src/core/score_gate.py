@@ -112,39 +112,145 @@ def _write_persisted_state(workspace: str, state: dict) -> None:
                 logger.debug("Falha ao remover arquivo temporario %s: %s", tmp_file, unlink_err)
 
 
+def _normalize_workspace(workspace: str) -> str:
+    """Normaliza o caminho do workspace resolvendo symlinks e caminhos relativos.
+
+    Exemplo:
+        >>> p = _normalize_workspace(".")
+        >>> Path(p).is_absolute()
+        True
+    """
+    try:
+        return str(Path(workspace).resolve())
+    except Exception as e:
+        logger.debug("Falha ao normalizar caminho do workspace %s: %s", workspace, e)
+        return workspace
+
+
+def _unlink_state_file(workspace: str) -> None:
+    """Remove o arquivo de estado em disco se existir.
+
+    Exemplo:
+        >>> _unlink_state_file("/nonexistent/ws")
+    """
+    ws_norm = _normalize_workspace(workspace)
+    state_file = _get_state_path(ws_norm)
+    if not state_file.is_file():
+        return
+    try:
+        state_file.unlink()
+    except OSError as unlink_err:
+        logger.debug("Falha ao remover arquivo de estado %s: %s", state_file, unlink_err)
+
+
+def get_workspace_head(workspace_dir: str) -> Optional[str]:
+    """Retorna o commit HEAD do workspace em <5ms, ou None se não for repositório git.
+
+    Exemplo:
+        >>> head = get_workspace_head(".")
+        >>> head is None or isinstance(head, str)
+        True
+    """
+    try:
+        root = Path(workspace_dir).resolve()
+        if not root.is_dir():
+            return None
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception as e:
+        logger.debug("Falha ao resolver HEAD do workspace %s: %s", workspace_dir, e)
+    return None
+
+
 def history_get(workspace: str) -> Optional[dict]:
+    """Retorna o histórico persistido do workspace com auto-reset em novo commit.
+
+    Exemplo:
+        >>> hist = history_get("/tmp/ws_inexistente")
+        >>> hist is None
+        True
+    """
+    ws = _normalize_workspace(workspace)
     with _score_history_lock:
-        hist = _score_history.get(workspace)
+        hist = _score_history.get(ws)
         if hist is None:
-            state = _read_persisted_state(workspace)
+            state = _read_persisted_state(ws)
             hist = state.get("history")
             if hist:
-                _score_history[workspace] = dict(hist)
+                _score_history[ws] = dict(hist)
+
+        # Invalidação transacional se novo commit foi consolidado no repositório
+        recorded_head = hist.get("git_head") if hist else None
+        current_head = get_workspace_head(ws) if recorded_head else None
+        if recorded_head and current_head and current_head != recorded_head:
+            logger.info(
+                "Novo commit detectado no workspace %s (%s -> %s). Reiniciando tentativas para novo ciclo.",
+                ws,
+                recorded_head[:8],
+                current_head[:8],
+            )
+            _score_history.pop(ws, None)
+            _stages_cache.pop(ws, None)
+            _unlink_state_file(ws)
+            return None
+
         return dict(hist) if hist else None
 
 
 def history_set(workspace: str, entry: dict) -> None:
+    """Persiste a entrada de histórico em memória e no arquivo de estado.
+
+    Exemplo:
+        >>> history_set("/tmp/test_ws", {"attempts": 1, "passed": True})
+        >>> history_get("/tmp/test_ws")["attempts"]
+        1
+    """
+    ws = _normalize_workspace(workspace)
     with _score_history_lock:
-        _score_history[workspace] = dict(entry)
-        state = _read_persisted_state(workspace)
-        state["history"] = dict(entry)
-        _write_persisted_state(workspace, state)
+        entry_copy = dict(entry)
+        if "git_head" not in entry_copy:
+            head = get_workspace_head(ws)
+            if head:
+                entry_copy["git_head"] = head
+        _score_history[ws] = dict(entry_copy)
+        state = _read_persisted_state(ws)
+        state["history"] = dict(entry_copy)
+        _write_persisted_state(ws, state)
 
 
 def history_increment_attempts(workspace: str) -> int:
+    """Incrementa a contagem de tentativas do workspace persistindo em disco.
+
+    Exemplo:
+        >>> history_set("/tmp/test_inc_ws", {"attempts": 1, "passed": False})
+        >>> history_increment_attempts("/tmp/test_inc_ws")
+        2
+    """
+    ws = _normalize_workspace(workspace)
     with _score_history_lock:
-        hist = _score_history.get(workspace)
+        hist = _score_history.get(ws)
         if hist is None:
-            state = _read_persisted_state(workspace)
+            state = _read_persisted_state(ws)
             hist = state.get("history")
             if hist:
-                _score_history[workspace] = dict(hist)
+                _score_history[ws] = dict(hist)
         if not hist:
             return 0
         hist["attempts"] = int(hist.get("attempts", 0)) + 1
-        state = _read_persisted_state(workspace)
+        if "git_head" not in hist:
+            head = get_workspace_head(ws)
+            if head:
+                hist["git_head"] = head
+        state = _read_persisted_state(ws)
         state["history"] = dict(hist)
-        _write_persisted_state(workspace, state)
+        _write_persisted_state(ws, state)
         return hist["attempts"]
 
 
@@ -185,14 +291,10 @@ def history_clear(workspace: Optional[str] = None) -> None:
     """
     with _score_history_lock:
         if workspace is not None:
-            _score_history.pop(workspace, None)
-            _stages_cache.pop(workspace, None)
-            state_file = _get_state_path(workspace)
-            if state_file.is_file():
-                try:
-                    state_file.unlink()
-                except OSError as unlink_err:
-                    logger.debug("Falha ao remover arquivo de estado %s: %s", state_file, unlink_err)
+            ws = _normalize_workspace(workspace)
+            _score_history.pop(ws, None)
+            _stages_cache.pop(ws, None)
+            _unlink_state_file(ws)
             return
         _score_history.clear()
         _stages_cache.clear()
@@ -206,39 +308,58 @@ def history_clear(workspace: Optional[str] = None) -> None:
 
 
 def stages_cache_get(workspace: str, stage_id: str) -> Optional[dict]:
-    """Retorna dados de uma etapa já aprovada em ciclo anterior se presente."""
+    """Retorna dados de uma etapa já aprovada em ciclo anterior se presente.
+
+    Exemplo:
+        >>> stages_cache_get("/nonexistent/ws", "stage1") is None
+        True
+    """
+    ws = _normalize_workspace(workspace)
     with _score_history_lock:
-        ws_cache = _stages_cache.get(workspace)
+        ws_cache = _stages_cache.get(ws)
         if ws_cache is None:
-            state = _read_persisted_state(workspace)
+            state = _read_persisted_state(ws)
             ws_cache = state.get("stages", {})
-            _stages_cache[workspace] = dict(ws_cache)
+            _stages_cache[ws] = dict(ws_cache)
         entry = ws_cache.get(stage_id)
         return dict(entry) if entry else None
 
 
 def stages_cache_set(workspace: str, stage_id: str, entry: dict) -> None:
-    """Registra uma etapa aprovada no cache do workspace."""
+    """Registra uma etapa aprovada no cache do workspace.
+
+    Exemplo:
+        >>> stages_cache_set("/tmp/test_ws", "stage1", {"passed": True})
+        >>> stages_cache_get("/tmp/test_ws", "stage1")["passed"]
+        True
+    """
+    ws = _normalize_workspace(workspace)
     with _score_history_lock:
-        if workspace not in _stages_cache:
-            state = _read_persisted_state(workspace)
-            _stages_cache[workspace] = dict(state.get("stages", {}))
-        _stages_cache[workspace][stage_id] = dict(entry)
-        state = _read_persisted_state(workspace)
+        if ws not in _stages_cache:
+            state = _read_persisted_state(ws)
+            _stages_cache[ws] = dict(state.get("stages", {}))
+        _stages_cache[ws][stage_id] = dict(entry)
+        state = _read_persisted_state(ws)
         if "stages" not in state:
             state["stages"] = {}
         state["stages"][stage_id] = dict(entry)
-        _write_persisted_state(workspace, state)
+        _write_persisted_state(ws, state)
 
 
 def stages_cache_clear(workspace: str) -> None:
-    """Limpa o cache de etapas de um workspace específico."""
+    """Limpa o cache de etapas de um workspace específico.
+
+    Exemplo:
+        >>> stages_cache_clear("/tmp/test_ws") is None
+        True
+    """
+    ws = _normalize_workspace(workspace)
     with _score_history_lock:
-        _stages_cache.pop(workspace, None)
-        state = _read_persisted_state(workspace)
+        _stages_cache.pop(ws, None)
+        state = _read_persisted_state(ws)
         if "stages" in state:
             state["stages"] = {}
-            _write_persisted_state(workspace, state)
+            _write_persisted_state(ws, state)
 
 
 

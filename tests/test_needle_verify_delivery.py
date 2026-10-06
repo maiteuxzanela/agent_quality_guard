@@ -142,6 +142,14 @@ async def test_needle_verify_delivery_circuit_breaker_emergency_release():
         )
         assert resp["pytest_chunks"] == []
         assert resp["approved_with_caveat"] is True
+        assert "STATUS TERMINAL" in resp["message"]
+
+        # Chamada repetida no mesmo estado mantém liberação com status terminal
+        resp_repeat = await needle_verify_delivery(workspace=tmp_dir)
+        assert resp_repeat["status"] == "EMERGENCY_RELEASE"
+        assert resp_repeat["attempt_number"] == 5
+        assert "STATUS TERMINAL" in resp_repeat["message"]
+        assert "NÃO re-execute needle_verify_delivery" in resp_repeat["message"]
 
 
 @pytest.mark.asyncio
@@ -175,6 +183,36 @@ async def test_workspace_without_tests_is_rejected():
         assert resp["pytest_success"] is False
         assert resp["pytest_chunks"] == []
         assert "Nenhum teste coletado" in resp["message"]
+
+
+@pytest.mark.asyncio
+async def test_needle_verify_delivery_resets_attempt_count_on_new_git_commit():
+    """Garante que novo commit no workspace reinicia o ciclo de tentativas para 1."""
+    import subprocess
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # Inicializa repo git
+        subprocess.run(["git", "init"], cwd=tmp_dir, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "Tester"], cwd=tmp_dir, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_dir, check=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "commit 1"], cwd=tmp_dir, capture_output=True, check=True)
+
+        # 1ª e 2ª chamadas falham (sem testes)
+        resp1 = await needle_verify_delivery(workspace=tmp_dir)
+        assert resp1["attempt_number"] == 1
+        assert resp1["status"] == "REJECTED"
+
+        resp2 = await needle_verify_delivery(workspace=tmp_dir)
+        assert resp2["attempt_number"] == 2
+        assert resp2["status"] == "REJECTED"
+
+        # Novo commit efetuado (ex: entrega comitada)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "commit 2"], cwd=tmp_dir, capture_output=True, check=True)
+
+        # Nova chamada deve reiniciar na tentativa 1
+        resp3 = await needle_verify_delivery(workspace=tmp_dir)
+        assert resp3["attempt_number"] == 1
+        assert resp3["status"] == "REJECTED"
 
 
 def test_history_clear_is_scoped_and_state_dir_is_isolated():

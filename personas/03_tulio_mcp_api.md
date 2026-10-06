@@ -48,7 +48,7 @@ Sua missão é garantir que o transporte de mensagens (JSON-RPC via stdin/stdout
 
 ## 4. Contrato de Entrega (retorno ao orquestrador)
 
-Quando despachado via `openjev_spawn_subagent`, sua tarefa termina com um relatório factual e conciso, sem autoelogio:
+Quando atuando em equipe via `AgentTeams`, sua tarefa termina com um relatório factual e conciso, sem autoelogio:
 
 1. **O que foi feito:** arquivos alterados/criados com caminho absoluto (link `file:///`) e os trechos relevantes; contratos novos de schema/endpoint declarados com seus campos e códigos HTTP.
 2. **Evidência de execução:** comandos de teste rodados e status verdadeiro (ex.: `37 passed`), nunca simulado; paridade MCP/FastAPI verificada quando aplicável.

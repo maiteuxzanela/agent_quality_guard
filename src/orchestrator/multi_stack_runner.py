@@ -6,17 +6,159 @@ Permite ao needle_verify_delivery auditar projetos em diferentes stacks:
 - Web Vanilla JS / Node / Firebase (JEZ collections)
 """
 
-import os
-import sys
-import re
-import time
+import json
 import logging
+import os
+import re
+import shutil
 import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("jev.multi_stack")
+
+RULE_SUGGESTIONS: Dict[str, str] = {
+    "SECURITY_EVAL": (
+        "Remova o uso de eval(). Utilize JSON.parse(), despachos por dicionário ou funções puras."
+    ),
+    "SECURITY_EXEC": (
+        "Evite o construtor new Function(). Isole a lógica dinâmica em funções declaradas ou analisadores formais."
+    ),
+    "HARDCODED_SECRET": (
+        "Mova a chave privada/segredo para variáveis de ambiente (.env) ou adicione "
+        "'// needle-ignore: HARDCODED_SECRET (<motivo>)' se for chave pública de client-side (ex: Firebase Client API Key)."
+    ),
+    "XSS_INNER_HTML": (
+        "Substitua por element.textContent ou document.createElement(); se HTML for mandatório, "
+        "envolva as interpolações com escapeHtml(...) ou DOMPurify.sanitize()."
+    ),
+    "JS_PROD_MOCK": (
+        "Remova jest.mock(), jest.fn() ou sinon de arquivos sob src/. "
+        "Mocks pertencem exclusivamente a arquivos de teste em __tests__/ ou tests/."
+    ),
+    "EMPTY_CATCH": (
+        "Não engula exceções silenciosamente. Registre com console.warn/logger, "
+        "re-lance o erro com throw/raise ou trate a condição explicitamente."
+    ),
+    "CODE_SMELL_CONSOLE": (
+        "Remova chamadas residuais de console.log() antes de enviar para produção, "
+        "ou utilize console.warn/error estruturado se for um alerta de runtime legítimo."
+    ),
+    "JEZ_ANTI_EMOJI": (
+        "Remova o emoji. A identidade visual da marca JEZ exige tipografia limpa e ícones SVG minimalistas dedicados."
+    ),
+    "SQL_INJECTION": (
+        "Utilize queries parametrizadas com placeholders (?, %s ou :param). "
+        "Nunca interpole variáveis via f-strings ou concatenação de strings."
+    ),
+    "PROD_MOCK": (
+        "Remova unittest.mock, MagicMock ou patch de código de produção. "
+        "Mocks pertencem exclusivamente aos arquivos em tests/."
+    ),
+    "TEST_TAUTOLOGY": (
+        "Substitua a asserção tautológica (ex: assert True) por uma verificação real do resultado da função ou estado esperado."
+    ),
+}
+
+
+def _get_file_suppressed_rules_js(lines: List[str]) -> set[str]:
+    """Extrai regras suprimidas globalmente no arquivo via diretiva de cabeçalho.
+
+    Exemplo:
+        >>> "SECURITY_EVAL" in _get_file_suppressed_rules_js(["// needle-ignore-file: SECURITY_EVAL"])
+        True
+    """
+    suppressed: set[str] = set()
+    file_pat = re.compile(
+        r"(?://|/\*|#)\s*needle-ignore-file:\s*([A-Za-z0-9_,\s]+)",
+        re.IGNORECASE,
+    )
+    all_pat = re.compile(
+        r"(?://|/\*|#)\s*needle-ignore-all\b",
+        re.IGNORECASE,
+    )
+    for line in lines[:15]:
+        line_clean = line.strip()
+        if all_pat.search(line_clean):
+            suppressed.add("ALL")
+            return suppressed
+        m = file_pat.search(line_clean)
+        if m:
+            tokens = [r.strip().upper() for r in m.group(1).split(",") if r.strip()]
+            suppressed.update(tokens)
+    return suppressed
+
+
+def _is_line_suppressed(
+    rule_id: str,
+    line_number: int,
+    lines: List[str],
+    file_suppressed: Optional[set[str]] = None,
+) -> bool:
+    """Verifica se a linha, linha anterior ou arquivo possui anotação de supressão needle-ignore.
+
+    Exemplo:
+        >>> _is_line_suppressed("SECRET", 1, ["// needle-ignore: SECRET"])
+        True
+    """
+    target = rule_id.upper()
+    if file_suppressed and ("ALL" in file_suppressed or target in file_suppressed):
+        return True
+
+    curr_idx = line_number - 1
+    if 0 <= curr_idx < len(lines):
+        if _line_matches_inline_js(lines[curr_idx], target):
+            return True
+
+    prev_idx = line_number - 2
+    if 0 <= prev_idx < len(lines):
+        if _line_matches_prev_js(lines[prev_idx], target):
+            return True
+
+    return False
+
+
+def _line_matches_inline_js(line: str, target: str) -> bool:
+    """Verifica se linha atual contém anotação inline needle-ignore válida."""
+    pat = re.compile(
+        r"(?://|/\*|#)\s*needle-ignore:\s*([A-Za-z0-9_,\s]+)",
+        re.IGNORECASE,
+    )
+    m = pat.search(line)
+    if not m:
+        return False
+    rules = [r.strip().upper() for r in m.group(1).split(",")]
+    return target in rules or "ALL" in rules
+
+
+def _line_matches_prev_js(prev_line: str, target: str) -> bool:
+    """Verifica se linha anterior contém anotação needle-ignore ou next-line."""
+    stripped = prev_line.strip()
+    next_pat = re.compile(
+        r"(?://|/\*|#)\s*needle-ignore-next-line:\s*([A-Za-z0-9_,\s]+)",
+        re.IGNORECASE,
+    )
+    m_next = next_pat.search(stripped)
+    if m_next:
+        rules = [r.strip().upper() for r in m_next.group(1).split(",")]
+        if target in rules or "ALL" in rules:
+            return True
+
+    if not stripped.startswith(("//", "/*", "#", "*")):
+        return False
+
+    inline_pat = re.compile(
+        r"(?://|/\*|#)\s*needle-ignore:\s*([A-Za-z0-9_,\s]+)",
+        re.IGNORECASE,
+    )
+    m_inline = inline_pat.search(stripped)
+    if not m_inline:
+        return False
+    rules = [r.strip().upper() for r in m_inline.group(1).split(",")]
+    return target in rules or "ALL" in rules
 
 
 @dataclass
@@ -34,6 +176,7 @@ class MultiStackViolation:
     line_number: int
     code_snippet: str
     message: str
+    suggestion: Optional[str] = None
 
 
 class MultiStackRunner:
@@ -219,8 +362,216 @@ class MultiStackRunner:
         }
 
     @classmethod
-    def scan_js_ast(cls, workspace_path: Path, stack: str) -> Dict[str, Any]:
-        """Varre os arquivos JS/TS da stack procurando mocks, eval, XSS e segredos hardcoded."""
+    def _run_node_js_ast(
+        cls,
+        workspace_path: Path,
+        source_files: List[Path],
+        stack: str,
+        blocking: List[MultiStackViolation],
+        warnings: List[MultiStackViolation],
+    ) -> Optional[Dict[str, Any]]:
+        """Executa analisador semântico de AST JS via Node.js."""
+        js_guard_script = Path(__file__).resolve().parent.parent / "memory" / "js_ast_guard.js"
+        default_node = str(Path.home() / ".local" / "node" / "bin" / "node")
+        node_bin = shutil.which("node") or default_node
+
+        if not (Path(node_bin).exists() and js_guard_script.exists()):
+            return None
+
+        cmd = [str(node_bin), str(js_guard_script)]
+        if stack == "WEB_JS_FIREBASE":
+            cmd.append("--check-emoji")
+        cmd.extend([str(f) for f in source_files])
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(workspace_path),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception as run_err:
+            logger.debug(f"Falha de execução do Node: {run_err}")
+            return None
+
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return None
+
+        try:
+            ast_data = json.loads(proc.stdout)
+        except Exception as parse_err:
+            logger.debug(f"Falha ao interpretar JSON do Node AST: {parse_err}")
+            return None
+
+        for item in ast_data.get("violations", []):
+            rel = item["file_path"]
+            try:
+                if Path(rel).is_absolute():
+                    rel = str(Path(rel).relative_to(workspace_path))
+            except ValueError as rel_err:
+                logger.debug(f"Caminho já é relativo ao workspace ({rel}): {rel_err}")
+            v = MultiStackViolation(
+                rule_id=item["rule_id"],
+                category=item["category"],
+                file_path=rel,
+                line_number=item["line_number"],
+                code_snippet=item["code_snippet"],
+                message=item["message"],
+                suggestion=item.get("suggestion") or RULE_SUGGESTIONS.get(item["rule_id"]),
+            )
+            if item["category"] in ("security", "anti_mock_producao"):
+                blocking.append(v)
+            else:
+                warnings.append(v)
+
+        return {
+            "blocking": [asdict(b) for b in blocking],
+            "warnings": [asdict(w) for w in warnings],
+            "total_files": len(source_files),
+            "engine": "node_js_ast",
+        }
+
+    @classmethod
+    def _dedup_files(cls, source_files: List[Path]) -> List[Path]:
+        """Remove caminhos duplicados preservando ordem de aparição."""
+        seen_paths = set()
+        deduped: List[Path] = []
+        for sf in source_files:
+            try:
+                p_resolved = sf.resolve()
+            except Exception:
+                p_resolved = sf
+            if p_resolved in seen_paths:
+                continue
+            seen_paths.add(p_resolved)
+            deduped.append(sf)
+        return deduped
+
+    @classmethod
+    def _filter_delta_files(cls, workspace_path: Path, source_files: List[Path]) -> List[Path]:
+        """Filtra lista de arquivos mantendo apenas os alterados no Git."""
+        try:
+            from src.core.diff_inspector import get_workspace_diff_files, normalize_workspace_relpath
+            diff_files = get_workspace_diff_files(str(workspace_path))
+        except Exception as diff_err:
+            logger.debug(f"Não foi possível obter diff de arquivos para auditoria delta: {diff_err}")
+            return source_files
+
+        if not diff_files:
+            return source_files
+
+        changed_paths = {normalize_workspace_relpath(df.path, workspace_path) for df in diff_files}
+        filtered: List[Path] = []
+        for f in source_files:
+            rel = normalize_workspace_relpath(f, workspace_path)
+            is_hit = rel in changed_paths or f.name in changed_paths or any(rel.endswith(cp) or cp.endswith(rel) for cp in changed_paths)
+            if is_hit:
+                filtered.append(f)
+        return filtered
+
+    @classmethod
+    def _check_line_patterns(
+        cls,
+        line: str,
+        idx: int,
+        lines: List[str],
+        rel: str,
+        patterns: List[Tuple[str, str, str, str]],
+        blocking: List[MultiStackViolation],
+        warnings: List[MultiStackViolation],
+        file_suppressed: Optional[set[str]] = None,
+    ) -> None:
+        """Verifica padrões léxicos em uma linha e adiciona às listas de violação."""
+        for pat, rule_id, category, msg in patterns:
+            if rule_id == "XSS_INNER_HTML":
+                if any(san in line for san in ("escapeHtml", "DOMPurify", "encodeURIComponent")):
+                    continue
+            if re.search(pat, line) and not _is_line_suppressed(rule_id, idx, lines, file_suppressed):
+                v = MultiStackViolation(
+                    rule_id=rule_id,
+                    category=category,
+                    file_path=rel,
+                    line_number=idx,
+                    code_snippet=line.strip()[:100],
+                    message=msg,
+                    suggestion=RULE_SUGGESTIONS.get(rule_id)
+                )
+                if category in ("security", "anti_mock_producao"):
+                    blocking.append(v)
+                else:
+                    warnings.append(v)
+
+    @classmethod
+    def _scan_file_lines(
+        cls,
+        fpath: Path,
+        workspace_path: Path,
+        patterns: List[Tuple[str, str, str, str]],
+        blocking: List[MultiStackViolation],
+        warnings: List[MultiStackViolation]
+    ) -> bool:
+        """Lê e varre as linhas de um único arquivo de código."""
+        rel = str(fpath.relative_to(workspace_path))
+        try:
+            content = fpath.read_text(encoding="utf-8", errors="ignore")
+        except Exception as read_err:
+            logger.warning("Arquivo %s ignorado na varredura JS: %s", fpath, read_err)
+            return False
+
+        lines = content.splitlines()
+        file_suppressed = _get_file_suppressed_rules_js(lines)
+        for idx, line in enumerate(lines, 1):
+            cls._check_line_patterns(line, idx, lines, rel, patterns, blocking, warnings, file_suppressed)
+        return True
+
+    @classmethod
+    def _run_lexical_fallback(
+        cls,
+        workspace_path: Path,
+        source_files: List[Path],
+        stack: str,
+        blocking: List[MultiStackViolation],
+        warnings: List[MultiStackViolation]
+    ) -> Dict[str, Any]:
+        """Executa varredura léxica resiliente com suporte a needle-ignore e suggestions."""
+        patterns: List[Tuple[str, str, str, str]] = [
+            (r"jest\.(?:mock|fn)\(|sinon\.stub\(", "JS_PROD_MOCK", "anti_mock_producao", "Mock detectado em arquivo de produção sob pasta de código-fonte."),
+            (r"\beval\s*\(", "SECURITY_EVAL", "security", "Uso proibido de eval()"),
+            (r"new\s+Function\s*\(", "SECURITY_EXEC", "security", "Uso proibido de new Function()"),
+            (r"AIzaSy[0-9A-Za-z-_]{33}", "HARDCODED_SECRET", "security", "Chave privada de API hardcoded em arquivo de produção"),
+            (r"\.innerHTML\s*=\s*(?!escapeHtml|DOMPurify|encodeURIComponent)[^;]+[+`]", "XSS_INNER_HTML", "security", "Atribuição insegura de innerHTML sem sanitização"),
+            (r"console\.log\(", "CODE_SMELL_CONSOLE", "hygiene", "Chamada de console.log residual em produção"),
+            (r"catch\s*\([^)]*\)\s*\{\s*\}", "EMPTY_CATCH", "hygiene", "Bloco catch silencioso engolindo exceções sem log ou tratamento"),
+        ]
+        if stack == "WEB_JS_FIREBASE":
+            patterns.append((
+                r"[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF]",
+                "JEZ_ANTI_EMOJI",
+                "brand_invariable",
+                "Emoji detectado no código/template em violação à diretriz inegociável da marca JEZ."
+            ))
+
+        scanned_count = 0
+        for fpath in source_files:
+            if cls._scan_file_lines(fpath, workspace_path, patterns, blocking, warnings):
+                scanned_count += 1
+
+        return {
+            "blocking": [asdict(b) for b in blocking],
+            "warnings": [asdict(w) for w in warnings],
+            "total_files": scanned_count,
+            "engine": "lexical_fallback",
+        }
+
+    @classmethod
+    def scan_js_ast(cls, workspace_path: Path, stack: str, audit_mode: str = "delta") -> Dict[str, Any]:
+        """Varre os arquivos JS/TS da stack procurando mocks, eval, XSS e segredos hardcoded via AST e delta.
+
+        Exemplo:
+            >>> res = MultiStackRunner.scan_js_ast(Path("."), "WEB_JS_FIREBASE", audit_mode="delta")
+            >>> "blocking" in res and "warnings" in res
+            True
+        """
         blocking: List[MultiStackViolation] = []
         warnings: List[MultiStackViolation] = []
 
@@ -233,102 +584,33 @@ class MultiStackRunner:
         else:
             prod_dirs = [workspace_path]
 
-        PATTERNS_BLOCKING = [
-            (r"\beval\s*\(", "SECURITY_EVAL", "Uso proibido de eval()"),
-            (r"new\s+Function\s*\(", "SECURITY_EXEC", "Uso proibido de new Function()"),
-            (r"AIzaSy[0-9A-Za-z-_]{33}", "HARDCODED_SECRET", "Chave privada de API hardcoded em arquivo de produção"),
-            (r"\.innerHTML\s*=\s*(?!escapeHtml|DOMPurify)[^;]+[+`]", "XSS_INNER_HTML", "Atribuição insegura de innerHTML sem sanitização"),
-        ]
-
-        PATTERNS_WARNING = [
-            (r"console\.log\(", "CODE_SMELL_CONSOLE", "Chamada de console.log residual em produção"),
-            (r"catch\s*\([^)]*\)\s*\{\s*\}", "EMPTY_CATCH", "Bloco catch silencioso engolindo exceções sem log ou tratamento"),
-        ]
-
-        source_files = [
+        raw_files = [
             fpath
             for pdir in prod_dirs
             if pdir.exists()
             for ext in ("*.js", "*.jsx", "*.ts", "*.tsx")
             for fpath in pdir.rglob(ext)
         ]
+        source_files = cls._dedup_files(raw_files)
 
-        scanned_count = 0
-        for fpath in source_files:
-            rel = str(fpath.relative_to(workspace_path))
-            if any(x in rel for x in ("node_modules", "__tests__", "tests", "__mocks__", "coverage", ".git", ".expo")):
-                continue
+        if audit_mode == "delta":
+            source_files = cls._filter_delta_files(workspace_path, source_files)
 
-            scanned_count += 1
-            try:
-                content = fpath.read_text(encoding="utf-8", errors="ignore")
-            except Exception as read_err:
-                logger.warning("Arquivo %s ignorado na varredura JS (leitura falhou): %s", fpath, read_err)
-                continue
+        # Remove caminhos de teste, node_modules e diretórios de build
+        source_files = [
+            f for f in source_files
+            if not any(x in str(f.relative_to(workspace_path)) for x in ("node_modules", "__tests__", "tests", "__mocks__", "coverage", ".git", ".expo"))
+        ]
 
-            lines = content.splitlines()
+        if not source_files:
+            return {
+                "blocking": [],
+                "warnings": [],
+                "total_files": 0
+            }
 
-            # Anti-mock em produção
-            if "jest.mock(" in content or "jest.fn(" in content or "sinon.stub(" in content:
-                blocking.extend(
-                    MultiStackViolation(
-                        rule_id="JS_PROD_MOCK",
-                        category="anti_mock_producao",
-                        file_path=rel,
-                        line_number=idx,
-                        code_snippet=line.strip()[:100],
-                        message="Mock detectado em arquivo de produção sob pasta de código-fonte."
-                    )
-                    for idx, line in enumerate(lines, 1)
-                    if "jest.mock(" in line or "jest.fn(" in line or "sinon.stub(" in line
-                )
+        node_res = cls._run_node_js_ast(workspace_path, source_files, stack, blocking, warnings)
+        if node_res is not None:
+            return node_res
 
-            # Anti-emoji para JEZ
-            if stack == "WEB_JS_FIREBASE":
-                emoji_pattern = re.compile(r"[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF]")
-                warnings.extend(
-                    MultiStackViolation(
-                        rule_id="JEZ_ANTI_EMOJI",
-                        category="brand_invariable",
-                        file_path=rel,
-                        line_number=idx,
-                        code_snippet=line.strip()[:100],
-                        message="Emoji detectado no código/template em violação à diretriz inegociável da marca JEZ."
-                    )
-                    for idx, line in enumerate(lines, 1)
-                    if emoji_pattern.search(line)
-                )
-
-            blocking.extend(
-                MultiStackViolation(
-                    rule_id=rule_id,
-                    category="security",
-                    file_path=rel,
-                    line_number=idx,
-                    code_snippet=lines[idx - 1].strip()[:100],
-                    message=msg
-                )
-                for pat, rule_id, msg in PATTERNS_BLOCKING
-                for idx, line in enumerate(lines, 1)
-                if re.search(pat, line)
-            )
-
-            warnings.extend(
-                MultiStackViolation(
-                    rule_id=rule_id,
-                    category="hygiene",
-                    file_path=rel,
-                    line_number=idx,
-                    code_snippet=lines[idx - 1].strip()[:100],
-                    message=msg
-                )
-                for pat, rule_id, msg in PATTERNS_WARNING
-                for idx, line in enumerate(lines, 1)
-                if re.search(pat, line)
-            )
-
-        return {
-            "blocking": [asdict(b) for b in blocking],
-            "warnings": [asdict(w) for w in warnings],
-            "total_files": scanned_count
-        }
+        return cls._run_lexical_fallback(workspace_path, source_files, stack, blocking, warnings)
