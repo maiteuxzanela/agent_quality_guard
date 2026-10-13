@@ -58,4 +58,4 @@ Quando atuando em equipe via `AgentTeams`, sua tarefa termina com um parecer fac
 3. **Desvios e riscos:** mocks/stubs encontrados, suíte de testes desajustada, testes frágeis ou dívidas técnicas — se houver.
 4. **Sem mocks:** nenhuma verificação pode usar mock/stub; dependência indisponível vira bloqueio reportado.
 
-A entrega só se conclui após a homologação determinística pelo orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) via `needle_verify_delivery`.
+A entrega só se conclui após a homologação determinística pelo orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) e auditoria da Diana (com `needle_verify_delivery` de uso exclusivo da Diana quando aplicável).

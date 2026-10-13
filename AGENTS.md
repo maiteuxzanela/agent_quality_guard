@@ -2,7 +2,7 @@
 
 Este documento estabelece as diretrizes específicas para o desenvolvimento, testes e manutenção do código-fonte do próprio motor JEV.
 
-> **Governança Global:** A validação de entrega do ecossistema JEV opera sob o modelo **100% Determinístico (`needle_verify_delivery`)**, combinando execução de testes reais (`pytest`) em chunks sequenciais com análise de AST Needle 3 (Camada 1 anti-mock/segurança e Camada 2 qualidade estrutural). A ferramenta antiga `openjev_score_and_diagnose` foi expurgada de todo o repositório e ecossistema.
+> **Governança Global:** A validação de entrega do ecossistema JEV opera sob o modelo determinístico por ecossistema real (testes reais da stack sem mocks, tipagem e anti-mock) e auditoria da Diana. A ferramenta `needle_verify_delivery` é o pipeline de verificação de uso exclusivo da Diana quando a stack exigir. A ferramenta antiga `openjev_score_and_diagnose` foi expurgada de todo o repositório e ecossistema.
 
 ---
 
@@ -23,9 +23,9 @@ O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
   * `openjev_choice` — roteamento categórico de especialistas por distribuição de probabilidade.
   * `openjev_noul` — avaliação booleana opcional (threshold ≥ 0.78).
   * `openjev_consulta` — consulta direta retornando indício textual (probability/confidence) sem booleano.
-  * `needle_verify_delivery` — **única tool de homologação de entrega de código**: validação 100% determinística (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º NeedleASTScreener).
+  * `needle_verify_delivery` — **tool de homologação de entrega de código de uso exclusivo da Diana**: validação determinística (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º NeedleASTScreener).
 
-> **🚨 REGRA INEGOCIÁVEL DE COMMIT:** O `git status` NÃO PODE ser limpo antes da aprovação completa da entrega técnica. O agente está terminantemente proibido de realizar `git commit` antes da aprovação por `needle_verify_delivery` ou do destravamento da Saída de Emergência na 5ª tentativa.
+> **🚨 REGRA INEGOCIÁVEL DE COMMIT:** O `git status` NÃO PODE ser limpo antes da aprovação completa da entrega técnica. O agente está terminantemente proibido de realizar `git commit` antes da homologação final dos testes e aprovação formal da Diana.
 
 ---
 
@@ -86,3 +86,16 @@ Toda entrega técnica concluída deve reportar o resultado da homologação via:
 * **Tentativa:** N / 5
 * **Pytest Chunks:** Total de chunks executados e status de aprovação de cada chunk
 * **Violações AST:** Quantidade de violações bloqueantes (Camada 1) e alertas estruturais (Camada 2)
+
+---
+
+## Regras de Orquestração, Contenção de Tokens, Quality Gate e Hardware
+
+> Movidas para evitar duplicação em cada repositório: orquestração, contenção de tokens (sem polling, lead silencioso), Quality Gate in_review e desacoplamento da Diana estão no bloco `LEAD_ORCHESTRATION` dos agentes orquestradores; hardware/modelos/custo estão em `~/.config/opencode/AGENTS.md` §7.
+
+## 9. Arquitetura do Pool Global Único de Especialistas vs Orquestradores Locais Restritos
+
+*(Cláusula global mandatória — `~/.config/opencode/AGENTS.md` §8)*
+
+1. **Orquestradores Locais (Restritos):** **Valério (JEV)**, Alex (JEZ Collections), Zélia (Panela de Sobra), Cecília (Faturamento), Morgan Quant (Predictera) e Dante (OpenCode Harness). Cada orquestrador está confinado exclusivamente ao seu repositório/ecossistema — é terminantemente proibido intervir diretamente em outros repositórios. O papel é estritamente de leitura, diagnóstico, planejamento e delegação via Ensemble (`team_spawn`).
+2. **Pool Global Único de Especialistas:** Cris (unificada web/back-office), Sam, Lumi, Carla, Ariel, Rowan, Kael, Maya, Túlio, Silas, Bia, Juliana, Ana, Iara, Morgan-sec, Letícia, Clara, Otávio, Noa, Érica, Ellis, Beatriz, Camila, Daniela, Fernanda, Gabriela, Isabela — convocáveis por qualquer orquestrador local via `team_spawn` para executar implementações, testes e inspeções dentro do repositório do chamador.

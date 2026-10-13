@@ -50,4 +50,4 @@ Quando atuando em equipe via `AgentTeams`, sua tarefa termina com um relatório 
 3. **Desvios e riscos:** o que ficou fora do escopo, fronteiras de score e dívidas técnicas — se houver; resultados vazios ou ambiguos reportados como fato, nunca como sucesso.
 4. **Sem mocks:** dependência indisponível vira bloqueio reportado, nunca stub ou `MagicMock`.
 
-A entrega só se conclui após a homologação determinística pelo orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) via `needle_verify_delivery`.
+A entrega só se conclui após a homologação determinística pelo orquestrador ([Valério](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)) e auditoria da Diana (com `needle_verify_delivery` de uso exclusivo da Diana quando aplicável).

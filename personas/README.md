@@ -17,7 +17,7 @@ Para manter a integridade do motor sob alta demanda, os agentes seguem a governa
 1. **Zero Mocks (Fail-Fast):** Proibição absoluta de simulações, stubs e mocks em testes e produção.
 2. **Busca Cirúrgica AST (Needle 3):** Contexto estritamente limitado a 500–1.500 tokens; proibido despejo de monólitos (>300 linhas).
 3. **Decisão Tipada Local (Laya GTX 1050 Ti):** Especialistas eleitos por `openjev_choice` (Protocolo de Dúvida — só com $\ge 2$ candidatos genuínos) com roster $\le 10$ opções; com 1 candidato claro, despacha-se direto.
-4. **Homologação Determinística de Fechamento:** Validação com `needle_verify_delivery` (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º NeedleASTScreener).
+4. **Homologação Determinística de Fechamento:** Validação pela suíte de testes reais da stack e auditoria da Diana (com `needle_verify_delivery` de uso exclusivo da Diana quando aplicável).
 
 ---
 
