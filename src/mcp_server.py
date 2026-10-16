@@ -173,10 +173,11 @@ async def qmd_search(
     )
 
 
-@app.tool(
-    name="needle3_search",
-    description="Busca cirurgica relacional local no codigo usando AST e grafo de dependencias (Needle 3). Economiza ate 90% de tokens.",
-)
+# [DEPRECATED - substituído por qmd_search para unificar catálogo MCP e evitar duplicidade]
+# @app.tool(
+#     name="needle3_search",
+#     description="Busca cirurgica relacional local no codigo usando AST e grafo de dependencias (Needle 3). Economiza ate 90% de tokens.",
+# )
 async def needle3_search(
     query: str,
     workspace: str = "",
@@ -763,7 +764,7 @@ async def needle_verify_delivery(
     tmp_dir = Path(tempfile.gettempdir()) / "needle_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "PYTHON_FATURAMENTO", "PYTHON_PREDICTERA"):
+    if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "PYTHON_FATURAMENTO", "PYTHON_PREDICTERA", "NODE_TS_BUN"):
         # Execução Multi-Stack especializada
         test_res = MultiStackRunner.run_tests(target_path, stack, tmp_dir)
         test_success = test_res.get("passed", False)
@@ -798,7 +799,7 @@ async def needle_verify_delivery(
                 message=f"🚨 [{stack} Fail-Fast] Suíte de testes reais falhou: {test_res.get('summary', '')}."
             ).model_dump()
 
-        if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE"):
+        if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "NODE_TS_BUN"):
             ast_scan = MultiStackRunner.scan_js_ast(target_path, stack, audit_mode=audit_mode)
             blocking_violations = [ASTViolation(
                 rule_id=b["rule_id"],

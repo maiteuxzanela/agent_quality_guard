@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Valida as 12 skills globais OpenCode/Antigravity e o command jev-fecha.
+"""Valida as 7 skills globais OpenCode/Antigravity, as skills intra-projeto e o command jev-fecha.
 
 Fail-fast: exit 1 em qualquer violação. Sem mocks — lê o disco real.
 """
@@ -16,15 +16,10 @@ EXPECTED_SKILLS = frozenset(
         "skills-opencode-creator",
         "needle3-busca",
         "anti-mock-failfast",
-        "jev-auditoria-moldura",
-        "guard-stop-hooks",
         "calibracao-score",
         "secret-scan-hardcoded",
-        "jev-client-bridge",
-        "firebase-deploy-pipeline",
         "needle3-laya-diagnostico",
         "visual-qa-inspector",
-        "blender-visual-loop",
     }
 )
 REQUIRED_FIELDS = ("name", "description")
@@ -35,12 +30,19 @@ JEV_FECHA = Path_HOME_CMD = Path.home() / ".config" / "opencode" / "command" / "
 # Skills intra em <repo>/.agents/skills/<name>/SKILL.md (OpenCode + Antigravity workspace)
 INTRA_SKILLS: dict[str, frozenset[str]] = {
     "/mnt/94CCB337CCB3130A/Faturamento": frozenset(
-        {"tiss-lote-cli", "kanban-dashboard-sync"}
+        {"tiss-lote-cli", "kanban-dashboard-sync", "firebase-deploy-pipeline"}
     ),
-    "/home/maiteuxzanela/PanelaBuild": frozenset({"panela-data-pipeline"}),
+    "/home/maiteuxzanela/PanelaBuild": frozenset(
+        {
+            "panela-data-pipeline",
+            "panela-varredura-equivalencias",
+            "firebase-deploy-pipeline",
+        }
+    ),
     "/mnt/94CCB337CCB3130A/JEZ collections": frozenset(
-        {"firestore-rules-hardening"}
+        {"firestore-rules-hardening", "firebase-deploy-pipeline"}
     ),
+    "/home/maiteuxzanela/projeto JEV": frozenset({"blender-visual-loop"}),
     "/mnt/94CCB337CCB3130A/predictera": frozenset(
         {
             "previsao-causal-ev",

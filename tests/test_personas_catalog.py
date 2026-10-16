@@ -92,8 +92,14 @@ class TestPersonasCatalog(unittest.TestCase):
     def test_agents_md_references_team_matrix(self) -> None:
         agents_file = REPO_ROOT / "AGENTS.md"
         text = agents_file.read_text(encoding="utf-8")
-        self.assertIn("Matriz da Equipe e Roteamento", text)
-        self.assertIn("Valério", text)
+        self.assertTrue(
+            "Orquestração e Matriz da Equipe" in text or "Matriz da Equipe e Roteamento" in text,
+            "AGENTS.md deve conter a seção de Orquestração e Matriz da Equipe",
+        )
+        self.assertTrue(
+            "Dante" in text or "Valério" in text,
+            "AGENTS.md deve referenciar o Orquestrador Universal (Dante ou histórico Valério)",
+        )
         self.assertIn("@Kael", text)
         self.assertIn("@Maya", text)
         self.assertIn("@Túlio", text)
@@ -108,15 +114,14 @@ class TestPersonasCatalog(unittest.TestCase):
         self.assertIn("**Tentativa:**", text)
 
     def test_ecosystem_agents_md_despacho_sob_demanda(self) -> None:
-        """Governança vigente: orquestração de squad mandatoriamente via AgentTeams."""
+        """Governança vigente: orquestração de squad mandatoriamente via Ensemble Teams (ou AgentTeams)."""
         agents_md = REPO_ROOT / "AGENTS.md"
         self.assertTrue(agents_md.is_file(), f"AGENTS.md não encontrado em {REPO_ROOT}")
 
         content = agents_md.read_text(encoding="utf-8")
-        self.assertIn(
-            "AgentTeams",
-            content,
-            "AGENTS.md não formaliza o protocolo de squad via AgentTeams",
+        self.assertTrue(
+            "Ensemble Teams" in content or "AgentTeams" in content or "Ensemble" in content,
+            "AGENTS.md não formaliza o protocolo de squad via Ensemble Teams",
         )
 
     def test_missing_persona_raises_file_not_found(self) -> None:

@@ -61,13 +61,42 @@ A validação de entrega não utiliza mais notas contínuas probabilísticas (1.
 
 ---
 
-## 4. Matriz da Equipe e Roteamento de Subagentes Especialistas
+## 4. Comandos Determinísticos de Teste & Execução
 
-> **Liderança Técnica & Orquestração:** [Valério — Lead AI Architect & Orquestrador Geral](file:///home/maiteuxzanela/projeto%20JEV/personas/00_valerio_lead_architect.md)  
+A validação de código e qualidade no ecossistema JEV opera sob os seguintes comandos determinísticos reais:
+* **Runner em Chunks Sequenciais (Pytest isolado):**
+  ```bash
+  .venv/bin/python src/orchestrator/pytest_chunk_runner.py
+  ```
+* **Suíte Geral de Testes (Pytest da Stack):**
+  ```bash
+  .venv/bin/pytest tests/
+  ```
+  *(Os testes mais pesados de inferência ML/Laya/Hardware devem rodar isolados).*
+* **Anti-Mock / Camada AST Guard:**
+  ```bash
+  python3 -m pytest tests/unit/
+  ```
+
+---
+
+## 5. Restrições de Domínio & Invariantes Inegociáveis
+
+1. **Veto a bfloat16 na GTX 1050 Ti:** Arquitetura Pascal GP107 suporta estritamente float16/float32. Chamadas com bfloat16 causam panic/crash de hardware.
+2. **Rejeição Imediata de Workspace sem Testes:** É terminantemente proibido workspace sem arquivos de teste reais em `tests/` (mínimo `tests/test_<modulo>.py`).
+3. **Circuit Breaker Universal (Limite de 5 Tentativas):** Na 5ª tentativa consecutiva sem aprovação limpa, o motor aciona a Saída de Emergência (`EMERGENCY_RELEASE`).
+4. **Links e Comunicação:** Referências a arquivos e endpoints devem sempre utilizar links absolutos em markdown `[nome](file:///caminho/absoluto)`. Honestidade radical sobre métricas, tempos e fronteiras de modelo.
+5. **Expansão Orgânica do Time:** Necessidades de novas especialidades devem ser formalizadas via persona em `personas/<nome>.md`.
+
+---
+
+## 6. Orquestração e Matriz da Equipe de Especialistas
+
+> **Orquestrador Global Universal:** [Dante — Lead Runtime & Systems Architect](file:///mnt/94CCB337CCB3130A/opencode_chambers_harness/personas/00_dante_runtime_architect.md)  
 > **Fundadora & Engenheira Líder:** [Maiteux Zanela](file:///home/maiteuxzanela/projeto%20JEV/AGENTS.md)  
-> **Diretório Oficial de Personas:** [personas/README.md](file:///home/maiteuxzanela/projeto%20JEV/personas/README.md)
+> **Diretório de Personas Especialistas:** [personas/README.md](file:///home/maiteuxzanela/projeto%20JEV/personas/README.md)
 
-O Orquestrador Valério opera sob o Protocolo Mandatório de Multi-Agente (~/.dsh/AGENTS.md): tarefas de colaboração e alinhamento de squad operam compulsoriamente via plugin **AgentTeams** com DAG e mailbox durável.
+A orquestração técnica opera de forma unificada sob **Dante** via **Ensemble Teams** (`ensemble-room-lowcost`, `team_spawn`), mantendo o workspace compartilhado (`worktree: false`) e comunicação direta entre especialistas.
 
 | Subagente | Documento de Persona | Domínio Técnico | Quando Acionar |
 | :--- | :--- | :--- | :--- |
@@ -79,7 +108,7 @@ O Orquestrador Valério opera sob o Protocolo Mandatório de Multi-Agente (~/.ds
 
 ---
 
-## 5. Relatório Resumido de Validação de Entrega (`needle_verify_delivery`)
+## 7. Relatório Resumido de Validação de Entrega (`needle_verify_delivery`)
 
 Toda entrega técnica concluída deve reportar o resultado da homologação via:
 * **Status:** Aprovado (`APPROVED`) OU Rejeitado (`REJECTED`) OU Saída de Emergência (`EMERGENCY_RELEASE`)
@@ -91,11 +120,11 @@ Toda entrega técnica concluída deve reportar o resultado da homologação via:
 
 ## Regras de Orquestração, Contenção de Tokens, Quality Gate e Hardware
 
-> Movidas para evitar duplicação em cada repositório: orquestração, contenção de tokens (sem polling, lead silencioso), Quality Gate in_review e desacoplamento da Diana estão no bloco `LEAD_ORCHESTRATION` dos agentes orquestradores; hardware/modelos/custo estão em `~/.config/opencode/AGENTS.md` §7.
+> Movidas para evitar duplicação em cada repositório: orquestração, contenção de tokens (sem polling, lead silencioso), Quality Gate in_review e desacoplamento da Diana estão no bloco `LEAD_ORCHESTRATION` do agente Dante; hardware/modelos/custo estão em `~/.config/opencode/AGENTS.md` §7.
 
-## 9. Arquitetura do Pool Global Único de Especialistas vs Orquestradores Locais Restritos
+## 8. Arquitetura do Pool Global Único de Especialistas sob Orquestrador Universal Dante
 
 *(Cláusula global mandatória — `~/.config/opencode/AGENTS.md` §8)*
 
-1. **Orquestradores Locais (Restritos):** **Valério (JEV)**, Alex (JEZ Collections), Zélia (Panela de Sobra), Cecília (Faturamento), Morgan Quant (Predictera) e Dante (OpenCode Harness). Cada orquestrador está confinado exclusivamente ao seu repositório/ecossistema — é terminantemente proibido intervir diretamente em outros repositórios. O papel é estritamente de leitura, diagnóstico, planejamento e delegação via Ensemble (`team_spawn`).
-2. **Pool Global Único de Especialistas:** Cris (unificada web/back-office), Sam, Lumi, Carla, Ariel, Rowan, Kael, Maya, Túlio, Silas, Bia, Juliana, Ana, Iara, Morgan-sec, Letícia, Clara, Otávio, Noa, Érica, Ellis, Beatriz, Camila, Daniela, Fernanda, Gabriela, Isabela — convocáveis por qualquer orquestrador local via `team_spawn` para executar implementações, testes e inspeções dentro do repositório do chamador.
+1. **Orquestrador Global Universal:** **Dante (Lead Runtime & Systems Architect)** é o orquestrador geral do ecossistema. Dante atua exclusivamente com leitura, diagnóstico, planejamento e delegação via Ensemble Teams (`team_spawn`), carregando dinamicamente as regras locais de `<workspace>/AGENTS.md`.
+2. **Pool Global Único de Especialistas:** Cris (unificada web/back-office), Sam, Lumi, Carla, Ariel, Rowan, Kael, Maya, Túlio, Silas, Bia, Juliana, Ana, Iara, Morgan-sec, Letícia, Clara, Otávio, Noa, Érica, Ellis, Beatriz, Camila, Daniela, Fernanda, Gabriela, Isabela — convocáveis por Dante via `team_spawn` para executar implementações, testes e inspeções dentro do repositório alvo.

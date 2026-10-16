@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "version": 1,
+    "project": "projeto_jev",
+    "title": "Projeto JEV",
+    "instructions": "CONTRATO MANDATÓRIO: status deve ser estritamente \"open\" ou \"done\" (nunca \"completed\", \"closed\" ou \"pending\"). priority deve ser \"alta\" | \"media\" | \"baixa\". Tickets \"done\" exigem completed_at em formato ISO 8601 preenchido; tickets \"open\" exigem completed_at: null.",
+    "updated_at": "2026-10-15T19:34:50-03:00"
+  },
+  "tickets": []
+}

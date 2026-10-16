@@ -246,5 +246,223 @@ class TestNeedleMultiStack(unittest.TestCase):
         self.assertIn("excedido", str(res["chunks"]))
 
 
+class TestNodeTsBunStack(unittest.TestCase):
+    """Cobertura determinística da stack NODE_TS_BUN: detecção, runner real Bun/Node e varredura *.mjs.
+
+    Sem mocks: cada cenário cria um workspace real em disco, executa subprocessos
+    reais (node/bun) e observa efeitos colaterais reais (arquivos, código de saída).
+    """
+
+    @staticmethod
+    def _write(root: Path, rel: str, content: str) -> Path:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    # ------------------------------------------------------------------ detecção
+    def test_detect_stack_bun_lock(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(ws, "bun.lockb", "")
+            self._write(ws, "package.json", '{"name": "x"}')
+            self.assertEqual(MultiStackRunner.detect_stack(ws), "NODE_TS_BUN")
+
+    def test_detect_stack_package_json_plus_mjs_suite(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(ws, "package.json", '{"name": "x"}')
+            self._write(ws, "tests/sample.mjs", "export const x = 1;\n")
+            self.assertEqual(MultiStackRunner.detect_stack(ws), "NODE_TS_BUN")
+
+    def test_detect_stack_package_json_plus_test_script(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(
+                ws,
+                "package.json",
+                json.dumps({"name": "x", "scripts": {"test": "node tests/run_all.mjs"}}),
+            )
+            self.assertEqual(MultiStackRunner.detect_stack(ws), "NODE_TS_BUN")
+
+    def test_detect_stack_package_json_plus_ts_src(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(ws, "package.json", '{"name": "x"}')
+            self._write(ws, "src/index.ts", "export const x: number = 1;\n")
+            self.assertEqual(MultiStackRunner.detect_stack(ws), "NODE_TS_BUN")
+
+    def test_detect_stack_plain_package_is_not_node_ts_bun(self):
+        """package.json isolado (sem suíte/TS/bun) NÃO deve virar NODE_TS_BUN."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(ws, "package.json", '{"name": "x", "dependencies": {}}')
+            self.assertNotEqual(MultiStackRunner.detect_stack(ws), "NODE_TS_BUN")
+            self.assertEqual(MultiStackRunner.detect_stack(ws), "NODE_JS_GENERIC")
+
+    def test_detect_stack_empty_is_unknown(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(MultiStackRunner.detect_stack(Path(d)), "UNKNOWN")
+
+    def test_detect_stack_python_jev_precedes_node_ts_bun(self):
+        """Precedência: PYTHON_JEV vence a heurística NODE_TS_BUN quando ambos batem."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(ws, "src/mcp_server.py", "x = 1\n")
+            self._write(
+                ws,
+                "package.json",
+                json.dumps({"name": "x", "scripts": {"test": "node tests/run_all.mjs"}}),
+            )
+            self.assertEqual(MultiStackRunner.detect_stack(ws), "PYTHON_JEV")
+
+    # --------------------------------------------------------------- run_tests real
+    def test_run_tests_node_ts_bun_run_all_mjs_success(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            tmp = ws / "_needle_tmp"
+            tmp.mkdir()
+            self._write(ws, "package.json", '{"name": "x", "type": "module"}')
+            self._write(
+                ws,
+                "tests/run_all.mjs",
+                "import assert from 'node:assert';\n"
+                "assert.strictEqual(1 + 1, 2);\n"
+                "assert.deepStrictEqual([1, 2].map((n) => n * 2), [2, 4]);\n"
+                "console.log('SUÍTES: 2/2 passaram');\n",
+            )
+            res = MultiStackRunner.run_tests(ws, "NODE_TS_BUN", tmp)
+            self.assertTrue(res["passed"], res["summary"])
+            self.assertEqual(res["total_passed"], 2)
+            self.assertEqual(res["total_failed"], 0)
+            self.assertEqual(res["failure_details"], [])
+
+    def test_run_tests_node_ts_bun_failing_suite_is_detected(self):
+        """Asserção real falha -> subprocesso devolve código != 0 e o runner reprova."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            tmp = ws / "_needle_tmp"
+            tmp.mkdir()
+            self._write(ws, "package.json", '{"name": "x", "type": "module"}')
+            self._write(
+                ws,
+                "tests/run_all.mjs",
+                "import assert from 'node:assert';\n"
+                "try {\n"
+                "  assert.strictEqual(1, 2, 'falha real esperada');\n"
+                "  console.log('SUÍTES: 1/1 passaram');\n"
+                "} catch (e) {\n"
+                "  console.log('SUÍTES: 0/1 passaram');\n"
+                "  process.exit(1);\n"
+                "}\n",
+            )
+            res = MultiStackRunner.run_tests(ws, "NODE_TS_BUN", tmp)
+            self.assertFalse(res["passed"])
+            self.assertEqual(res["total_failed"], 1)
+            self.assertTrue(res["failure_details"])
+
+    def test_run_tests_node_ts_bun_propagates_isolated_tmpdir(self):
+        """Prova real de isolamento: o subprocesso observa o TMPDIR injetado pelo runner."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            tmp = ws / "needle_isolated_tmp"
+            tmp.mkdir()
+            self._write(ws, "package.json", '{"name": "x", "type": "module"}')
+            self._write(
+                ws,
+                "tests/run_all.mjs",
+                "import { writeFileSync } from 'node:fs';\n"
+                "writeFileSync('tmpdir_probe.txt', process.env.TMPDIR || 'UNSET');\n"
+                "console.log('SUÍTES: 1/1 passaram');\n",
+            )
+            res = MultiStackRunner.run_tests(ws, "NODE_TS_BUN", tmp)
+            self.assertTrue(res["passed"], res["summary"])
+            probe = (ws / "tmpdir_probe.txt").read_text(encoding="utf-8")
+            self.assertEqual(probe, str(tmp))
+
+    def test_run_tests_node_ts_bun_node_test_cascade(self):
+        """Sem run_all.mjs nem scripts.test -> cascata `node --test tests/*.mjs` (TAP)."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            tmp = ws / "_needle_tmp"
+            tmp.mkdir()
+            self._write(ws, "package.json", '{"name": "x", "type": "module"}')
+            self._write(
+                ws,
+                "tests/math.test.mjs",
+                "import test from 'node:test';\n"
+                "import assert from 'node:assert';\n"
+                "test('soma', () => { assert.strictEqual(2 + 3, 5); });\n",
+            )
+            res = MultiStackRunner.run_tests(ws, "NODE_TS_BUN", tmp)
+            self.assertTrue(res["passed"], res["summary"])
+            self.assertGreaterEqual(res["total_passed"], 1)
+            self.assertEqual(res["total_failed"], 0)
+
+    def test_run_tests_node_ts_bun_without_any_runner_must_fail_fast(self):
+        """INVARIANTE (§5): workspace NODE_TS_BUN sem suíte executável NÃO pode ser aprovado.
+
+        Sem `tests/run_all.mjs`, sem `scripts.test`, sem lock/bunfig do Bun e sem
+        `tests/*.mjs`, não existe runner algum. Aprovar com zero testes viola a
+        política "workspace sem testes = REJECTED" (o caminho Python devolve
+        "Nenhum teste coletado"). O runner deve reprovar (passed=False).
+        """
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            tmp = ws / "_needle_tmp"
+            tmp.mkdir()
+            self._write(ws, "package.json", '{"name": "x", "type": "module"}')
+            self._write(ws, "src/index.ts", "export const x: number = 1;\n")
+            res = MultiStackRunner.run_tests(ws, "NODE_TS_BUN", tmp)
+            self.assertFalse(
+                res["passed"],
+                "run_tests aprovou um workspace NODE_TS_BUN sem nenhum teste executável: "
+                f"{res['summary']!r}",
+            )
+
+    def test_parse_node_test_counts_formats(self):
+        """Formatos suportados: SUÍTES X/Y (consolidado), bun pass/fail e TAP # pass/# fail."""
+        self.assertEqual(
+            MultiStackRunner._parse_node_test_counts("SUÍTES: 3/5 passaram", True), (3, 2)
+        )
+        self.assertEqual(
+            MultiStackRunner._parse_node_test_counts(" 12 pass\n 1 fail\n", False), (12, 1)
+        )
+        self.assertEqual(
+            MultiStackRunner._parse_node_test_counts("# pass 7\n# fail 0\n", True), (7, 0)
+        )
+        # Fallback sem contadores: código de saída decide
+        self.assertEqual(MultiStackRunner._parse_node_test_counts("sem contadores", False), (0, 1))
+        self.assertEqual(MultiStackRunner._parse_node_test_counts("sem contadores", True), (0, 0))
+
+    # ------------------------------------------------------------ scan_js_ast *.mjs
+    def test_scan_js_ast_collects_mjs_production_files(self):
+        """A varredura NODE_TS_BUN deve coletar arquivos de produção `.mjs` (gap fechado)."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(ws, "package.json", '{"name": "x"}')
+            self._write(
+                ws,
+                "src/danger.mjs",
+                "export function run(code) {\n  return eval(code);\n}\n",
+            )
+            res = MultiStackRunner.scan_js_ast(ws, "NODE_TS_BUN", audit_mode="full")
+            rule_ids = [b["rule_id"] for b in res.get("blocking", [])]
+            self.assertIn("SECURITY_EVAL", rule_ids)
+
+    def test_scan_js_ast_excludes_mjs_test_files(self):
+        """Arquivos sob `tests/` (incluindo `.mjs`) não podem ser tratados como produção."""
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            self._write(ws, "package.json", '{"name": "x"}')
+            self._write(
+                ws,
+                "tests/evil.test.mjs",
+                "export function run(code) { return eval(code); }\n",
+            )
+            res = MultiStackRunner.scan_js_ast(ws, "NODE_TS_BUN", audit_mode="full")
+            self.assertEqual(res.get("blocking", []), [])
+
+
 if __name__ == "__main__":
     unittest.main()

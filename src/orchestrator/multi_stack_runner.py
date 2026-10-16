@@ -216,6 +216,10 @@ class MultiStackRunner:
         if (workspace_path / "src" / "mcp_server.py").exists():
             return "PYTHON_JEV"
 
+        # Stack Node/TypeScript/Bun moderna (ensemble-room-lowcost, openchamber_maiteux)
+        if MultiStackRunner._is_node_ts_bun_workspace(workspace_path):
+            return "NODE_TS_BUN"
+
         # Fallback por arquivos
         if list(workspace_path.glob("*.py")):
             return "PYTHON_GENERIC"
@@ -223,6 +227,49 @@ class MultiStackRunner:
             return "NODE_JS_GENERIC"
 
         return "UNKNOWN"
+
+    @staticmethod
+    def _is_node_ts_bun_workspace(workspace_path: Path) -> bool:
+        """Detecta workspace Node/TypeScript moderno com suíte determinística (Bun ou Node+mjs).
+
+        Critérios (qualquer um satisfaz):
+        - ``bun.lockb``/``bun.lock`` presente (repo gerenciado por Bun), ou
+        - ``package.json`` E (testes ``.mjs``/``.test.ts``/``.test.js`` em ``tests/`` OU
+          ``scripts.test`` declarado OU pasta ``src/`` com arquivos ``.ts``).
+
+        Exemplo:
+            >>> isinstance(MultiStackRunner._is_node_ts_bun_workspace(Path(".")), bool)
+            True
+        """
+        if (workspace_path / "bun.lockb").exists() or (workspace_path / "bun.lock").exists():
+            return True
+
+        pkg = workspace_path / "package.json"
+        if not pkg.exists():
+            return False
+
+        tests_dir = workspace_path / "tests"
+        if tests_dir.exists():
+            if any(tests_dir.glob("*.mjs")):
+                return True
+            if any(tests_dir.rglob("*.test.ts")) or any(tests_dir.rglob("*.test.js")):
+                return True
+
+        try:
+            pkg_data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+        except Exception as parse_err:
+            logger.debug("package.json ilegível em %s: %s", workspace_path, parse_err)
+            pkg_data = {}
+
+        scripts = pkg_data.get("scripts") if isinstance(pkg_data, dict) else None
+        if isinstance(scripts, dict) and scripts.get("test"):
+            return True
+
+        src_dir = workspace_path / "src"
+        if src_dir.exists() and any(src_dir.rglob("*.ts")):
+            return True
+
+        return False
 
     @classmethod
     def run_tests(cls, workspace_path: Path, stack: str, tmp_dir: Path) -> Dict[str, Any]:
@@ -315,6 +362,9 @@ class MultiStackRunner:
         elif stack == "PYTHON_FATURAMENTO":
             return MultiStackRunner._run_faturamento_suite(workspace_path, env, start)
 
+        elif stack == "NODE_TS_BUN":
+            return MultiStackRunner._run_node_ts_suite(workspace_path, env, start)
+
         return {
             "passed": True,
             "total_passed": 0,
@@ -360,6 +410,136 @@ class MultiStackRunner:
             "failure_details": failure_details,
             "duration": round(time.time() - start, 2),
         }
+
+    @staticmethod
+    def _run_node_ts_suite(workspace_path: Path, env: Dict[str, Any], start: float) -> Dict[str, Any]:
+        """Executa a suíte determinística real de um repositório Node/TypeScript/Bun (sem mocks).
+
+        Cascata de seleção do runner (primeiro match vence):
+        1. ``tests/run_all.mjs`` presente -> ``node tests/run_all.mjs``
+           (runners consolidados, ex.: ensemble-room-lowcost).
+        2. ``package.json`` com ``scripts.test`` -> ``bun run test`` (se Bun) ou ``npm test``.
+        3. Repositório gerenciado por Bun sem script -> ``bun test``.
+        4. Arquivos ``tests/*.mjs`` -> ``node --test <arquivos>``.
+
+        Exemplo:
+            >>> res = MultiStackRunner._run_node_ts_suite(Path("."), {}, time.time())
+            >>> set(res) >= {"passed", "total_passed", "total_failed", "summary", "failure_details", "duration"}
+            True
+        """
+        node_bin = shutil.which("node") or str(Path.home() / ".local" / "node" / "bin" / "node")
+        npm_bin = shutil.which("npm") or "npm"
+        bun_bin = shutil.which("bun")
+
+        pkg = workspace_path / "package.json"
+        test_script: Optional[str] = None
+        if pkg.exists():
+            try:
+                pkg_data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+                scripts = pkg_data.get("scripts") if isinstance(pkg_data, dict) else None
+                if isinstance(scripts, dict):
+                    raw_test = scripts.get("test")
+                    test_script = raw_test if isinstance(raw_test, str) else None
+            except Exception as parse_err:
+                logger.debug("package.json ilegível em %s: %s", workspace_path, parse_err)
+
+        bun_lock = (workspace_path / "bun.lockb").exists() or (workspace_path / "bun.lock").exists()
+        has_bunfig = (workspace_path / "bunfig.toml").exists()
+        bun_script = bool(test_script) and test_script.strip().startswith("bun")
+        is_bun = bool(bun_bin) and (bun_lock or has_bunfig or bun_script)
+
+        tests_dir = workspace_path / "tests"
+        run_all = tests_dir / "run_all.mjs"
+        mjs_tests = sorted(str(p) for p in tests_dir.glob("*.mjs")) if tests_dir.exists() else []
+
+        cmd: Optional[List[str]] = None
+        if run_all.exists():
+            cmd = [str(node_bin), str(run_all)]
+        elif test_script:
+            cmd = [str(bun_bin), "run", "test"] if is_bun else [str(npm_bin), "test"]
+        elif is_bun:
+            cmd = [str(bun_bin), "test"]
+        elif mjs_tests:
+            cmd = [str(node_bin), "--test", *mjs_tests]
+
+        if cmd is None:
+            return {
+                "passed": False,
+                "total_passed": 0,
+                "total_failed": 1,
+                "summary": "NODE_TS_BUN sem runner de testes configurado — workspace sem suíte executável",
+                "failure_details": [
+                    "Nenhum runner NODE_TS_BUN detectável (tests/run_all.mjs, scripts.test, bun test ou tests/*.mjs). "
+                    "Crie uma suíte real em tests/ (ex.: tests/run_all.mjs ou tests/*.test.mjs)."
+                ],
+                "duration": round(time.time() - start, 2),
+            }
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(workspace_path),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as run_err:
+            return {
+                "passed": False,
+                "total_passed": 0,
+                "total_failed": 1,
+                "summary": f"Falha ao executar {cmd[0]}: {run_err}",
+                "failure_details": [str(run_err)],
+                "duration": round(time.time() - start, 2),
+            }
+
+        output = proc.stdout + "\n" + proc.stderr
+        passed = proc.returncode == 0
+        tot_passed, tot_failed = MultiStackRunner._parse_node_test_counts(output, passed)
+
+        runner_label = Path(cmd[0]).name
+        return {
+            "passed": passed,
+            "total_passed": tot_passed,
+            "total_failed": tot_failed,
+            "summary": f"Node/TS/Bun Tests ({runner_label}): {tot_passed} aprovados, {tot_failed} falhas",
+            "failure_details": [] if passed else [output[-500:]],
+            "duration": round(time.time() - start, 2),
+        }
+
+    @staticmethod
+    def _parse_node_test_counts(output: str, passed: bool) -> Tuple[int, int]:
+        """Extrai (aprovados, falhas) do stdout/stderr de runners Node/Bun/TAP.
+
+        Exemplo:
+            >>> MultiStackRunner._parse_node_test_counts("  12 pass\\n  1 fail\\n", False)
+            (12, 1)
+        """
+        # Runner consolidado do ensemble-room-lowcost: "SUÍTES: X/Y passaram"
+        m_suites = re.search(r"SU[ÍI]TES:\s+(\d+)\s*/\s*(\d+)\s+passaram", output)
+        if m_suites:
+            ok = int(m_suites.group(1))
+            total = int(m_suites.group(2))
+            return ok, max(total - ok, 0)
+
+        # Bun test: " 12 pass" / " 1 fail"
+        m_bun_pass = re.search(r"(\d+)\s+pass\b", output)
+        m_bun_fail = re.search(r"(\d+)\s+fail\b", output)
+        if m_bun_pass or m_bun_fail:
+            ok = int(m_bun_pass.group(1)) if m_bun_pass else 0
+            fail = int(m_bun_fail.group(1)) if m_bun_fail else 0
+            return ok, fail
+
+        # node --test (TAP): "# pass 12" / "# fail 1"
+        m_tap_pass = re.search(r"#\s*pass\s+(\d+)", output)
+        m_tap_fail = re.search(r"#\s*fail\s+(\d+)", output)
+        if m_tap_pass or m_tap_fail:
+            ok = int(m_tap_pass.group(1)) if m_tap_pass else 0
+            fail = int(m_tap_fail.group(1)) if m_tap_fail else 0
+            return ok, fail
+
+        return (0, 0) if passed else (0, 1)
 
     @classmethod
     def _run_node_js_ast(
@@ -588,7 +768,7 @@ class MultiStackRunner:
             fpath
             for pdir in prod_dirs
             if pdir.exists()
-            for ext in ("*.js", "*.jsx", "*.ts", "*.tsx")
+            for ext in ("*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs")
             for fpath in pdir.rglob(ext)
         ]
         source_files = cls._dedup_files(raw_files)

@@ -454,3 +454,114 @@ def test_needle_verify_delivery_request_rejects_attempt_above_five():
 
     with pytest.raises(ValidationError):
         NeedleVerifyDeliveryRequest(attempt_number=6)
+
+
+def _build_node_ts_bun_workspace(
+    tmp_dir: str,
+    run_all_body: str,
+    prod_files: dict | None = None,
+) -> Path:
+    """Materializa um workspace NODE_TS_BUN real (package.json + run_all.mjs + src/)."""
+    ws = Path(tmp_dir)
+    (ws / "package.json").write_text('{"name": "app", "type": "module"}', encoding="utf-8")
+    (ws / "tests").mkdir(exist_ok=True)
+    (ws / "tests" / "run_all.mjs").write_text(run_all_body, encoding="utf-8")
+    for rel, content in (prod_files or {}).items():
+        target = ws / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_needle_verify_delivery_node_ts_bun_approved():
+    """Gate NODE_TS_BUN end-to-end: runner real node + AST limpa => APPROVED."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _build_node_ts_bun_workspace(
+            tmp_dir,
+            "import assert from 'node:assert';\n"
+            "assert.strictEqual(1 + 1, 2);\n"
+            "console.log('SUÍTES: 1/1 passaram');\n",
+            prod_files={"src/math.mjs": "export function add(a, b) { return a + b; }\n"},
+        )
+
+        resp = await needle_verify_delivery(workspace=tmp_dir)
+
+        assert resp["status"] == "APPROVED", resp["message"]
+        assert resp["passed"] is True
+        assert resp["pytest_success"] is True
+        assert len(resp["pytest_chunks"]) == 1
+        chunk = resp["pytest_chunks"][0]
+        assert chunk["chunk_id"] == "chunk_multistack_node_ts_bun"
+        assert chunk["passed"] is True
+        assert chunk["total_passed"] >= 1
+        assert resp["blocking_ast_violations"] == []
+
+
+@pytest.mark.asyncio
+async def test_needle_verify_delivery_node_ts_bun_test_failure_rejected_failfast():
+    """Suíte Node real falhando => REJECTED Fail-Fast com pytest_chunks_typed preenchido."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _build_node_ts_bun_workspace(
+            tmp_dir,
+            "import assert from 'node:assert';\n"
+            "assert.strictEqual(1, 2, 'falha real esperada');\n",
+        )
+
+        resp = await needle_verify_delivery(workspace=tmp_dir, pedido="p", resultado="r")
+
+        assert resp["status"] == "REJECTED"
+        assert resp["passed"] is False
+        assert resp["pytest_success"] is False
+        assert len(resp["pytest_chunks"]) == 1
+        chunk = resp["pytest_chunks"][0]
+        assert chunk["chunk_id"] == "chunk_multistack_node_ts_bun"
+        assert chunk["passed"] is False
+        assert "NODE_TS_BUN Fail-Fast" in resp["message"]
+        assert resp["pedido_audit"] == "p"
+        assert resp["resultado_audit"] == "r"
+
+
+@pytest.mark.asyncio
+async def test_needle_verify_delivery_node_ts_bun_ast_violation_rejected():
+    """Gate AST NODE_TS_BUN: eval() em `.mjs` de produção bloqueia a entrega."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _build_node_ts_bun_workspace(
+            tmp_dir,
+            "import assert from 'node:assert';\n"
+            "assert.ok(true);\n"
+            "console.log('SUÍTES: 1/1 passaram');\n",
+            prod_files={"src/danger.mjs": "export function run(code) { return eval(code); }\n"},
+        )
+
+        resp = await needle_verify_delivery(workspace=tmp_dir)
+
+        assert resp["status"] == "REJECTED", resp["message"]
+        assert resp["passed"] is False
+        assert resp["pytest_success"] is True
+        rule_ids = [v["rule_id"] for v in resp["blocking_ast_violations"]]
+        assert "SECURITY_EVAL" in rule_ids
+
+
+@pytest.mark.asyncio
+async def test_needle_verify_delivery_node_ts_bun_without_tests_is_rejected():
+    """INVARIANTE §5: workspace NODE_TS_BUN sem suíte executável NÃO pode ser homologado.
+
+    Um repositório TS (src/*.ts) sem `tests/run_all.mjs`, sem `scripts.test` e sem
+    lock/bunfig do Bun não possui runner algum. O caminho Python já reprova com
+    "Nenhum teste coletado"; o caminho NODE_TS_BUN deve rejeitar de forma idêntica
+    (falha-fechada), nunca aprovar com zero testes executados.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        ws = Path(tmp_dir)
+        (ws / "package.json").write_text('{"name": "app", "type": "module"}', encoding="utf-8")
+        (ws / "src").mkdir()
+        (ws / "src" / "index.ts").write_text("export const x: number = 1;\n", encoding="utf-8")
+
+        resp = await needle_verify_delivery(workspace=tmp_dir)
+
+        assert resp["status"] == "REJECTED", (
+            "workspace NODE_TS_BUN sem testes foi homologado: " + resp["message"]
+        )
+        assert resp["passed"] is False
+        assert resp["pytest_success"] is False
