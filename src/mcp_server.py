@@ -52,8 +52,11 @@ from src.core.schemas import (
     ScoreResponse,
     ScoreDiagnoseResponse,
     QUALITY_DEFECT_CATEGORIES,
-    NeedleVerifyDeliveryRequest,
-    NeedleVerifyDeliveryResponse,
+    AgentQualityGuardResponse,
+    LinterDiagnostic,
+    MetaRuleViolation,
+    ToolchainToolStatus,
+    META_RULE_BLOCKING_CATEGORIES,
     PytestChunkResult,
     ASTViolation,
 )
@@ -61,9 +64,6 @@ from src.core.diff_inspector import extract_workspace_stages, format_stage_premi
 from src.memory.ast_diff_extractor import extract_workspace_ast_symbols, AstSymbolSlice
 from src.memory.needle_defect_screener import (
     screen_workspace_symbols,
-    DefectSuspicion,
-    DEFECT_NOUL_HYPOTHESES,
-    _is_test_path,
 )
 from src.decision.engine import OpenJevEngine
 from src.memory.local_needle import LocalNeedleEngine
@@ -641,43 +641,155 @@ def _caveat_message(delivery_score: float, threshold: float, zero_suspicions: bo
 
 # Circuit breaker (MAX_ATTEMPTS) vem de score_gate — fonte única.
 
-# NOTA (set/2026): o choice de diagnóstico flat foi removido do fluxo de score.
-# O diagnóstico vem do Needle 3 Screener (10 categorias técnicas: 8 duras + 2 de
-# análise tipagem/docstring) confirmado/arbitrado pelo JEV Noul (P >= 0.78); as
-# categorias nulas (`sem_defeito_identificavel`, `evidencia_insuficiente`)
-# deixaram de existir no universo de decisão — ver DEFECT_OPTIONS em
-# src/core/schemas.py. A ressalva de nota segue a banda de indiferença
-# CAVEAT_BAND (src/core/score_gate.py).
+# NOTA (out/2026, TICKET-HARNESS-43): o pipeline de homologação de entrega
+# (`agent_quality_guard`) é 100% DETERMINÍSTICO — Laya/Noul foram removidos do
+# caminho crítico. A antiga arbitragem probabilística (Etapa 3) operava sobre as
+# 10 categorias do Screener via as constantes `_CATEGORY_PRIORITY` e
+# `MAX_ARBITRATIONS`, agora descontinuadas. O Screener permanece apenas como
+# telemetria estrutural; o bloqueio determinístico vem das Camadas 1 (toolchain
+# nativa) e 2 (meta-regras Tree-Sitter). Ver DEFECT_OPTIONS em src/core/schemas.py.
 
 
-_CATEGORY_PRIORITY: Dict[str, int] = {
-    "seguranca": 1,
-    "robustez_excecoes_recursos": 2,
-    "logica_ou_regra": 3,
-    "contrato_ambiente": 4,
-    "requisito_incompleto_ou_ausente": 5,
-    "qualidade_de_testes": 6,
-    "performance_escopo_estilo": 7,
-    "documentacao_configuracao": 8,
-    "tipagem_ausente": 9,
-    "docstring_ausente": 10,
-}
-MAX_ARBITRATIONS: int = 10
+# ──────────────────────────────────────────────────────────────────────────────
+# Agent Quality Guard — pipeline 100% DETERMINÍSTICO de homologação de entrega.
+# Camada 0: testes reais | Camada 1: Guard + toolchain nativa | Camada 2: meta-regras.
+# Laya RLCD / JEV Noul NÃO participam do caminho crítico (sem pesos de ML/GPU).
+# ──────────────────────────────────────────────────────────────────────────────
 
-
-@app.tool(
-    name="needle_verify_delivery",
-    description=(
-        "Validação de entrega de código 100% determinística (Needle 3 + Pytest Real + JEV Noul Arbitrage). "
-        "Executa em ordem fail-fast: "
-        "1º Pytest em 3-4 chunks sequenciais com isolamento dos testes pesados de ML; "
-        "2º NeedleASTGuard (Camada 1: anti-mock em produção, SQL Injection, eval perigoso, segredos hardcoded); "
-        "3º NeedleASTScreener (Camada 2: alertas estruturais de tipagem, docstrings, exceções); "
-        "4º JEV Noul Arbitrage (Camada 3: Laya RLCD P >= 0.78 arbitra suspeitas em micro-premissas atômicas <= 150 tokens). "
-        "Circuit breaker universal de 5 tentativas: atinge a Saída de Emergência na 5ª tentativa."
-    ),
+_QUALITY_GUARD_DESCRIPTION = (
+    "Validação de entrega de código 100% determinística e SEM ML (Pytest Real + "
+    "Camada 1 compiladores/linters/guard + Camada 2 meta-regras Tree-Sitter). "
+    "Executa em ordem fail-fast: "
+    "1º testes reais (pytest em 3-4 chunks sequenciais / runner multi-stack); "
+    "2º NeedleASTGuard (anti-mock em produção, SQL Injection, eval perigoso, segredos hardcoded); "
+    "3º bridge nativa de compiladores/linters do projeto (tsc, eslint/biome, ruff/mypy, clippy, go vet); "
+    "4º meta-regras universais de AST via Tree-Sitter (floating promises, silent catch, leaks). "
+    "Circuit breaker universal de 5 tentativas: atinge a Saída de Emergência na 5ª tentativa (EMERGENCY_RELEASE)."
 )
-async def needle_verify_delivery(
+
+_LEGACY_ALIAS_DESCRIPTION = (
+    "Alias legado de agent_quality_guard (MESMA implementação e assinatura). "
+    "Mantido para compatibilidade retroativa total com clientes antigos. "
+    "Pipeline 100% determinístico, sem Laya/Noul no caminho crítico. "
+    "Circuit breaker universal de 5 tentativas com Saída de Emergência (EMERGENCY_RELEASE)."
+)
+
+# Stacks cujo runner multi-stack executa a suíte real de testes.
+_MULTISTACK_STACKS = (
+    "REACT_NATIVE_EXPO",
+    "WEB_JS_FIREBASE",
+    "PYTHON_FATURAMENTO",
+    "PYTHON_PREDICTERA",
+    "NODE_TS_BUN",
+)
+# Subconjunto JS/TS que ainda usa o scan AST dedicado (scan_js_ast) como Camada 1.
+_JS_MULTISTACK_STACKS = ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "NODE_TS_BUN")
+
+
+def _coerce_violation(raw: Any, model: type) -> Optional[Any]:
+    """Normaliza um item bruto (dict ou ASTViolation) para o modelo tipado alvo.
+
+    Fail-soft: item com shape inesperado é ignorado com log de depuração — uma
+    ferramenta externa nunca derruba o quality gate por formato de saída.
+    """
+    if isinstance(raw, ASTViolation):
+        return raw
+    if isinstance(raw, dict):
+        try:
+            return model(**raw)
+        except Exception as exc:  # noqa: BLE001 — shape externo imprevisível
+            logger.debug("Violação ignorada (shape inválido para %s): %s", model.__name__, exc)
+            return None
+    return None
+
+
+def _coerce_violations(items: Any, model: type) -> List[Any]:
+    """Converte iterável de itens brutos em lista de modelos tipados válidos."""
+    coerced: List[Any] = []
+    for raw in items or []:
+        item = _coerce_violation(raw, model)
+        if item is not None:
+            coerced.append(item)
+    return coerced
+
+
+def _run_layer1_native_bridge(target_path: Path, stack: str, audit_mode: str) -> Dict[str, Any]:
+    """Camada 1 — bridge nativa de compiladores/linters (determinística, fail-open).
+
+    Delega a ``MultiStackRunner.run_native_bridge``. Se a bridge ainda não existir
+    no runner ou falhar, devolve listas vazias SEM bloquear a entrega:
+    indisponibilidade de ferramenta JAMAIS é violação (fail-open).
+    """
+    empty: Dict[str, Any] = {
+        "available": False, "blocking": [], "warnings": [], "tools": [], "total_files": 0,
+    }
+    bridge = getattr(MultiStackRunner, "run_native_bridge", None)
+    if not callable(bridge):
+        logger.debug("Camada 1: MultiStackRunner.run_native_bridge indisponível (fail-open).")
+        return empty
+    try:
+        res = bridge(target_path, stack, audit_mode=audit_mode) or {}
+    except Exception as exc:  # noqa: BLE001 — fail-open por contrato
+        logger.warning("Camada 1 (native bridge) falhou — fail-open sem bloqueio: %s", exc)
+        return empty
+    if not isinstance(res, dict):
+        logger.warning("Camada 1 (native bridge) retornou %s — fail-open.", type(res).__name__)
+        return empty
+    return {
+        "available": True,
+        "blocking": res.get("blocking") or [],
+        "warnings": res.get("warnings") or [],
+        "tools": res.get("tools") or [],
+        "total_files": int(res.get("total_files", 0) or 0),
+    }
+
+
+def _run_layer2_meta_rules(target_path: Path, audit_mode: str) -> Dict[str, Any]:
+    """Camada 2 — meta-regras universais de AST via Tree-Sitter (fail-open).
+
+    Prefere ``TreeSitterGuard.scan_workspace_report`` (agregado já classificado);
+    recorre a ``scan_workspace`` (iterável) classificando por ``severity``/
+    ``category``. Módulo ausente = fail-open (nenhum bloqueio).
+    """
+    empty: Dict[str, Any] = {"available": False, "blocking": [], "warnings": [], "total_files": 0}
+    try:
+        from src.memory.tree_sitter_guard import TreeSitterGuard  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Camada 2: TreeSitterGuard indisponível (fail-open): %s", exc)
+        return empty
+
+    try:
+        report = getattr(TreeSitterGuard, "scan_workspace_report", None)
+        if callable(report):
+            res = report(target_path, audit_mode=audit_mode) or {}
+            if not isinstance(res, dict):
+                return empty
+            return {
+                "available": True,
+                "blocking": res.get("blocking") or [],
+                "warnings": res.get("warnings") or [],
+                "total_files": int(res.get("total_files", 0) or 0),
+            }
+        scan = getattr(TreeSitterGuard, "scan_workspace", None)
+        if not callable(scan):
+            return empty
+        items = scan(target_path, audit_mode=audit_mode) or []
+        blocking: List[Dict[str, Any]] = []
+        warnings: List[Dict[str, Any]] = []
+        for item in items:
+            data = item.to_dict() if hasattr(item, "to_dict") else (item if isinstance(item, dict) else {})
+            severity = str(data.get("severity", "warning")).lower()
+            if severity == "blocking" or data.get("category") in META_RULE_BLOCKING_CATEGORIES:
+                blocking.append(data)
+            else:
+                warnings.append(data)
+        return {"available": True, "blocking": blocking, "warnings": warnings, "total_files": 0}
+    except Exception as exc:  # noqa: BLE001 — fail-open por contrato
+        logger.warning("Camada 2 (tree-sitter) falhou — fail-open sem bloqueio: %s", exc)
+        return empty
+
+
+async def _quality_guard_core(
     task_type: str = "codigo_producao",
     workspace: str = "",
     attempt_number: int = 1,
@@ -687,20 +799,26 @@ async def needle_verify_delivery(
     audit_mode: str = "delta",
     ctx: Optional[Context] = None,
 ) -> dict:
-    """Validação determinística de entrega via Pytest em Chunks + Needle 3 AST + JEV Noul.
+    """Homologa uma entrega com pipeline 100% determinístico (sem ML/Laya).
 
+    Camada 0: testes reais; Camada 1: NeedleASTGuard + bridge nativa de
+    compiladores/linters; Camada 2: meta-regras universais de AST via Tree-Sitter.
     A contagem de tentativas é exclusivamente server-side
-    (`score_gate.resolve_attempt_number`, histórico persistido por workspace);
-    `attempt_number` é apenas informativo e NÃO participa da decisão do
-    circuit breaker. Não existe parâmetro de reset de histórico nesta tool.
+    (``score_gate.resolve_attempt_number``, histórico persistido por workspace);
+    ``attempt_number`` é apenas informativo e NÃO participa da decisão do
+    circuit breaker. Não existe parâmetro de reset de histórico.
+
+    ``engine`` é aceito apenas por retrocompatibilidade de assinatura e é
+    IGNORADO: a validação de entrega não usa Laya RLCD/Noul nem inferência na GPU.
 
     Exemplo:
         >>> import asyncio, tempfile
         >>> with tempfile.TemporaryDirectory() as ws:
-        ...     out = asyncio.run(needle_verify_delivery(workspace=ws))
+        ...     out = asyncio.run(_quality_guard_core(workspace=ws))
         >>> out["status"] in {"APPROVED", "REJECTED", "EMERGENCY_RELEASE"}
         True
     """
+    del engine  # retrocompat de assinatura: ML/Laya removido do caminho crítico
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
 
     hist = _history_get(target_workspace)
@@ -741,7 +859,7 @@ async def needle_verify_delivery(
             "attempts": current_attempt,
             "emergency": True
         })
-        return NeedleVerifyDeliveryResponse(
+        return AgentQualityGuardResponse(
             passed=True,
             status="EMERGENCY_RELEASE",
             attempt_number=current_attempt,
@@ -764,7 +882,7 @@ async def needle_verify_delivery(
     tmp_dir = Path(tempfile.gettempdir()) / "needle_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "PYTHON_FATURAMENTO", "PYTHON_PREDICTERA", "NODE_TS_BUN"):
+    if stack in _MULTISTACK_STACKS:
         # Execução Multi-Stack especializada
         test_res = MultiStackRunner.run_tests(target_path, stack, tmp_dir)
         test_success = test_res.get("passed", False)
@@ -782,7 +900,7 @@ async def needle_verify_delivery(
                 "passed": False,
                 "attempts": current_attempt
             })
-            return NeedleVerifyDeliveryResponse(
+            return AgentQualityGuardResponse(
                 passed=False,
                 status="REJECTED",
                 attempt_number=current_attempt,
@@ -799,34 +917,37 @@ async def needle_verify_delivery(
                 message=f"🚨 [{stack} Fail-Fast] Suíte de testes reais falhou: {test_res.get('summary', '')}."
             ).model_dump()
 
-        if stack in ("REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "NODE_TS_BUN"):
+        if stack in _JS_MULTISTACK_STACKS:
             ast_scan = MultiStackRunner.scan_js_ast(target_path, stack, audit_mode=audit_mode)
-            blocking_violations = [ASTViolation(
-                rule_id=b["rule_id"],
-                category=b["category"],
-                file_path=b["file_path"],
-                line_number=b["line_number"],
-                code_snippet=b["code_snippet"],
-                message=b["message"],
-                suggestion=b.get("suggestion"),
-            ) for b in ast_scan.get("blocking", [])]
 
-            structural_warnings = [ASTViolation(
-                rule_id=w["rule_id"],
-                category=w["category"],
-                file_path=w["file_path"],
-                line_number=w["line_number"],
-                code_snippet=w["code_snippet"],
-                message=w["message"],
-                suggestion=w.get("suggestion"),
-            ) for w in ast_scan.get("warnings", [])]
+            # Camadas determinísticas 1 (toolchain nativa) e 2 (meta-regras Tree-Sitter)
+            layer1 = _run_layer1_native_bridge(target_path, stack, audit_mode)
+            layer2 = _run_layer2_meta_rules(target_path, audit_mode)
+
+            blocking_violations = _coerce_violations(ast_scan.get("blocking", []), ASTViolation)
+            blocking_violations += _coerce_violations(layer1["blocking"], LinterDiagnostic)
+            blocking_violations += _coerce_violations(layer2["blocking"], MetaRuleViolation)
+
+            structural_warnings = _coerce_violations(ast_scan.get("warnings", []), ASTViolation)
+            structural_warnings += _coerce_violations(layer1["warnings"], LinterDiagnostic)
+            structural_warnings += _coerce_violations(layer2["warnings"], MetaRuleViolation)
+
+            layer1_diags = (
+                _coerce_violations(layer1["blocking"], LinterDiagnostic)
+                + _coerce_violations(layer1["warnings"], LinterDiagnostic)
+            )
+            layer2_viols = (
+                _coerce_violations(layer2["blocking"], MetaRuleViolation)
+                + _coerce_violations(layer2["warnings"], MetaRuleViolation)
+            )
+            toolchain_status = _coerce_violations(layer1["tools"], ToolchainToolStatus)
 
             passed = len(blocking_violations) == 0
             _history_set(target_workspace, {
                 "passed": passed,
                 "attempts": current_attempt
             })
-            return NeedleVerifyDeliveryResponse(
+            return AgentQualityGuardResponse(
                 passed=passed,
                 status="APPROVED" if passed else "REJECTED",
                 attempt_number=current_attempt,
@@ -836,11 +957,22 @@ async def needle_verify_delivery(
                 structural_ast_warnings=structural_warnings,
                 confirmed_defects=[],
                 dismissed_warnings=[],
-                total_files_scanned=ast_scan.get("total_files", 0),
+                total_files_scanned=max(
+                    ast_scan.get("total_files", 0),
+                    layer1["total_files"],
+                    layer2["total_files"],
+                ),
                 total_lines_scanned=0,
                 pedido_audit=pedido or None,
                 resultado_audit=resultado or None,
-                message=f"{'✅' if passed else '🚨'} [{stack}] {test_res.get('summary', '')} | AST: {len(blocking_violations)} bloqueios, {len(structural_warnings)} alertas."
+                layer1_toolchain_diagnostics=layer1_diags,
+                toolchain_status=toolchain_status,
+                layer2_meta_rule_violations=layer2_viols,
+                message=(
+                    f"{'✅' if passed else '🚨'} [{stack}] {test_res.get('summary', '')} | "
+                    f"Camada 1: {len(blocking_violations)} bloqueio(s); "
+                    f"Camada 2: {len(structural_warnings)} alerta(s)."
+                )
             ).model_dump()
 
     # ── Etapa 0: Execução Sequencial de Testes Reais em Chunks (Pytest 1º Lugar) ──
@@ -883,7 +1015,7 @@ async def needle_verify_delivery(
             "passed": False,
             "attempts": current_attempt
         })
-        return NeedleVerifyDeliveryResponse(
+        return AgentQualityGuardResponse(
             passed=False,
             status="REJECTED",
             attempt_number=current_attempt,
@@ -911,7 +1043,7 @@ async def needle_verify_delivery(
             "passed": False,
             "attempts": current_attempt
         })
-        return NeedleVerifyDeliveryResponse(
+        return AgentQualityGuardResponse(
             passed=False,
             status="REJECTED",
             attempt_number=current_attempt,
@@ -953,7 +1085,7 @@ async def needle_verify_delivery(
             "passed": False,
             "attempts": current_attempt
         })
-        return NeedleVerifyDeliveryResponse(
+        return AgentQualityGuardResponse(
             passed=False,
             status="REJECTED",
             attempt_number=current_attempt,
@@ -980,7 +1112,6 @@ async def needle_verify_delivery(
     symbols = extract_workspace_ast_symbols(target_workspace)
     suspicions_map = screen_workspace_symbols(symbols, workspace_root=target_workspace)
     structural_warnings = []
-    all_suspicions = []
 
     suspicions_pairs = [
         (sym_key, s)
@@ -999,128 +1130,55 @@ async def needle_verify_delivery(
             suggestion=f"Refatorar símbolo em {sym_key} para resolver alerta de {s.category}."
         )
         structural_warnings.append(warning)
-        all_suspicions.append((sym_key, s, warning))
 
-    # ── Etapa 3: JEV Noul Arbitrage (Camada 3: Laya RLCD P >= 0.78) ──
-    confirmed_defects = []
-    dismissed_warnings = []
+    # ── Etapa 3: Camada 1 — bridge nativa de compiladores/linters (determinística) ──
+    layer1 = _run_layer1_native_bridge(target_path, stack, audit_mode)
+    layer1_blocking = _coerce_violations(layer1["blocking"], LinterDiagnostic)
+    layer1_warnings = _coerce_violations(layer1["warnings"], LinterDiagnostic)
+    toolchain_status = _coerce_violations(layer1["tools"], ToolchainToolStatus)
 
-    if all_suspicions:
-        active_engine = engine
-        if active_engine is None:
-            try:
-                active_engine = await _get_engine_async()
-            except Exception as e:
-                logger.debug(f"Motor JEV não disponível para arbitragem Noul: {e}")
-                active_engine = None
+    # ── Etapa 4: Camada 2 — meta-regras universais de AST via Tree-Sitter (determinística) ──
+    layer2 = _run_layer2_meta_rules(target_path, audit_mode)
+    layer2_blocking = _coerce_violations(layer2["blocking"], MetaRuleViolation)
+    layer2_warnings = _coerce_violations(layer2["warnings"], MetaRuleViolation)
 
-        is_engine_ready = active_engine is not None and getattr(active_engine, "is_ready", False)
+    # Telemetria estrutural: Screener legado + alertas das Camadas 1/2 (não bloqueiam).
+    structural_warnings = structural_warnings + layer1_warnings + layer2_warnings
+    layer1_toolchain_diagnostics = layer1_blocking + layer1_warnings
+    layer2_meta_rule_violations = layer2_blocking + layer2_warnings
 
-        if not is_engine_ready:
-            # Política Fail-Safe: Se o motor Laya não estiver pronto na memória,
-            # relata os alertas como telemetria sem abortar a entrega por indisponibilidade de pesos.
-            logger.info("Motor JEV descarregado: alertas do Screener mantidos como telemetria.")
-            _history_set(target_workspace, {
-                "passed": True,
-                "attempts": current_attempt
-            })
-            return NeedleVerifyDeliveryResponse(
-                passed=True,
-                status="APPROVED",
-                attempt_number=current_attempt,
-                pytest_success=True,
-                pytest_chunks=pytest_chunks_typed,
-                blocking_ast_violations=[],
-                structural_ast_warnings=structural_warnings,
-                confirmed_defects=[],
-                dismissed_warnings=[],
-                total_files_scanned=len(symbols),
-                total_lines_scanned=sum(sym.end_line - sym.start_line + 1 for sym in symbols),
-                pedido_audit=pedido or None,
-                resultado_audit=resultado or None,
-                message=(
-                    f"Entrega aprovada deterministicamente por testes reais (pytest) e Needle 3 AST Guard. "
-                    f"({len(structural_warnings)} alerta(s) estrutural(is) registrado(s) como telemetria - motor Laya descarregado)."
-                )
-            ).model_dump()
-
-        # Ordena suspeitas por prioridade técnica (segurança e robustez primeiro)
-        all_suspicions.sort(key=lambda item: _CATEGORY_PRIORITY.get(item[1].category, 99))
-        to_arbitrate = all_suspicions[:MAX_ARBITRATIONS]
-        leftover = all_suspicions[MAX_ARBITRATIONS:]
-
-        # Engine pronta: avalia cada suspeita prioritária em micro-premissa atômica (<= 150 tokens)
-        for sym_key, s, warning in to_arbitrate:
-            scope_desc = "Código de Teste" if _is_test_path(s.file_path) else "Código de Produção"
-            code_body = s.snippet or s.trigger_evidence or "Sem trecho disponível"
-            premise = (
-                f"Símbolo: {sym_key}\n"
-                f"Escopo: {scope_desc}\n"
-                f"Evidência: {s.trigger_evidence}\n"
-                f"Trecho AST:\n{code_body}"
+    # Bloqueio determinístico combinado (NeedleASTGuard já barrou acima).
+    combined_blocking = layer1_blocking + layer2_blocking
+    if combined_blocking:
+        _history_set(target_workspace, {
+            "passed": False,
+            "attempts": current_attempt
+        })
+        return AgentQualityGuardResponse(
+            passed=False,
+            status="REJECTED",
+            attempt_number=current_attempt,
+            pytest_success=True,
+            pytest_chunks=pytest_chunks_typed,
+            blocking_ast_violations=combined_blocking,
+            structural_ast_warnings=structural_warnings,
+            confirmed_defects=[],
+            dismissed_warnings=[],
+            total_files_scanned=max(len(symbols), layer1["total_files"], layer2["total_files"]),
+            total_lines_scanned=sum(sym.end_line - sym.start_line + 1 for sym in symbols),
+            pedido_audit=pedido or None,
+            resultado_audit=resultado or None,
+            layer1_toolchain_diagnostics=layer1_toolchain_diagnostics,
+            toolchain_status=toolchain_status,
+            layer2_meta_rule_violations=layer2_meta_rule_violations,
+            message=(
+                f"🚨 [Quality Guard Determinístico] {len(layer1_blocking)} erro(s) de toolchain "
+                f"(Camada 1) e {len(layer2_blocking)} violação(ões) de meta-regra bloqueante(s) "
+                f"(Camada 2). Alertas estruturais registrados: {len(structural_warnings)}."
             )
-            hypothesis = (
-                s.noul_hypothesis
-                or DEFECT_NOUL_HYPOTHESES.get(s.category, "")
-                or f"O código em {sym_key} apresenta defeito concreto de {s.category}."
-            )
+        ).model_dump()
 
-            try:
-                noul_req = NoulRequest(
-                    premise=premise,
-                    hypothesis=hypothesis,
-                    threshold=0.78,
-                )
-                noul_resp = await active_engine.evaluate_noul(noul_req)
-                prob = round(noul_resp.probability, 4)
-                is_confirmed = noul_resp.passed  # prob >= 0.78
-
-                bucket = confirmed_defects if is_confirmed else dismissed_warnings
-                rule_prefix = "confirmed" if is_confirmed else "dismissed"
-                verdict = (
-                    f"[Laya Noul P={prob:.2f} >= 0.78] Defeito confirmado"
-                    if is_confirmed
-                    else f"[Laya Noul P={prob:.2f} < 0.78] Falso-positivo descartado"
-                )
-                bucket.append(ASTViolation(
-                    rule_id=f"{rule_prefix}_{s.category}",
-                    category=s.category,
-                    file_path=warning.file_path,
-                    line_number=warning.line_number,
-                    code_snippet=warning.code_snippet,
-                    message=f"{verdict}: {warning.message}",
-                    suggestion=warning.suggestion if is_confirmed else None,
-                ))
-            except Exception as eval_err:
-                logger.warning(f"Falha na avaliação Noul para {sym_key}: {eval_err}")
-                dismissed_warnings.append(warning)
-
-        if confirmed_defects:
-            _history_set(target_workspace, {
-                "passed": False,
-                "attempts": current_attempt
-            })
-            return NeedleVerifyDeliveryResponse(
-                passed=False,
-                status="REJECTED",
-                attempt_number=current_attempt,
-                pytest_success=True,
-                pytest_chunks=pytest_chunks_typed,
-                blocking_ast_violations=[],
-                structural_ast_warnings=structural_warnings,
-                confirmed_defects=confirmed_defects,
-                dismissed_warnings=dismissed_warnings,
-                total_files_scanned=len(symbols),
-                total_lines_scanned=sum(sym.end_line - sym.start_line + 1 for sym in symbols),
-                pedido_audit=pedido or None,
-                resultado_audit=resultado or None,
-                message=(
-                    f"🚨 [JEV Noul Arbitrage] {len(confirmed_defects)} defeito(s) estrutural(is) "
-                    f"confirmado(s) pelo Laya RLCD (P >= 0.78). {len(dismissed_warnings)} alerta(s) descartado(s)."
-                )
-            ).model_dump()
-
-    # ── Aprovação Determinística com Arbitragem Noul ──
+    # ── Aprovação Determinística (sem arbitragem ML/Laya) ──
     if ctx:
         try:
             await ctx.report_progress(4, 4)
@@ -1133,13 +1191,12 @@ async def needle_verify_delivery(
     })
 
     approval_msg = (
-        f"Entrega 100% aprovada deterministicamente por testes reais (pytest), Needle 3 AST Guard "
-        f"e arbitragem JEV Noul ({len(dismissed_warnings)} alerta(s) descartado(s) como falso-positivo)."
-        if dismissed_warnings else
-        "Entrega 100% aprovada deterministicamente por testes reais (pytest) e Needle 3 AST Guard."
+        "Entrega 100% aprovada deterministicamente por testes reais (pytest), Needle 3 AST Guard (Camada 1) "
+        "e meta-regras universais de AST (Camada 2). "
+        f"Toolchain nativa sem bloqueios; {len(structural_warnings)} alerta(s) estrutural(is) como telemetria."
     )
 
-    return NeedleVerifyDeliveryResponse(
+    return AgentQualityGuardResponse(
         passed=True,
         status="APPROVED",
         attempt_number=current_attempt,
@@ -1148,13 +1205,28 @@ async def needle_verify_delivery(
         blocking_ast_violations=[],
         structural_ast_warnings=structural_warnings,
         confirmed_defects=[],
-        dismissed_warnings=dismissed_warnings,
-        total_files_scanned=len(symbols),
+        dismissed_warnings=[],
+        total_files_scanned=max(len(symbols), layer1["total_files"], layer2["total_files"]),
         total_lines_scanned=sum(sym.end_line - sym.start_line + 1 for sym in symbols),
         pedido_audit=pedido or None,
         resultado_audit=resultado or None,
+        layer1_toolchain_diagnostics=layer1_toolchain_diagnostics,
+        toolchain_status=toolchain_status,
+        layer2_meta_rule_violations=layer2_meta_rule_violations,
         message=approval_msg,
     ).model_dump()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Registro das tools: nome canônico `agent_quality_guard` + alias legado
+# `needle_verify_delivery` (MESMA implementação, retrocompatibilidade total).
+# ──────────────────────────────────────────────────────────────────────────────
+agent_quality_guard = app.tool(
+    name="agent_quality_guard", description=_QUALITY_GUARD_DESCRIPTION
+)(_quality_guard_core)
+needle_verify_delivery = app.tool(
+    name="needle_verify_delivery", description=_LEGACY_ALIAS_DESCRIPTION
+)(_quality_guard_core)
 
 
 if __name__ == "__main__":

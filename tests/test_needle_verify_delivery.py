@@ -253,7 +253,9 @@ def test_history_clear_is_scoped_and_state_dir_is_isolated():
 
 
 class DeterministicNoulEngine:
-    """Implementação real e determinística da interface do motor para testes de arbitragem."""
+    """Stand-in real e determinístico da interface do motor (apenas para provar
+    que o argumento ``engine`` é IGNORADO pelo pipeline 100% determinístico do
+    quality guard — o ML/Laya foi removido do caminho crítico no TICKET-43)."""
 
     def __init__(self, probability: float = 0.90, is_ready: bool = True):
         self.probability = probability
@@ -271,138 +273,72 @@ class DeterministicNoulEngine:
         )
 
 
-@pytest.mark.asyncio
-async def test_needle_verify_delivery_noul_arbitrage_confirms_defect():
-    """Teste 4: Camada 3 Noul confirma defeito estrutural (P >= 0.78).
+def _build_untyped_workspace(tmp_dir: str) -> None:
+    """Materializa um workspace git com função sem tipagem/docstring (alerta estrutural).
 
-    Deve rejeitar a entrega (status: REJECTED, passed: False) e listar o defeito em confirmed_defects.
+    Produz alerta de qualidade estrutural do Screener (tipagem/docstring) mas
+    NENHUMA violação determinística bloqueante.
     """
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=tmp_dir, check=True)
-        subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=tmp_dir, check=True)
+    subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=tmp_dir, check=True)
+    subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=tmp_dir, check=True)
 
-        # Baseline inicial commitado
-        (Path(tmp_dir) / "README.md").write_text("# Project\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=tmp_dir, check=True)
-        subprocess.run(["git", "commit", "-m", "initial commit"], cwd=tmp_dir, check=True)
+    (Path(tmp_dir) / "README.md").write_text("# Project\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_dir, check=True)
+    subprocess.run(["git", "commit", "-m", "initial commit"], cwd=tmp_dir, check=True)
 
-        # Código de produção em alteração ativa com alerta de tipagem/docstring
-        src_dir = Path(tmp_dir) / "src"
-        src_dir.mkdir(parents=True, exist_ok=True)
-        (src_dir / "untyped.py").write_text(
-            "def calculate_total(subtotal, tax):\n"
-            "    return subtotal + tax\n",
-            encoding="utf-8",
-        )
+    src_dir = Path(tmp_dir) / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "untyped.py").write_text(
+        "def calculate_total(subtotal, tax):\n"
+        "    return subtotal + tax\n",
+        encoding="utf-8",
+    )
 
-        # Teste passando
-        tests_dir = Path(tmp_dir) / "tests"
-        tests_dir.mkdir(parents=True, exist_ok=True)
-        (tests_dir / "test_untyped.py").write_text(
-            "from src.untyped import calculate_total\n\n"
-            "def test_calculate_total():\n"
-            "    assert calculate_total(100, 10) == 110\n",
-            encoding="utf-8",
-        )
-
-        engine = DeterministicNoulEngine(probability=0.88, is_ready=True)
-
-        resp = await needle_verify_delivery(
-            workspace=tmp_dir,
-            attempt_number=1,
-            engine=engine,
-        )
-
-        assert resp["passed"] is False
-        assert resp["status"] == "REJECTED"
-        assert len(resp["confirmed_defects"]) >= 1
-        assert "Laya Noul P=0.88 >= 0.78" in resp["confirmed_defects"][0]["message"]
-        assert resp["confirmed_defects"][0]["code_snippet"] != ""
+    tests_dir = Path(tmp_dir) / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_untyped.py").write_text(
+        "from src.untyped import calculate_total\n\n"
+        "def test_calculate_total():\n"
+        "    assert calculate_total(100, 10) == 110\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.asyncio
-async def test_needle_verify_delivery_noul_arbitrage_dismisses_false_positive():
-    """Teste 5: Camada 3 Noul descarta suspeita como falso-positivo (P < 0.78).
+async def test_needle_verify_delivery_structural_warnings_are_telemetry():
+    """TICKET-43: alerta estrutural vira TELEMETRIA — não bloqueia (sem Laya/Noul).
 
-    Deve aprovar a entrega (status: APPROVED, passed: True) e listar o alerta em dismissed_warnings.
+    Antes, a arbitragem Laya/Noul confirmava o defeito e reprovava. Com o
+    pipeline 100% determinístico, ausência de violação bloqueante (Guard +
+    Camada 1 toolchain + Camada 2 meta-regras) => APPROVED, com os alertas
+    estruturais reportados como telemetria.
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
-        subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=tmp_dir, check=True)
-        subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=tmp_dir, check=True)
+        _build_untyped_workspace(tmp_dir)
 
-        (Path(tmp_dir) / "README.md").write_text("# Project\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=tmp_dir, check=True)
-        subprocess.run(["git", "commit", "-m", "initial commit"], cwd=tmp_dir, check=True)
-
-        src_dir = Path(tmp_dir) / "src"
-        src_dir.mkdir(parents=True, exist_ok=True)
-        (src_dir / "untyped.py").write_text(
-            "def calculate_total(subtotal, tax):\n"
-            "    return subtotal + tax\n",
-            encoding="utf-8",
-        )
-
-        tests_dir = Path(tmp_dir) / "tests"
-        tests_dir.mkdir(parents=True, exist_ok=True)
-        (tests_dir / "test_untyped.py").write_text(
-            "from src.untyped import calculate_total\n\n"
-            "def test_calculate_total():\n"
-            "    assert calculate_total(100, 10) == 110\n",
-            encoding="utf-8",
-        )
-
-        engine = DeterministicNoulEngine(probability=0.42, is_ready=True)
-
-        resp = await needle_verify_delivery(
-            workspace=tmp_dir,
-            attempt_number=1,
-            engine=engine,
-        )
+        resp = await needle_verify_delivery(workspace=tmp_dir, attempt_number=1)
 
         assert resp["passed"] is True
         assert resp["status"] == "APPROVED"
         assert resp["confirmed_defects"] == []
-        assert len(resp["dismissed_warnings"]) >= 1
-        assert "Laya Noul P=0.42 < 0.78" in resp["dismissed_warnings"][0]["message"]
-        assert "arbitragem JEV Noul" in resp["message"]
+        assert resp["dismissed_warnings"] == []
+        assert len(resp["structural_ast_warnings"]) >= 1
+        assert resp["tool_name"] == "agent_quality_guard"
+        assert "meta-regras universais de AST" in resp["message"]
 
 
 @pytest.mark.asyncio
-async def test_needle_verify_delivery_engine_unloaded_telemetry_fallback():
-    """Teste 6: Falback Fail-Safe quando o motor Laya não está pronto na memória.
+async def test_needle_verify_delivery_engine_argument_is_ignored():
+    """TICKET-43: retrocompat de assinatura — `engine` é aceito mas IGNORADO.
 
-    Deve aprovar a entrega mantendo os alertas apenas como telemetria (sem confirmed_defects).
+    O veredito determinístico deve ser idêntico com ou sem engine injetado,
+    provando o desacoplamento total de Laya/Noul no caminho crítico.
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
-        subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=tmp_dir, check=True)
-        subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=tmp_dir, check=True)
+        _build_untyped_workspace(tmp_dir)
 
-        (Path(tmp_dir) / "README.md").write_text("# Project\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=tmp_dir, check=True)
-        subprocess.run(["git", "commit", "-m", "initial commit"], cwd=tmp_dir, check=True)
-
-        src_dir = Path(tmp_dir) / "src"
-        src_dir.mkdir(parents=True, exist_ok=True)
-        (src_dir / "untyped.py").write_text(
-            "def calculate_total(subtotal, tax):\n"
-            "    return subtotal + tax\n",
-            encoding="utf-8",
-        )
-
-        tests_dir = Path(tmp_dir) / "tests"
-        tests_dir.mkdir(parents=True, exist_ok=True)
-        (tests_dir / "test_untyped.py").write_text(
-            "from src.untyped import calculate_total\n\n"
-            "def test_calculate_total():\n"
-            "    assert calculate_total(100, 10) == 110\n",
-            encoding="utf-8",
-        )
-
-        # Engine com is_ready = False
-        engine = DeterministicNoulEngine(probability=0.99, is_ready=False)
+        engine = DeterministicNoulEngine(probability=0.99, is_ready=True)
 
         resp = await needle_verify_delivery(
             workspace=tmp_dir,
@@ -418,8 +354,20 @@ async def test_needle_verify_delivery_engine_unloaded_telemetry_fallback():
         assert resp["resultado_audit"] == "calculate_total implementado em src/untyped.py com teste"
         assert resp["confirmed_defects"] == []
         assert resp["dismissed_warnings"] == []
-        assert len(resp["structural_ast_warnings"]) >= 1
-        assert "motor Laya descarregado" in resp["message"]
+
+
+def test_agent_quality_guard_canonical_alias_and_registration():
+    """`agent_quality_guard` (canônico) e `needle_verify_delivery` (alias) = MESMA impl.
+
+    Ambos devem estar registradas no servidor MCP e resolver para a mesma função.
+    """
+    from src.mcp_server import agent_quality_guard, app
+
+    assert agent_quality_guard is needle_verify_delivery
+
+    registered = set(app._tool_manager._tools.keys())
+    assert "agent_quality_guard" in registered, "tool canônica ausente do catálogo MCP"
+    assert "needle_verify_delivery" in registered, "alias legado ausente do catálogo MCP"
 
 
 @pytest.mark.asyncio

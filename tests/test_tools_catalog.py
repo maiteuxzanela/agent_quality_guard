@@ -63,6 +63,26 @@ def test_needle_verify_delivery_tool_schema_completo():
     assert params["attempt_number"].get("default") == 1
 
 
+def test_agent_quality_guard_catalog_e_alias_legado():
+    """TICKET-43: catálogo expõe a tool canônica `agent_quality_guard` + alias legado.
+
+    O rebatismo mantém `needle_verify_delivery` como alias retrocompatível e
+    introduz `agent_quality_guard` com a mesma assinatura robusta.
+    """
+    tool_names = [t["function"]["name"] for t in TOOL_DEFINITIONS]
+    assert "agent_quality_guard" in tool_names, (
+        "A tool canônica agent_quality_guard deve estar no catálogo."
+    )
+    assert "needle_verify_delivery" in tool_names, (
+        "O alias legado needle_verify_delivery deve permanecer no catálogo."
+    )
+
+    canonical = get_tool_definition("agent_quality_guard")
+    params = canonical["function"]["parameters"]["properties"]
+    for field in ("workspace", "attempt_number", "pedido", "resultado"):
+        assert field in params, f"agent_quality_guard deve expor o parâmetro '{field}'."
+
+
 def test_consulta_tool_schema_completo():
     """openjev_consulta: premise + question obrigatórios, sem parâmetros de aprovação."""
     tool = get_tool_definition("openjev_consulta")

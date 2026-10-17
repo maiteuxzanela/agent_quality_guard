@@ -660,6 +660,141 @@ class NeedleVerifyDeliveryResponse(BaseModel):
 
 
 # ==============================================================================
+# Schemas Agent Quality Guard: Pipeline 100% Determinístico de Homologação
+# Camada 0: testes reais | Camada 1: Guard + toolchain nativa | Camada 2: meta-regras
+# (Laya RLCD / JEV Noul NÃO participam do caminho crítico de validação de entrega.)
+# ==============================================================================
+
+# Categorias canônicas emitidas pela bridge nativa de compiladores/linters
+# (src/orchestrator/multi_stack_runner.py, Camada 1). As duas primeiras são
+# BLOQUEANTES; `lint_warning` é alerta estrutural (telemetria, não reprova).
+NATIVE_TOOLCHAIN_BLOCKING_CATEGORIES: List[str] = [
+    "type_error",
+    "lint_error",
+]
+
+# Categorias canônicas das meta-regras universais de AST via Tree-Sitter
+# (src/memory/tree_sitter_guard.py, Camada 2). Regras de segurança/anti-mock
+# em produção são bloqueantes; as demais são alertas estruturais.
+META_RULE_BLOCKING_CATEGORIES: List[str] = [
+    "anti_mock_producao",
+    "security",
+]
+
+
+class ToolchainToolStatus(BaseModel):
+    """Telemetria de disponibilidade/skip de uma ferramenta nativa (Camada 1).
+
+    Fail-open: ferramenta ausente ou expirada em timeout NUNCA vira violação —
+    é registrada aqui para observabilidade e o pipeline segue determinístico.
+    """
+    name: str = Field(
+        ...,
+        description="Identificador da ferramenta nativa (tsc, eslint, biome, ruff, mypy, clippy, go vet, dart...).",
+    )
+    available: bool = Field(
+        default=True,
+        description="True quando o binário foi localizado no ambiente.",
+    )
+    skipped: bool = Field(
+        default=False,
+        description="True quando a execução da ferramenta foi deliberadamente pulada.",
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="Motivo do skip/indisponibilidade (ex.: binário ausente, timeout, sem arquivos alvo).",
+    )
+    duration_ms: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Tempo de execução da ferramenta em milissegundos.",
+    )
+
+
+class LinterDiagnostic(ASTViolation):
+    """Diagnóstico de compilador/linter nativo da Camada 1.
+
+    Herda o contrato canônico de ``ASTViolation`` (rule_id, category,
+    file_path, line_number, code_snippet, message, suggestion) e acrescenta
+    metadados opcionais da ferramenta de origem.
+    """
+    tool: Optional[str] = Field(
+        default=None,
+        description="Ferramenta que emitiu o diagnóstico (tsc, eslint, biome, ruff, mypy, clippy...).",
+    )
+    severity: Optional[str] = Field(
+        default=None,
+        description="Severidade nativa reportada pela ferramenta (error | warning | info).",
+    )
+
+
+class MetaRuleViolation(ASTViolation):
+    """Violação de meta-regra universal de AST via Tree-Sitter (Camada 2).
+
+    Herda o contrato de ``ASTViolation`` e acrescenta a classificação de
+    severidade da meta-regra e a linguagem analisada.
+    """
+    severity: Optional[str] = Field(
+        default=None,
+        description="Classificação da meta-regra: 'blocking' (anti-mock/segurança) ou 'warning' (estrutural).",
+    )
+    language: Optional[str] = Field(
+        default=None,
+        description="Linguagem do arquivo analisado (python, typescript, javascript, go, rust, dart...).",
+    )
+
+
+class AgentQualityGuardResponse(NeedleVerifyDeliveryResponse):
+    """Resposta canônica do quality gate ``agent_quality_guard``.
+
+    Superset 100% retrocompatível de ``NeedleVerifyDeliveryResponse``: todo
+    cliente legado que desserializa o payload antigo continua funcionando
+    (campos extras são ignorados por padrão pelo Pydantic). O pipeline é
+    100% determinístico e não carrega pesos de ML:
+
+    - Camada 0: testes reais (pytest em chunks / runner multi-stack);
+    - Camada 1: NeedleASTGuard + bridge nativa de compiladores/linters;
+    - Camada 2: meta-regras universais de AST via Tree-Sitter.
+
+    ``confirmed_defects``/``dismissed_warnings`` permanecem no schema por
+    retrocompatibilidade, porém a arbitragem Laya/Noul foi removida do
+    caminho crítico — esses buckets permanecem vazios.
+    """
+    tool_name: str = Field(
+        default="agent_quality_guard",
+        description="Nome canônico da ferramenta que produziu a resposta.",
+    )
+    # --- Camada 1: bridge nativa de compiladores/linters ---
+    layer1_toolchain_diagnostics: List[LinterDiagnostic] = Field(
+        default_factory=list,
+        description=(
+            "Diagnósticos da Camada 1 (type_error/lint_error/lint_warning) com prefixos de "
+            "rule_id nativos (TSC_/ESLINT_/RUFF_/MYPY_/CLIPPY_/GOVET_...)."
+        ),
+    )
+    toolchain_status: List[ToolchainToolStatus] = Field(
+        default_factory=list,
+        description="Telemetria de disponibilidade/skip das ferramentas nativas (fail-open).",
+    )
+    # --- Camada 2: meta-regras universais via Tree-Sitter ---
+    layer2_meta_rule_violations: List[MetaRuleViolation] = Field(
+        default_factory=list,
+        description=(
+            "Violações das meta-regras universais de AST (anti-mock em produção, floating "
+            "promises, silent catch, resource leaks, SQL/eval perigosos)."
+        ),
+    )
+
+
+class AgentQualityGuardRequest(NeedleVerifyDeliveryRequest):
+    """Requisição canônica do ``agent_quality_guard`` (alias de ``NeedleVerifyDeliveryRequest``).
+
+    Mantida como subclasse vazia para espelhar o rebatismo do lado da resposta,
+    preservando 100% de retrocompatibilidade de payload com clientes legados.
+    """
+
+
+# ==============================================================================
 # Schemas Cactus Needle 3: Busca & Recuperação Cirúrgica Relacional
 # ==============================================================================
 

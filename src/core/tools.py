@@ -112,12 +112,62 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "agent_quality_guard",
+            "description": (
+                "Homologação de entrega de código 100% DETERMINÍSTICA e sem ML. "
+                "Executa: 1º testes reais (pytest em chunks / runner multi-stack), "
+                "2º NeedleASTGuard (anti-mock em produção, SQLi, eval, segredos), "
+                "3º bridge nativa de compiladores/linters do projeto (tsc, eslint/biome, "
+                "ruff/mypy, clippy, go vet), 4º meta-regras universais de AST via Tree-Sitter "
+                "(floating promises, silent catch, resource leaks). "
+                "Circuit breaker universal de 5 tentativas: na 5ª tentativa sem aprovação "
+                "determinística, o código é liberado com ressalva (EMERGENCY_RELEASE)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_type": {
+                        "type": "string",
+                        "default": "codigo_producao",
+                        "description": "Tipo de tarefa (codigo_producao)."
+                    },
+                    "workspace": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Caminho do repositório/workspace a validar (padrão: cwd)."
+                    },
+                    "attempt_number": {
+                        "type": "integer",
+                        "default": 1,
+                        "description": (
+                            "Informativo (1 a 5). A contagem de tentativas é exclusivamente "
+                            "server-side: o valor do chamador não participa do circuit breaker."
+                        )
+                    },
+                    "pedido": {
+                        "type": "string",
+                        "description": "Descrição do pedido original (opcional para audit log)."
+                    },
+                    "resultado": {
+                        "type": "string",
+                        "description": "Descrição do resultado executado (opcional para audit log)."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "needle_verify_delivery",
             "description": (
-                "Validação de entrega de código 100% determinística. "
-                "Executa: 1º Pytest em 3-4 chunks sequenciais (ML isolado), "
-                "2º NeedleASTGuard (Camada 1: anti-mock, SQLi, eval, segredos), "
-                "3º NeedleASTScreener (Camada 2: qualidade de tipagem, docstrings, exceções). "
+                "Alias legado de agent_quality_guard (MESMA implementação e assinatura), "
+                "mantido para compatibilidade retroativa total. "
+                "Validação de entrega de código 100% determinística e sem ML. "
+                "Executa: 1º Pytest em chunks sequenciais, "
+                "2º NeedleASTGuard (anti-mock, SQLi, eval, segredos), "
+                "3º Camada 1 (compiladores/linters nativos) e "
+                "4º Camada 2 (meta-regras universais de AST via Tree-Sitter). "
                 "Circuit breaker universal de 5 tentativas: se a 5ª tentativa for atingida "
                 "sem aprovação determinística, o código é aprovado com ressalva (EMERGENCY_RELEASE)."
             ),

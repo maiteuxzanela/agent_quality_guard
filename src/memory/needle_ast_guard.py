@@ -867,3 +867,71 @@ class NeedleASTGuard:
                     )
 
         return all_violations
+
+    # ── Camada 2: Meta-Regras Universais via Tree-Sitter ─────────────────────
+
+    _TREESITTER_RULE_MAP: dict[str, str] = {
+        "PROD_MOCK": "mock_in_production",
+        "SQL_INJECTION": "sql_injection",
+        "DANGEROUS_EVAL": "dangerous_eval_exec",
+        "SECURITY_EXEC": "dangerous_eval_exec",
+        "COMMAND_INJECTION": "command_injection",
+        "SILENT_CATCH": "swallowed_exception",
+    }
+
+    _TREESITTER_CATEGORY_MAP: dict[str, str] = {
+        "anti_mock_producao": "mock_stub_em_producao",
+        "security": "seguranca",
+        "structural": "robustez_excecoes_recursos",
+    }
+
+    @classmethod
+    def scan_workspace_multilang(
+        cls,
+        workspace_dir: str,
+        audit_mode: str = "delta",
+        scope: Optional[Any] = None,
+    ) -> List[ASTViolation]:
+        """Combina o AST Python nativo com as meta-regras Tree-Sitter multi-linguagem.
+
+        A Camada 2 (``TreeSitterGuard``) cobre JS/TS/TSX/Java/Go/Rust/Ruby/PHP
+        e demais linguagens mapeadas, enquanto o AST Python permanece 100%
+        nativo (``ast``) para evitar dupla sinalização. A indisponibilidade da
+        Camada 2 nunca interrompe a varredura: é degradada graciosamente.
+
+        Exemplo:
+            >>> NeedleASTGuard.scan_workspace_multilang("/tmp/inexistente")
+            []
+        """
+        violations: List[ASTViolation] = cls.scan_workspace(
+            workspace_dir, audit_mode=audit_mode
+        )
+        try:
+            from .tree_sitter_guard import TreeSitterGuard
+        except Exception as import_err:  # pragma: no cover - fallback gracioso
+            logger.debug("Camada 2 (Tree-Sitter) indisponível: %s", import_err)
+            return violations
+
+        try:
+            multilang = TreeSitterGuard.scan_workspace(
+                workspace_dir, audit_mode=audit_mode, scope=scope
+            )
+        except Exception as scan_err:  # pragma: no cover - fallback gracioso
+            logger.warning("Varredura Tree-Sitter multi-linguagem falhou: %s", scan_err)
+            return violations
+
+        for item in multilang:
+            if str(item.file_path).endswith((".py", ".pyi")):
+                continue
+            violations.append(
+                ASTViolation(
+                    file_path=item.file_path,
+                    line_number=item.line_number,
+                    rule_id=cls._TREESITTER_RULE_MAP.get(item.rule_id, item.rule_id),
+                    category=cls._TREESITTER_CATEGORY_MAP.get(item.category, item.category),
+                    message=item.message,
+                    code_snippet=item.code_snippet,
+                    suggestion=item.suggestion,
+                )
+            )
+        return violations
