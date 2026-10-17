@@ -173,63 +173,6 @@ async def qmd_search(
     )
 
 
-# [DEPRECATED - substituído por qmd_search para unificar catálogo MCP e evitar duplicidade]
-# @app.tool(
-#     name="needle3_search",
-#     description="Busca cirurgica relacional local no codigo usando AST e grafo de dependencias (Needle 3). Economiza ate 90% de tokens.",
-# )
-async def needle3_search(
-    query: str,
-    workspace: str = "",
-    scope: str = "",
-    max_tokens: int = 1000,
-    depth: int = 2,
-) -> dict:
-    """Executa busca relacional com Cactus Needle 3."""
-    target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
-    needle = LocalNeedleEngine(workspace_root=target_workspace)
-    scope_list = [s.strip() for s in scope.split(",") if s.strip()] if scope else None
-
-    q = Needle3Query(
-        query=query,
-        scope=scope_list,
-        max_tokens=max_tokens,
-        relational_depth=depth,
-        preserve_relational_integrity=True,
-    )
-
-    t0 = time.perf_counter()
-    resp = await needle.search(q)
-    lat_ms = (time.perf_counter() - t0) * 1000.0
-
-    snippets_data = []
-    for s in resp.snippets:
-        snippets_data.append({
-            "file": s.file_path,
-            "lines": f"{s.start_line}-{s.end_line}",
-            "relevance": round(s.relevance_score, 3),
-            "relations": s.relations,
-            "content": s.content,
-        })
-
-    result = {
-        "status": "success",
-        "latency_ms": round(lat_ms, 2),
-        "total_tokens": resp.total_tokens,
-        "token_savings_pct": resp.token_savings_pct,
-        "snippets_count": len(resp.snippets),
-        "snippets": snippets_data,
-    }
-    if needle.candidates_truncated:
-        result["candidates_truncated"] = True
-        result["candidates_found"] = needle.candidates_found
-        result["warning"] = (
-            f"Teto de candidatos atingido ({needle.candidates_found}). "
-            "Restringa `scope` para busca cirúrgica neste workspace."
-        )
-    return result
-
-
 @app.tool(
     name="openjev_choice",
     description=(
