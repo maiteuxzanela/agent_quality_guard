@@ -1037,7 +1037,7 @@ class TreeSitterGuard:
             if node_type in ("import_statement", "import_from_statement"):
                 text = cls._node_text(node, source)
                 if re.search(
-                    r"\b(?:unittest\.mock|mock|pytest|faker|responses|httpretty|freezegun)\b",
+                    r"(?<![.\w])(?:unittest\.mock|mock|pytest|faker|responses|httpretty|freezegun)\b",
                     text,
                 ):
                     cls._emit(
@@ -1176,10 +1176,14 @@ class TreeSitterGuard:
                 "python",
                 message=f"Corrotina '{name}()' chamada sem await (promessa órfã).",
             )
-        if name in EVAL_NAMES or base == "eval":
+        # Só a função global ``eval``/``exec`` (ou ``builtins.eval``/``exec``) é
+        # perigosa. Chamada de MÉTODO em objeto/instância — como
+        # ``self.model.eval()`` (modo de inferência de modelos de ML) ou
+        # ``expr.eval()`` — não é eval dinâmico e não deve ser bloqueada.
+        if name in EVAL_NAMES:
             cls._emit(violations, "DANGEROUS_EVAL", line, lines, file_path, "python")
             return
-        if name in EXEC_NAMES or base == "exec":
+        if name in EXEC_NAMES:
             cls._emit(violations, "DANGEROUS_EVAL", line, lines, file_path, "python")
             return
         if base in MOCK_SYMBOLS or name.startswith(("mock.", "unittest.mock.")):
@@ -1858,7 +1862,10 @@ class TreeSitterGuard:
                 call_name = name_match.group(1) if name_match else ""
                 base = call_name.rsplit(".", 1)[-1].rsplit(":", 1)[-1]
 
-                if base in {"eval", "exec"}:
+                # Restringe ao chamável global ``eval``/``exec`` (ou nomes
+                # qualificados conhecidos). Chamadas de método em objeto
+                # (``obj.eval()``) não são eval dinâmico.
+                if call_name in EVAL_NAMES or call_name in EXEC_NAMES:
                     cls._emit(
                         violations,
                         "DANGEROUS_EVAL",

@@ -118,6 +118,29 @@ def test_prod_mock_is_exempt_in_tests(path: str):
     assert violations == [], f"caminho de teste {path} não pode gerar PROD_MOCK"
 
 
+def test_fastapi_responses_import_is_not_prod_mock():
+    """``from fastapi.responses import ...`` não é import de framework de mock.
+
+    Regressão: a palavra ``responses`` precedida por ponto pertence a um módulo
+    legítimo (``fastapi.responses``) e não pode ser confundida com a biblioteca
+    de mock ``responses``.
+    """
+    violations = TreeSitterGuard.scan_content(
+        "from fastapi.responses import HTMLResponse, JSONResponse\n", "src/a.py"
+    )
+    assert "PROD_MOCK" not in _rules(violations)
+
+
+def test_bare_mock_library_imports_still_blocked():
+    for source in (
+        "import responses\n",
+        "from unittest.mock import MagicMock\n",
+        "import mock\n",
+    ):
+        violations = TreeSitterGuard.scan_content(source, "src/a.py")
+        assert "PROD_MOCK" in _rules(violations), source
+
+
 def test_is_production_path_and_test_file_classification():
     assert TreeSitterGuard.is_production_path("src/service.py") is True
     assert TreeSitterGuard.is_production_path("scripts/tool.py") is False
@@ -288,6 +311,60 @@ def test_dangerous_eval_and_exec_blocking(content: str, path: str):
     assert _first(violations, "DANGEROUS_EVAL").severity == "blocking"
 
 
+def test_python_method_eval_is_not_dangerous_eval():
+    """``self.model.eval()``/``model.eval()`` (PyTorch) não são eval dinâmico."""
+    for source in (
+        "def f(self):\n    self.model.eval()\n",
+        "def f(model):\n    model.eval()\n",
+        "def f(expr):\n    return expr.eval()\n",
+    ):
+        violations = TreeSitterGuard.scan_content(source, "src/a.py")
+        assert "DANGEROUS_EVAL" not in _rules(violations), source
+
+
+def test_python_global_eval_and_exec_are_still_blocking():
+    for source in (
+        "def f(x):\n    return eval(x)\n",
+        'def f():\n    return eval("1+1")\n',
+        "def f(x):\n    return builtins.eval(x)\n",
+        "def f(src):\n    exec(src)\n",
+        "def f(src):\n    return builtins.exec(src)\n",
+    ):
+        violations = TreeSitterGuard.scan_content(source, "src/a.py")
+        assert "DANGEROUS_EVAL" in _rules(violations), source
+
+
+@pytest.mark.parametrize(
+    "path,source",
+    [
+        ("src/a.java", "class A { void f(Model m){ m.eval(); } }\n"),
+        ("src/a.go", "package main\nfunc f(m Model){ m.eval() }\n"),
+        ("src/a.rs", "fn f(m: Model) { m.eval(); }\n"),
+    ],
+)
+def test_generic_language_method_eval_is_not_dangerous_eval(path: str, source: str):
+    """O loop genérico só bloqueia o chamável global ``eval``/``exec``.
+
+    Regressão: ``base in {'eval', 'exec'}`` bloqueava qualquer ``obj.eval()``
+    em Java/Go/Rust, embora seja um método de objeto, não eval dinâmico.
+    """
+    violations = TreeSitterGuard.scan_content(source, path)
+    assert "DANGEROUS_EVAL" not in _rules(violations), source
+
+
+@pytest.mark.parametrize(
+    "path,source",
+    [
+        ("src/a.java", "class A { void f(x){ eval(x); } }\n"),
+        ("src/a.go", "package main\nfunc f(x T){ eval(x) }\n"),
+        ("src/a.rs", "fn f(x: T) { eval(x); }\n"),
+    ],
+)
+def test_generic_language_global_eval_is_still_blocking(path: str, source: str):
+    violations = TreeSitterGuard.scan_content(source, path)
+    assert "DANGEROUS_EVAL" in _rules(violations), source
+
+
 def test_new_function_is_security_exec_blocking():
     violations = TreeSitterGuard.scan_content(
         "function f(body){\n  return new Function(body);\n}\n", "src/a.js"
@@ -393,7 +470,27 @@ def test_suppression_does_not_hide_other_rules():
 # Fallback lexical / gramática ausente
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_c_sharp_grammar_absent_falls_back_to_lexical():
+def _force_missing_c_sharp(monkeypatch) -> None:
+    """Torna a gramática de C# indisponível de forma determinística.
+
+    O ``tree_sitter_language_pack`` pode manter a gramática de C# em cache no
+    disco da máquina; aqui patchamos o seam ``get_parser`` para devolver ``None``
+    apenas para ``c_sharp``, sem depender do cache real do host e sem tocar nas
+    demais linguagens.
+    """
+    original_get_parser = TreeSitterGuard.get_parser
+
+    @classmethod
+    def _no_c_sharp(cls, language):
+        if language == "c_sharp":
+            return None
+        return original_get_parser(language)
+
+    monkeypatch.setattr(TreeSitterGuard, "get_parser", _no_c_sharp)
+
+
+def test_c_sharp_grammar_absent_falls_back_to_lexical(monkeypatch):
+    _force_missing_c_sharp(monkeypatch)
     assert TreeSitterGuard.is_language_available("c_sharp") is False
     assert TreeSitterGuard.language_for_file("src/a.cs") == "c_sharp"
     violations = TreeSitterGuard.scan_content(
@@ -474,7 +571,8 @@ def test_scan_workspace_report_scope_limits_files(tmp_path: Path):
     assert {v["file_path"] for v in scoped["blocking"]} == {"src/a.py"}
 
 
-def test_scan_workspace_report_engine_fallback_when_no_grammar(tmp_path: Path):
+def test_scan_workspace_report_engine_fallback_when_no_grammar(monkeypatch, tmp_path: Path):
+    _force_missing_c_sharp(monkeypatch)
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.cs").write_text(
         "class A { void F(string x){ var y = eval(x); } }\n", encoding="utf-8"
@@ -518,6 +616,45 @@ def test_scan_workspace_delta_falls_back_to_all_files_without_git(tmp_path: Path
         "delta em workspace sem Git ignorou todos os arquivos (sem fallback): "
         f"full={full} delta={delta}"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ausência de silent catch no runner multi-stack (regressão do escape amplo)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_multi_stack_runner_has_no_silent_catch():
+    """``multi_stack_runner.py`` não pode conter catch/except silencioso.
+
+    Regressão: ``_tree_sitter_relpath`` engolia qualquer exceção com
+    ``except Exception: pass``. Escaneamos o arquivo REAL com o próprio guard
+    (sem mocks, conteúdo lido do disco) e exigimos zero ``SILENT_CATCH``.
+    """
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "orchestrator"
+        / "multi_stack_runner.py"
+    )
+    assert source_path.is_file(), f"arquivo ausente: {source_path}"
+    text = source_path.read_text(encoding="utf-8")
+    violations = TreeSitterGuard.scan_content(
+        text, "src/orchestrator/multi_stack_runner.py"
+    )
+    silent = [v for v in violations if v.rule_id == "SILENT_CATCH"]
+    assert silent == [], [(v.line_number, v.message) for v in silent]
+
+
+def test_silent_catch_detector_flags_the_original_escape():
+    """Sensibilidade: o detector continua pegando o padrão original aspirado.
+
+    Sem esta âncora, o teste acima poderia passar por vacuidade caso a regra
+    ``SILENT_CATCH`` deixasse de reconhecer ``except Exception: pass``.
+    """
+    violations = TreeSitterGuard.scan_content(
+        "def f():\n    try:\n        go()\n    except Exception:\n        pass\n",
+        "src/a.py",
+    )
+    assert "SILENT_CATCH" in _rules(violations)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

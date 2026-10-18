@@ -2099,8 +2099,13 @@ class MultiStackRunner:
         try:
             if path.is_absolute():
                 return str(path.resolve().relative_to(workspace_path.resolve()))
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            logger.debug(
+                "Falha ao relativizar caminho %s contra workspace %s: %s",
+                file_path,
+                workspace_path,
+                exc,
+            )
         return str(file_path)
 
     @classmethod
