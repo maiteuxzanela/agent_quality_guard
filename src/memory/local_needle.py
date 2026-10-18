@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core.schemas import Needle3Query, Needle3Response, Needle3Snippet
+from .tree_sitter_guard import TreeSitterGuard
 
 logger = logging.getLogger("jev.needle.local")
 
@@ -25,6 +26,92 @@ logger = logging.getLogger("jev.needle.local")
 # Ao atingir o teto, o walk para e a resposta indica truncamento — o chamador
 # deve restringir `scope` em vez de varrer a árvore inteira.
 MAX_CANDIDATE_FILES = 800
+
+# TICKET-HARNESS-41 — extração universal multi-linguagem via Tree-Sitter.
+# Nomes canônicos do tree_sitter_language_pack (ex.: "csharp", não "c_sharp").
+# Este mapa é EXCLUSIVO do extrator: o TreeSitterGuard mantém seu próprio
+# LANGUAGE_BY_LEGACY (".cs" -> "c_sharp", indisponível) sem alteração.
+NEEDLE_LANGUAGE_BY_EXTENSION: Dict[str, str] = {
+    ".py": "python",
+    ".pyi": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".mts": "typescript",
+    ".cts": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".dart": "dart",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".java": "java",
+    ".cs": "csharp",
+}
+
+# Extensões elegíveis para o caminho Tree-Sitter (fallback por família abaixo).
+TS_EXTRACT_EXTENSIONS = frozenset(NEEDLE_LANGUAGE_BY_EXTENSION)
+# Fallbacks graciosos quando o caminho Tree-Sitter falha/retorna vazio:
+# Python -> stdlib ast; JS/TS -> regex legada; demais -> chunks léxicos.
+PY_FALLBACK_EXTENSIONS = frozenset({".py", ".pyi"})
+JS_FALLBACK_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
+# Nomes de idioma do pack para a família JS/TS (enriquecimento hook/API).
+_JS_FAMILY_LANGUAGES = frozenset({"javascript", "typescript", "tsx"})
+
+# Classificação de nós Tree-Sitter -> tipo relacional do Needle 3.
+_TS_KIND_BY_NODE_TYPE: Dict[str, str] = {
+    # Python (paridade de nível superior com o caminho stdlib ast)
+    "class_definition": "class",
+    "function_definition": "function",
+    # JavaScript / TypeScript / TSX
+    "class_declaration": "class",
+    "abstract_class_declaration": "class",
+    "function_declaration": "function",
+    "generator_function_declaration": "function",
+    "method_definition": "method",
+    "interface_declaration": "interface",
+    # Go
+    "method_declaration": "method",
+    # Rust
+    "struct_item": "struct",
+    "trait_item": "interface",
+    "function_item": "function",
+    # Dart
+    "function_signature": "function",
+    "method_signature": "method",
+    # Java
+    "constructor_declaration": "method",
+    "enum_declaration": "class",
+    # Kotlin
+    "object_declaration": "class",
+    # C#
+    "struct_declaration": "struct",
+}
+
+# Contenção de tipo (class/interface/struct/impl/trait) para promover
+# funções descendentes a `type:method` no walk profundo.
+_TS_CONTAINER_KINDS = frozenset({"class", "interface", "struct", "impl"})
+
+# Teto de blocos/nós por arquivo (defesa de latência em arquivos patológicos).
+MAX_TS_BLOCKS_PER_FILE = 300
+MAX_TS_VISITED_NODES = 50_000
+
+# TICKET-HARNESS-41 — gate do caminho Tree-Sitter (LEITURA LAZY, por-chamada).
+# ⚠️ DESLIGADO POR PADRÃO: o binding C instalado (tree-sitter 0.26.0 +
+# tree_sitter_language_pack 1.22.1) apresenta use-after-free intermitente
+# (segfault não-catchable) ao fazer walk profundo de arquivos REAIS — medido
+# 13/15 crashes em src/memory/js_ast_guard.js e ~50% em src/core/schemas.py,
+# tanto via `.children` quanto via TreeCursor, independente de GC/parser.
+# Ative com NEEDLE_TS_EXTRACT=1 quando uma versão corrigida do binding for
+# instalada. A flag é lida POR CHAMADA (_ts_extract_enabled), nunca em
+# import-time, para permitir testes A/B e paridade FastAPI/MCP.
+
+
+def _ts_extract_enabled() -> bool:
+    """Gate lazy do caminho Tree-Sitter (lê a env a cada chamada, não no import)."""
+    return os.environ.get("NEEDLE_TS_EXTRACT", "0") == "1"
 
 
 class LocalNeedleEngine:
@@ -181,6 +268,341 @@ class LocalNeedleEngine:
             logger.debug(f"Falha ao extrair blocos JS de {file_path}: {e}")
         return blocks
 
+    # ------------------------------------------------------------------
+    # TICKET-HARNESS-41 — extração universal Tree-Sitter (Cactus Needle 3)
+    # ------------------------------------------------------------------
+
+    def _ts_language_for(self, file_path: Path) -> Optional[str]:
+        """Resolve o nome canônico do grammar pack para a extensão do arquivo."""
+        return NEEDLE_LANGUAGE_BY_EXTENSION.get(file_path.suffix.lower())
+
+    def _ts_node_name(self, node: Any) -> Optional[str]:
+        """Extrai o nome de um nó de declaração (campo `name` ou fallback por tipo)."""
+        name_node = node.child_by_field_name("name")
+        if name_node is not None and name_node.text:
+            text = name_node.text.decode("utf-8", errors="replace").strip()
+            if text:
+                return text
+        # Dart: method_signature/factory envolvem function_signature com o nome.
+        for child in node.children:
+            if child.type in (
+                "function_signature",
+                "constructor_signature",
+                "factory_constructor_signature",
+                "getter_signature",
+                "setter_signature",
+            ):
+                nested = self._ts_node_name(child)
+                if nested:
+                    return nested
+        # Fallback Kotlin/C-family: primeiro identificador direto nomeado.
+        for child in node.children:
+            if child.type in (
+                "type_identifier",
+                "simple_identifier",
+                "field_identifier",
+                "identifier",
+            ) and child.is_named:
+                text = child.text.decode("utf-8", errors="replace").strip()
+                if text:
+                    return text
+        return None
+
+    def _ts_block_kind(self, node: Any, in_type_container: bool, language: str) -> Optional[str]:
+        """Classifica um nó como bloco Needle 3 (class/function/interface/struct/method)."""
+        node_type = node.type
+        # JS/TS: const f = () => ... — só o declarador com valor função vira bloco.
+        if node_type == "variable_declarator":
+            value = node.child_by_field_name("value")
+            if value is not None and value.type in (
+                "arrow_function",
+                "function_expression",
+                "generator_function",
+            ):
+                return "method" if in_type_container else "function"
+            return None
+        # Go: type X struct {...} / type X interface {...} — o type_spec decide.
+        if node_type == "type_spec":
+            type_node = node.child_by_field_name("type")
+            if type_node is not None:
+                if type_node.type == "struct_type":
+                    return "struct"
+                if type_node.type == "interface_type":
+                    return "interface"
+            return None
+        kind = _TS_KIND_BY_NODE_TYPE.get(node_type)
+        if kind is None:
+            return None
+        # Função dentro de escopo de tipo vira método (paridade Go/Rust/Dart/Java/Kotlin/C#).
+        if kind == "function" and in_type_container:
+            return "method"
+        # Kotlin: interface parseia como class_declaration; o keyword decide.
+        if node_type == "class_declaration" and language == "kotlin":
+            first = node.children[0] if node.children else None
+            if first is not None and not first.is_named and first.text == b"interface":
+                return "interface"
+        return kind
+
+    def _ts_class_bases(self, node: Any, language: str) -> List[str]:
+        """Bases/superclasse de um nó de classe (paridade com ast.Name do caminho stdlib)."""
+        # Python: campo `superclasses` (argument_list); só identifiers diretos
+        # (KeywordArgument fica aninhado — parity exata com `isinstance(b, ast.Name)`).
+        sup = node.child_by_field_name("superclasses")
+        if sup is not None:
+            return [
+                c.text.decode("utf-8", errors="replace")
+                for c in sup.children
+                if c.type == "identifier" and c.is_named
+            ]
+        # JS/TS: campo `superclass`.
+        sup = node.child_by_field_name("superclass")
+        if sup is not None and sup.text:
+            text = sup.text.decode("utf-8", errors="replace").strip()
+            return [text] if text else []
+        # Go: embedded fields diretos em struct/interface.
+        if language == "go":
+            type_node = node.child_by_field_name("type")
+            if type_node is not None and type_node.type in ("struct_type", "interface_type"):
+                return [
+                    c.text.decode("utf-8", errors="replace")
+                    for c in type_node.children
+                    if c.type == "type_identifier" and c.is_named
+                ]
+        return []
+
+    def _ts_callees(self, node: Any) -> List[str]:
+        """Callees identifier-only sob o nó (paridade com ast.Call+ast.Name, ordenado)."""
+        callees: Set[str] = set()
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if current.type in ("call", "call_expression", "method_invocation"):
+                fn = current.child_by_field_name("function") or current.child_by_field_name("name")
+                if fn is not None and fn.type in ("identifier", "type_identifier") and fn.text:
+                    callees.add(fn.text.decode("utf-8", errors="replace"))
+            stack.extend(current.children)
+        return sorted(callees)
+
+    def _ts_build_block(
+        self,
+        node: Any,
+        span_node: Any,
+        kind: str,
+        file_path: Path,
+        rel_path: str,
+        lines: List[str],
+        language: str,
+        max_content_lines: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        """Monta o dict de bloco no MESMO schema do caminho stdlib (sem mutar contrato)."""
+        name = self._ts_node_name(node)
+        if not name:
+            return None
+        # Dart: assinatura sem corpo — o corpo é o sibling `function_body`.
+        end_point = node.end_point
+        if language == "dart":
+            sibling = node.next_sibling
+            if sibling is not None and sibling.type.endswith("function_body") and sibling.end_point:
+                end_point = sibling.end_point
+        start_line = span_node.start_point.row + 1
+        # end_point é 1 byte após o último byte: col>0 => última linha = row+1.
+        end_line = end_point.row + (1 if end_point.column > 0 else 0)
+        if end_line < start_line:
+            end_line = start_line
+        block_lines = lines[start_line - 1 : end_line]
+        if max_content_lines is not None and len(block_lines) > max_content_lines:
+            block_lines = block_lines[:max_content_lines]
+            end_line = start_line + len(block_lines) - 1
+        content = "\n".join(block_lines)
+        if not content.strip():
+            return None
+
+        relations: List[str] = []
+        if kind == "class":
+            bases = self._ts_class_bases(node, language)
+            relations.append(f"type:class | name:{name} | bases:{','.join(bases)}")
+        elif kind == "function":
+            relations.append(f"type:function | name:{name}")
+        else:
+            relations.append(f"type:{kind} | name:{name}")
+
+        callees = self._ts_callees(node)
+        if callees:
+            relations.append(f"calls:{','.join(callees[:5])}")
+
+        # Enriquecimento de hooks/API preservado do caminho regex JS legado.
+        if language in _JS_FAMILY_LANGUAGES:
+            if "useEffect" in content:
+                relations.append("hook:useEffect")
+            if "useState" in content:
+                relations.append("hook:useState")
+            if "fetch" in content or "api" in content.lower():
+                relations.append("has_api_call")
+
+        return {
+            "file_path": rel_path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "content": content,
+            "relations": relations,
+            "name": name,
+        }
+
+    def _extract_ts_blocks(self, file_path: Path) -> List[Dict[str, Any]]:
+        """Extração universal multi-linguagem via Tree-Sitter (Cactus Needle 3).
+
+        Suporta Python, JS/JSX/TS/TSX, Go, Rust, Dart, Java, Kotlin e C# com os
+        mesmos identificadores relacionais do caminho stdlib (`type:class`,
+        `type:function`, `bases:`, `calls:`). Python mantém paridade estrita de
+        nível superior (sem métodos avulsos) com `_extract_ast_blocks`.
+        Retorna [] em qualquer falha (gramática ausente, parse vazio, I/O) para
+        que `_extract_blocks_for_file` degrade graciosamente sem exceção.
+        """
+        try:
+            language = self._ts_language_for(file_path)
+            if language is None:
+                return []
+            parser = TreeSitterGuard.get_parser(language)
+            if parser is None:
+                return []
+            raw = file_path.read_bytes()
+            tree = parser.parse(raw)
+            if tree is None or tree.root_node is None:
+                return []
+            lines = raw.decode("utf-8", errors="replace").splitlines()
+            rel_path = str(file_path.relative_to(self.workspace_root))
+            blocks: List[Dict[str, Any]] = []
+
+            if language == "python":
+                # Paridade com ast.iter_child_nodes(tree): só nível de módulo,
+                # com unwrap de decorated_definition para incluir decorators.
+                for node in tree.root_node.children:
+                    target = node
+                    span = node
+                    if node.type == "decorated_definition":
+                        target = next(
+                            (
+                                c
+                                for c in node.children
+                                if c.type in ("class_definition", "function_definition")
+                            ),
+                            None,
+                        )
+                        if target is None:
+                            continue
+                    elif node.type not in ("class_definition", "function_definition"):
+                        continue
+                    # Literal inline (sem variável `kind`): evita que mypy
+                    # herde "str" desta branch e reprove a reatribuição
+                    # `str | None` do walk profundo (linha ~521).
+                    blk = self._ts_build_block(
+                        target,
+                        span,
+                        "class" if target.type == "class_definition" else "function",
+                        file_path,
+                        rel_path,
+                        lines,
+                        language,
+                        None,
+                    )
+                    if blk is not None:
+                        blocks.append(blk)
+                return blocks
+
+            # Walk profundo (demais linguagens): métodos/arrow-functions aninhados
+            # são blocos próprios; containers de tipo promovem função -> method.
+            max_content_lines = 120
+            seen: Set[Tuple[str, int]] = set()
+            stack: List[Tuple[Any, bool]] = [(tree.root_node, False)]
+            visited = 0
+            while stack:
+                node, in_type = stack.pop()
+                visited += 1
+                if visited > MAX_TS_VISITED_NODES:
+                    logger.debug(
+                        "Needle3: teto de nós Tree-Sitter atingido em %s — walk truncado.",
+                        rel_path,
+                    )
+                    break
+                container = in_type
+                kind = self._ts_block_kind(node, in_type, language)
+                if kind is not None:
+                    blk = self._ts_build_block(
+                        node,
+                        node,
+                        kind,
+                        file_path,
+                        rel_path,
+                        lines,
+                        language,
+                        max_content_lines,
+                    )
+                    if blk is not None and (blk["name"], blk["start_line"]) not in seen:
+                        seen.add((blk["name"], blk["start_line"]))
+                        blocks.append(blk)
+                        if len(blocks) >= MAX_TS_BLOCKS_PER_FILE:
+                            break
+                    if kind in _TS_CONTAINER_KINDS:
+                        container = True
+                    elif kind in ("function", "method"):
+                        # Função aninhada dentro de função volta a ser função.
+                        container = False
+                if node.type == "impl_item":
+                    # impl Rust não vira bloco (evita duplicar o struct), só escopo.
+                    container = True
+                for child in reversed(node.children):
+                    stack.append((child, container))
+            return blocks
+        except Exception as e:
+            logger.debug(f"Tree-Sitter indisponível para {file_path}: {e}")
+            return []
+
+    def _lexical_blocks(self, file_path: Path) -> List[Dict[str, Any]]:
+        """Fallback léxico: quebra arquivos sem AST em chunks de 50 linhas."""
+        blocks: List[Dict[str, Any]] = []
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+            lines = content.splitlines()
+            rel_path = str(file_path.relative_to(self.workspace_root))
+            chunk_size = 50
+            for i in range(0, len(lines), chunk_size):
+                chunk_lines = lines[i : i + chunk_size]
+                blocks.append({
+                    "file_path": rel_path,
+                    "start_line": i + 1,
+                    "end_line": min(i + chunk_size, len(lines)),
+                    "content": "\n".join(chunk_lines),
+                    "relations": [f"file:{file_path.name}"],
+                    "name": file_path.name,
+                })
+        except Exception as e:
+            logger.debug(f"Falha no fallback léxico de {file_path}: {e}")
+        return blocks
+
+    def _extract_blocks_for_file(self, file_path: Path) -> List[Dict[str, Any]]:
+        """Despacha a extração com fallback gracioso por família (sem exceção).
+
+        Prioridade por família:
+        - Python (.py/.pyi): stdlib `ast` (memory-safe, primeira classe). NUNCA
+          Tree-Sitter — ver _ts_extract_enabled() (bug de memória no binding C).
+        - JS/TS/TSX: regex legada `_extract_js_blocks` (memory-safe) enquanto o
+          gate TS estiver desligado; Tree-Sitter quando NEEDLE_TS_EXTRACT=1.
+        - Go/Rust/Dart/Java/Kotlin/C#: Tree-Sitter quando o gate está ligado;
+          chunks léxicos quando desligado (sem alternativa stdlib).
+        - Fallback final: chunks léxicos de 50 linhas.
+        """
+        suffix = file_path.suffix.lower()
+        # Python: sempre stdlib ast (ver _ts_extract_enabled() — bug no binding C).
+        if suffix in PY_FALLBACK_EXTENSIONS:
+            return self._extract_ast_blocks(file_path)
+        if _ts_extract_enabled() and suffix in TS_EXTRACT_EXTENSIONS:
+            blocks = self._extract_ts_blocks(file_path)
+            if blocks:
+                return blocks
+        if suffix in JS_FALLBACK_EXTENSIONS:
+            return self._extract_js_blocks(file_path)
+        return self._lexical_blocks(file_path)
+
     def _find_candidate_files(self, scope: Optional[List[str]] = None) -> List[Path]:
         """Localiza arquivos relevantes no escopo do projeto (com teto MAX_CANDIDATE_FILES)."""
         candidate_paths: List[Path] = []
@@ -192,10 +614,12 @@ class LocalNeedleEngine:
             ".pytest_cache", ".expo", "coverage", "android",
             "dist", "build", ".next", "out", "target", ".cache",
             ".mypy_cache", ".ruff_cache", ".tox", ".turbo",
+            "vendor", "third_party",
         }
         allowed_extensions = (
-            ".py", ".js", ".jsx", ".ts", ".tsx", ".rules",
-            ".md", ".json", ".yaml", ".yml", ".toml",
+            ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts",
+            ".go", ".rs", ".dart", ".kt", ".kts", ".java", ".cs",
+            ".rules", ".md", ".json", ".yaml", ".yml", ".toml",
         )
 
         for tdir in target_dirs:
@@ -237,29 +661,7 @@ class LocalNeedleEngine:
 
         all_blocks: List[Dict[str, Any]] = []
         for f in files:
-            if f.suffix == ".py":
-                all_blocks.extend(self._extract_ast_blocks(f))
-            elif f.suffix in (".js", ".jsx", ".ts", ".tsx"):
-                all_blocks.extend(self._extract_js_blocks(f))
-            else:
-                try:
-                    content = f.read_text(encoding="utf-8", errors="replace")
-                    lines = content.splitlines()
-                    rel_path = str(f.relative_to(self.workspace_root))
-                    # Quebra arquivos não-python em chunks lógicos
-                    chunk_size = 50
-                    for i in range(0, len(lines), chunk_size):
-                        chunk_lines = lines[i : i + chunk_size]
-                        all_blocks.append({
-                            "file_path": rel_path,
-                            "start_line": i + 1,
-                            "end_line": min(i + chunk_size, len(lines)),
-                            "content": "\n".join(chunk_lines),
-                            "relations": [f"file:{f.name}"],
-                            "name": f.name,
-                        })
-                except Exception:
-                    pass
+            all_blocks.extend(self._extract_blocks_for_file(f))
 
         # Pontua relevância dos blocos
         scored_blocks: List[Tuple[float, Dict[str, Any]]] = []
