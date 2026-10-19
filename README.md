@@ -1,11 +1,21 @@
-# Agent Quality Guard
+# 🛡️ Agent Quality Guard
 
-[![MCP Standard](https://img.shields.io/badge/MCP-Standard%20stdio-blue.svg)](https://modelcontextprotocol.io/)
-[![100% Deterministic](https://img.shields.io/badge/Validation-100%25%20Deterministic-brightgreen.svg)]()
-[![Zero ML Overhead](https://img.shields.io/badge/Inference-Zero%20GPU%20%2F%20Zero%20ML-success.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![npm version](https://img.shields.io/npm/v/agent-quality-guard.svg?color=cb3837&style=flat-square)](https://www.npmjs.com/package/agent-quality-guard)
+[![npm downloads](https://img.shields.io/npm/dm/agent-quality-guard.svg?style=flat-square)](https://www.npmjs.com/package/agent-quality-guard)
+[![MCP Standard](https://img.shields.io/badge/MCP-Standard%20stdio-blue.svg?style=flat-square)](https://modelcontextprotocol.io/)
+[![100% Deterministic](https://img.shields.io/badge/Validation-100%25%20Deterministic-brightgreen.svg?style=flat-square)]()
+[![Zero ML Overhead](https://img.shields.io/badge/Inference-Zero%20GPU%20%2F%20Zero%20ML-success.svg?style=flat-square)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](./LICENSE)
 
 **Agent Quality Guard** is a 100% deterministic, zero-ML code verification engine and Model Context Protocol (MCP) server designed to safeguard autonomous AI agent workflows (Claude Desktop, Cursor, OpenCode, Codex).
+
+```bash
+# Run universally via NPX (Node/Bun):
+npx -y agent-quality-guard
+
+# Or add to Claude Desktop / Cursor / OpenCode MCP config:
+# { "command": "npx", "args": ["-y", "agent-quality-guard"] }
+```
 
 It prevents the most common failure modes of AI code generation: **over-mocking**, **fabricated tests**, **type contract breakage**, **silent error swallows**, and **security vulnerabilities** before code reaches production or remote repositories.
 

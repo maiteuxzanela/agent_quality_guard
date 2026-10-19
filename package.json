@@ -1,0 +1,44 @@
+{
+  "name": "agent-quality-guard",
+  "version": "0.1.0",
+  "description": "Deterministic AST Quality Gate & multi-stack code verification MCP server (100% ML-free)",
+  "type": "module",
+  "bin": {
+    "agent-quality-guard": "./bin/agent-quality-guard.js",
+    "agent_quality_guard": "./bin/agent-quality-guard.js"
+  },
+  "scripts": {
+    "test": "pytest tests/test_agent_quality_guard.py tests/test_tree_sitter_guard.py tests/test_needle_ast_guard.py",
+    "start": "node bin/agent-quality-guard.js"
+  },
+  "keywords": [
+    "mcp",
+    "quality-gate",
+    "agent-quality-guard",
+    "anti-mock",
+    "ast-guard",
+    "tree-sitter",
+    "security-scan",
+    "opencode",
+    "cursor",
+    "claude-desktop"
+  ],
+  "author": "Maiteux Zanela",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maiteuxzanela/agent_quality_guard.git"
+  },
+  "homepage": "https://github.com/maiteuxzanela/agent_quality_guard#readme",
+  "bugs": {
+    "url": "https://github.com/maiteuxzanela/agent_quality_guard/issues"
+  },
+  "files": [
+    "bin",
+    "src",
+    "configs",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE"
+  ]
+}
