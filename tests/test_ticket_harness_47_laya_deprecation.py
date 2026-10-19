@@ -327,3 +327,101 @@ def test_agent_quality_guard_is_functional_without_laya(monkeypatch, tmp_path: P
     )
     assert with_engine.is_error is False
     assert json.loads(with_engine.content[0].text)["status"] == payload["status"]
+
+
+# ---------------------------------------------------------------------------
+# 4. Catálogo de tools e CLI: nenhuma superfície Laya/ML remanescente
+# ---------------------------------------------------------------------------
+RETIRED_CATALOG_NAMES = (
+    "openjev_noul",
+    "openjev_choice",
+    "openjev_consulta",
+    "openjev_score_and_diagnose",
+    "needle3_search",
+)
+
+
+def _collect_imports(tree: ast.AST) -> List[str]:
+    imported: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module)
+    return imported
+
+
+def test_tool_catalog_mirrors_the_active_deterministic_surface():
+    from src.core.tools import TOOL_DEFINITIONS, get_tool_definition
+
+    names = [tool["function"]["name"] for tool in TOOL_DEFINITIONS]
+    assert set(names) == CANONICAL_TOOLS
+    assert len(names) == len(set(names)), f"Catálogo com duplicatas: {names}"
+
+    for retired in RETIRED_CATALOG_NAMES:
+        with pytest.raises(KeyError):
+            get_tool_definition(retired)
+
+    # Aliases legados expõem o MESMO schema, sem aliasing mutável (deepcopy).
+    canonical_search = get_tool_definition("cirurgic_search")["function"]["parameters"]
+    alias_search = get_tool_definition("qmd_search")["function"]["parameters"]
+    assert canonical_search == alias_search
+    assert canonical_search is not alias_search
+
+    canonical_guard = get_tool_definition("agent_quality_guard")["function"]["parameters"]
+    alias_guard = get_tool_definition("needle_verify_delivery")["function"]["parameters"]
+    assert canonical_guard == alias_guard
+    assert canonical_guard is not alias_guard
+
+
+def test_cli_exposes_only_needle_and_rejects_retired_subcommands():
+    from src.cli import build_parser
+
+    parser = build_parser()
+    parsed = parser.parse_args(["needle", "soma_total"])
+    assert parsed.command == "needle"
+    assert parsed.query == "soma_total"
+
+    for retired in ("choice", "noul", "score"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([retired, "x"])
+
+
+def test_cli_import_does_not_load_ml_modules():
+    code = (
+        "import sys\n"
+        "import src.cli\n"
+        "bad = sorted(\n"
+        "    m for m in sys.modules\n"
+        "    if m == 'torch' or m.startswith('torch.')\n"
+        "    or m in {'transformers', 'laya', 'src.decision.engine'}\n"
+        "    or m.startswith('src.decision.engine.')\n"
+        ")\n"
+        "print('BAD=' + repr(bad))\n"
+        "raise SystemExit(0 if not bad else 1)\n"
+    )
+    proc = _run_python(code, timeout=120)
+    assert proc.returncode == 0, proc.stdout + proc.stderr[-1500:]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        PROJECT_DIR / "src" / "mcp_server.py",
+        PROJECT_DIR / "src" / "core" / "tools.py",
+        PROJECT_DIR / "src" / "cli.py",
+    ],
+)
+def test_active_tool_sources_have_no_ml_imports(path: Path):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    bad = [
+        name
+        for name in _collect_imports(tree)
+        if name == "torch"
+        or name.startswith("torch.")
+        or name.split(".")[0] in {"transformers", "laya", "pynvml", "cupy"}
+        or name == "src.decision"
+        or name.startswith("src.decision.")
+    ]
+    assert bad == [], f"Imports ML/Laya em {path.name}: {bad}"
+
