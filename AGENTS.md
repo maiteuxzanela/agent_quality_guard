@@ -9,10 +9,9 @@ Este documento estabelece as diretrizes específicas para o desenvolvimento, tes
 ## 1. Arquitetura do Repositório
 
 O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
-* **`src/decision/`:** Motor discriminativo local (Laya / Open JEV RLCD) para as primitivas probaiblísticas tipadas (`choice`, `noul`, `consulta`).
-  * `engine.py`: Wrapper de inferência primário (Laya na GPU GTX 1050 Ti com fallback seguro para CPU).
-  * `laya_adapter.py`: Adaptador modular para o modelo Laya com thresholds calibrados (noul 0.78).
+* **`src/decision/`:** Camada determinística de hardware e ferramentas de decisão do JEV (sem motor neural local).
   * `hardware.py`: Profilagem de hardware e travamento contra `bfloat16` na arquitetura Pascal GP107 (GTX 1050 Ti).
+  * O motor Laya/RLCD (`engine.py`, `laya_adapter.py`) e as primitivas `choice`/`noul`/`consulta` foram removidos do ecossistema (TICKET-HARNESS-47).
 * **`src/memory/`:** Motor de busca relacional de AST e análise de código (Cactus Needle 3).
   * `needle_ast_guard.py`: Camada 1 determinística (Fail-Fast) — varredura de mocks em produção, SQL Injection, `eval`, segredos hardcoded.
   * `needle_defect_screener.py`: Camada 2 estrutural — alertas de tipagem, docstrings e recursos.
@@ -20,9 +19,6 @@ O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
   * `pytest_chunk_runner.py`: Execução sequencial de testes reais em 3-4 chunks com isolamento de testes pesados (ML/Hardware).
 * **`src/mcp_server.py`:** Servidor MCP `cirurgic-search-mcp` (Model Context Protocol) que expõe as ferramentas universais:
   * `cirurgic_search` — busca cirúrgica híbrida de código (AST + Ripgrep + RRF). **Nome canônico**; o alias legado `qmd_search` permanece registrado e resolve para a MESMA implementação (retrocompatibilidade total).
-  * `openjev_choice` — roteamento categórico de especialistas por distribuição de probabilidade.
-  * `openjev_noul` — avaliação booleana opcional (threshold ≥ 0.78).
-  * `openjev_consulta` — consulta direta retornando indício textual (probability/confidence) sem booleano.
   * `agent_quality_guard` — **tool canônica de homologação de entrega de código de uso exclusivo da Diana**: validação determinística (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º toolchain/AST). O alias legado `needle_verify_delivery` permanece registrado com a MESMA implementação.
   * **Nota:** o catálogo core de definições para LLM em `src/core/tools.py` mantém a entrada `needle3_search`, que **não** é registrada no app MCP de `src/mcp_server.py`.
 
@@ -32,11 +28,11 @@ O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
 
 ## 2. Pipeline Determinístico de Homologação (`needle_verify_delivery`)
 
-A validação de entrega não utiliza mais notas contínuas probabilísticas (1.0–5.0) do Laya para fechar entregas, eliminando truncamento de tokens e *premise gaming*. A homologação é executada em 3 etapas sequenciais (Fail-Fast):
+A validação de entrega é **100% determinística** (testes reais + AST Guard + toolchain/AST), sem notas probabilísticas, sem motor neural local e sem *premise gaming*. A homologação é executada em 3 etapas sequenciais (Fail-Fast):
 
 1. **Etapa 0: Execução Sequencial de Testes Reais (`pytest`) em Chunks**
    - Os testes de `tests/` são particionados em 3 a 4 chunks sequenciais para evitar estressar a CPU e a GPU GTX 1050 Ti.
-   - O chunk mais pesado (testes de inferência ML/Laya/Hardware/IPC) roda **isolado (solo)**.
+   - O chunk mais pesado (testes de Hardware/IPC) roda **isolado (solo)**.
    - **Rejeição Estrita de Workspace sem Testes:** Se o workspace não contiver arquivos de teste reais em `tests/`, o pipeline rejeita sumariamente a entrega com instrução explícita de criação de teste. **O agente é estritamente obrigado a produzir pelo menos um teste real em `tests/test_<modulo>.py`** antes de tentar nova validação. É proibido tentar burlar esse bloqueio.
    - Se qualquer teste falhar, o pipeline é abortado imediatamente (`passed: false`, `status: "REJECTED"`).
 2. **Etapa 1: NeedleASTGuard (Camada 1 — Bloqueios Determinísticos)**
@@ -73,7 +69,7 @@ A validação de código e qualidade no ecossistema JEV opera sob os seguintes c
   ```bash
   .venv/bin/pytest tests/
   ```
-  *(Os testes mais pesados de inferência ML/Laya/Hardware devem rodar isolados).*
+  *(Os testes mais pesados de Hardware/IPC devem rodar isolados).*
 * **Anti-Mock / Camada AST Guard:**
   ```bash
   python3 -m pytest tests/unit/
@@ -101,7 +97,7 @@ A orquestração técnica opera de forma unificada sob **Dante** via **Ensemble 
 
 | Subagente | Documento de Persona | Domínio Técnico | Quando Acionar |
 | :--- | :--- | :--- | :--- |
-| **@Kael** | [`01_kael_ml_hardware.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/01_kael_ml_hardware.md) | ML Local, PyTorch & Pascal | Inferência do modelo Laya para `choice` e `consulta`, profilagem de VRAM e fallback CPU. |
+| **@Kael** | [`01_kael_ml_hardware.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/01_kael_ml_hardware.md) | Hardware Linux, CUDA & Pascal | Profilagem de VRAM, drivers CUDA, contenção de processos GPU e fallback CPU. |
 | **@Maya** | [`02_maya_ast_memory.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/02_maya_ast_memory.md) | Memória Relacional & AST (Needle 3) | Parsing de AST Python, busca relacional e refinamento do `NeedleASTGuard`/`Screener`. |
 | **@Túlio** | [`03_tulio_mcp_api.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/03_tulio_mcp_api.md) | Protocolos MCP, APIs & Schemas | Servidor MCP universal, schemas Pydantic e ferramenta `needle_verify_delivery`. |
 | **@Clara** | [`04_clara_qa_governance.md`](file:///home/maiteuxzanela/projeto%20JEV/personas/04_clara_qa_governance.md) | Quality Gate, Pytest & Anti-Mock | **Guardiã da Qualidade**. Suíte de testes reais em `tests/`, runner em chunks e políticas anti-mock. |

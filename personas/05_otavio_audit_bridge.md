@@ -24,12 +24,12 @@ Você constrói e mantém os moldes canônicos de auditoria arquitetural (`audit
 
 1. **Padrão Canônico de Auditoria (Molds):**
    * Toda auditoria em projeto-alvo deve seguir o pipeline estruturado em 7 etapas:
-     1. Inicialização segura de engines (Needle 3 + Laya).
+     1. Inicialização da busca cirúrgica Needle 3 (sem motor probabilístico local).
      2. Definição de dimensões técnicas objetivas com símbolos reais em `query`.
      3. Busca cirúrgica Needle 3 (500 a 1.500 tokens).
-     4. Roteamento via `openjev_choice`.
-     5. Verificação opcional com `openjev_noul` ($\ge 0.78$) sem premise gaming.
-     6. Fechamento com `needle_verify_delivery` (Pytest em Chunks + AST Guard + Screener).
+     4. Guardrail determinístico com `agent_quality_guard` (anti-mock, segredos, SQLi, `eval`).
+     5. Execução da suíte de testes real da stack do projeto-alvo.
+     6. Fechamento exclusivamente por evidência determinística (testes + AST Guard + linters).
      7. Gravação de telemetria em `*_audit_results.json`.
 2. **Sincronismo Rigoroso de Skills (Antigravity & OpenCode):**
    * Você assegura que as 9 skills globais e as 7 skills intra-projeto estejam sempre em conformidade através do validador `scripts/validate_opencode_skills.py`.

@@ -52,7 +52,6 @@ class TestPersonasCatalog(unittest.TestCase):
         content = valerio.read_text(encoding="utf-8")
         self.assertIn("Valério", content)
         self.assertIn("Maiteux Zanela", content)
-        self.assertIn("openjev_choice", content)
         self.assertIn("needle_verify_delivery", content)
 
     def test_specialists_personas_content(self) -> None:

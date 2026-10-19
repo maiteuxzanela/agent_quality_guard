@@ -21,17 +21,15 @@ Sua missão é garantir que o transporte de mensagens (JSON-RPC via stdin/stdout
 
 ## 2. Diretrizes e Guardrails Rígidos de Comunicação
 
-1. **Integridade das 5 Ferramentas Universais:**
-   * Você mantém a disponibilidade e a assinatura das 5 tools canônicas expostas pelo `src/mcp_server.py`:
+1. **Integridade das Ferramentas Universais:**
+   * Você mantém a disponibilidade e a assinatura das 2 tools lógicas (4 registros) expostas pelo `src/mcp_server.py`:
      1. `cirurgic_search` (híbrido AST + Ripgrep + RRF) — nome canônico da busca cirúrgica; `qmd_search` permanece como **alias retrocompatível** da MESMA implementação.
-     2. `openjev_choice`
-     3. `openjev_noul`
-     4. `needle_verify_delivery`
-     5. `openjev_consulta`
-2. **Imutabilidade do Catálogo de Rubricas (`RUBRIC_CATALOG`):**
-   * Você garante que nenhuma rubrica possa ser forjada ou passada em texto livre para contornar a avaliação. O servidor MCP e o FastAPI resolvem a rubrica exclusivamente através do `task_type` (`catalog:entrega`, `catalog:auditoria`, `catalog:codigo_producao`).
+     2. `agent_quality_guard` — nome canônico do guardrail determinístico; `needle_verify_delivery` permanece como **alias retrocompatível** da MESMA implementação.
+   * Não existem mais `openjev_choice`, `openjev_noul`, `openjev_consulta`, `openjev_score_and_diagnose` nem qualquer motor Laya/RLCD, IPC ou GPU lock no servidor (TICKET-HARNESS-47).
+2. **Contratos Tipados e Veredito Determinístico:**
+   * Nenhum veredito pode ser forjado ou passado em texto livre para contornar a validação. O guard operar por evidência reproduzível: suíte de testes real, AST Guard (anti-mock/segredos/SQLi/`eval`) e linters — sem rubrica livre nem score probabilístico.
 3. **Concorrência Não-Bloqueante (`asyncio.to_thread`):**
-   * Como a inferência de PyTorch na CPU ou GPU é síncrona e intensiva, qualquer chamada dentro de handlers assíncronos do MCP deve ser encapsulada em `asyncio.to_thread` ou executores assíncronos, prevenindo timeouts no cliente MCP.
+   * Como testes e análises estáticas síncronas podem ser intensivos, qualquer chamada dentro de handlers assíncronos do MCP deve ser encapsulada em `asyncio.to_thread` ou executores assíncronos, prevenindo timeouts no cliente MCP.
 4. **Paridade MCP vs FastAPI:**
    * Qualquer refinamento de regra de negócio (como o Borderline Mass Gate ou validação de premissas factuais) deve ser espelhado simetricamente entre o servidor MCP e os endpoints HTTP FastAPI.
 

@@ -271,6 +271,12 @@ async def _evaluate(pedido, spec, script_name, session_dir, engine, clip):
     )
 
 
+@pytest.mark.skip(
+    reason=(
+        "TICKET-HARNESS-47: o ciclo visual de integração usa o motor Laya RLCD "
+        "(pesos/GPU), desativado; os testes de funções puras permanecem ativos."
+    )
+)
 class TestIntegracaoReal:
     @pytest.mark.asyncio
     async def test_cenario_correto_e_aprovado(self, tmp_path, engine, clip, spec):

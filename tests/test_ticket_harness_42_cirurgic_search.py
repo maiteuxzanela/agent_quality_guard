@@ -177,13 +177,12 @@ def test_unknown_scope_returns_empty_payload_without_widening(workspace: Path):
 
 
 def test_other_canonical_tools_were_not_displaced():
+    """TICKET-HARNESS-47: superfície ativa = busca cirúrgica + quality guard (com aliases)."""
     names = {tool.name for tool in asyncio.run(app.list_tools())}
     assert {
         "cirurgic_search",
         "qmd_search",
-        "openjev_choice",
-        "openjev_noul",
-        "openjev_consulta",
         "agent_quality_guard",
         "needle_verify_delivery",
     }.issubset(names)
+    assert names.isdisjoint({"openjev_choice", "openjev_noul", "openjev_consulta"})

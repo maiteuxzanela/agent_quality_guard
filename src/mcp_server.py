@@ -1,32 +1,25 @@
 #!/usr/bin/env python3
 """MCP Server `cirurgic-search-mcp` (Projeto JEV).
 
-Disponibiliza a busca cirúrgica (`cirurgic_search`, com o alias legado
-`qmd_search`), as primitivas discriminativas (`openjev_choice`,
-`openjev_noul`, `openjev_consulta`) e a homologação determinística
-(`agent_quality_guard` + alias `needle_verify_delivery`) via protocolo MCP
-(stdio).
+Disponibiliza estritamente as ferramentas essenciais e ativas:
+
+* busca cirúrgica — ``cirurgic_search`` (canônica) + alias legado ``qmd_search``;
+* homologação determinística — ``agent_quality_guard`` + alias legado
+  ``needle_verify_delivery``.
+
+TICKET-HARNESS-47: o motor Laya RLCD / ``OpenJevEngine`` (PyTorch, VRAM, socket
+IPC legado e lock de GPU) foi desativado. Este processo não importa
+torch/transformers nem aloca VRAM, portanto o boot é quase instantâneo.
 """
 
-import asyncio
 import hashlib
 import logging
 import os
 import signal
-import subprocess
 import sys
 import tempfile
-import threading
-import time
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-# Silencia avisos e garante carregamento local rápido sem chamadas de rede no HuggingFace Hub
-os.environ.setdefault("PYTHONWARNINGS", "ignore")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-warnings.filterwarnings("ignore")
 
 # Redireciona todos os logs para stderr (stdout exclusivo do protocolo MCP stdio)
 logging.basicConfig(
@@ -42,21 +35,9 @@ sys.path.insert(0, str(PROJECT_DIR))
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from src.core.schemas import (
-    BORDERLINE_FLAWED_MAX_MASS,
-    BORDERLINE_HEALTHY_MIN_MASS,
-    ChoiceRequest,
-    ConsultaResponse,
     DEFECT_DESCRIPTIONS,
     DEFECT_MEMBERS,
     DiagnosisResult,
-    DiffStageResult,
-    Needle3Query,
-    NoulRequest,
-    RUBRIC_CATALOG,
-    ScoreRequest,
-    ScoreResponse,
-    ScoreDiagnoseResponse,
-    QUALITY_DEFECT_CATEGORIES,
     AgentQualityGuardResponse,
     LinterDiagnostic,
     MetaRuleViolation,
@@ -65,13 +46,10 @@ from src.core.schemas import (
     PytestChunkResult,
     ASTViolation,
 )
-from src.core.diff_inspector import extract_workspace_stages, format_stage_premise
-from src.memory.ast_diff_extractor import extract_workspace_ast_symbols, AstSymbolSlice
+from src.memory.ast_diff_extractor import extract_workspace_ast_symbols
 from src.memory.needle_defect_screener import (
     screen_workspace_symbols,
 )
-from src.decision.engine import OpenJevEngine
-from src.memory.local_needle import LocalNeedleEngine
 from src.memory.qmd_search import QmdHybridSearchEngine
 from src.memory.needle_ast_guard import NeedleASTGuard
 from src.orchestrator.pytest_chunk_runner import PytestChunkRunner
@@ -81,66 +59,18 @@ logger = logging.getLogger("jev.mcp")
 
 app = MCPServer("cirurgic-search-mcp")
 
-_engine_instance: Optional[OpenJevEngine] = None
-_engine_lock = threading.Lock()
-
-
-_ipc_server: Any = None
-# Definido como True pelo daemon embutido (src/decision/daemon.py) antes de
-# get_engine(): quem detém o socket IPC é o daemon — este processo não compete.
-_ipc_disabled: bool = False
-
-
-def _start_ipc_server_if_needed(engine: OpenJevEngine) -> None:
-    """Inicia o servidor IPC em background thread caso este processo detenha a GPU."""
-    global _ipc_server
-    if _ipc_disabled or _ipc_server is not None:
-        return
-    # Não sobe IPC se estiver rodando em CPU fallback ou já for cliente IPC
-    if getattr(engine, "use_ipc", False) or getattr(engine, "target_device", "") == "cpu":
-        return
-    try:
-        from src.decision.ipc_service import OpenJevIPCServer
-        _ipc_server = OpenJevIPCServer(engine=engine)
-
-        def _run_ipc_loop():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(_ipc_server.start())
-            except OSError as exc:
-                # Outro servidor (ex.: daemon) já detém o socket — não competir.
-                logger.warning("Servidor IPC não iniciado (socket de outro detentor): %s", exc)
-                return
-            loop.run_forever()
-
-        t = threading.Thread(target=_run_ipc_loop, daemon=True, name="jev-ipc-service")
-        t.start()
-        logger.info("Servidor IPC Open Jev iniciado em /tmp/openjev_ipc.sock para compartilhamento de GPU.")
-    except Exception as e:
-        logger.warning("Falha ao iniciar servidor IPC: %s", e)
-
-
-def get_engine() -> OpenJevEngine:
-    """Singleton do motor; thread-safe (chamado via asyncio.to_thread)."""
-    global _engine_instance
-    if _engine_instance is not None:
-        return _engine_instance
-    with _engine_lock:
-        if _engine_instance is None:
-            engine = OpenJevEngine(
-                model_id_or_path="convaiinnovations/laya",
-                allow_cpu_fallback=True,
-            )
-            engine.load_model()
-            _engine_instance = engine
-            _start_ipc_server_if_needed(_engine_instance)
-    return _engine_instance
-
-
-async def _get_engine_async() -> OpenJevEngine:
-    """Carrega/busca o motor fora do event loop (load pesado não trava o MCP)."""
-    return await asyncio.to_thread(get_engine)
+# TICKET-HARNESS-47: motor Laya/OpenJevEngine desativado neste processo.
+# Nenhum peso, PyTorch, VRAM, socket IPC legado ou lock de GPU é carregado no
+# boot do MCP. O símbolo permanece apenas como tombstone de
+# import para módulos legados (ex.: src/decision/daemon.py), que devem falhar
+# alto caso insistam no caminho ML em vez de usar as tools determinísticas.
+def get_engine() -> Any:
+    """Tombstone: o motor Laya/OpenJevEngine foi removido no TICKET-HARNESS-47."""
+    raise RuntimeError(
+        "OpenJevEngine/Laya foi desativado no TICKET-HARNESS-47. "
+        "Use cirurgic_search (busca cirúrgica) e agent_quality_guard "
+        "(homologação determinística), que não usam ML, PyTorch, VRAM nem IPC."
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -203,144 +133,21 @@ qmd_search = app.tool(
 )(_cirurgic_search_core)
 
 
-@app.tool(
-    name="openjev_choice",
-    description=(
-        "Distribuicao probabilistica (Laya RLCD local) entre subagentes, ferramentas, skills, "
-        "arquivos ou caminhos — nao roteamento deterministico. GTX 1050 Ti / CPU com lock de predict."
-    ),
-)
-async def openjev_choice(
-    premise: str,
-    options: List[str],
-    temperature: float = 1.0,
-) -> dict:
-    """Calcula distribuicao de probabilidades entre subagentes ou caminhos.
-
-    `options` é obrigatório (assinatura compatível com ChoiceRequest, min_length=2).
-    """
-    if not options or len(options) < 2:
-        raise ValueError(
-            "openjev_choice exige 'options' com pelo menos 2 opções formais "
-            "(compatível com ChoiceRequest.min_length=2). Sem rosters hardcoded."
-        )
-    if not (0.0 < temperature <= 5.0):
-        raise ValueError("temperature deve estar em (0.0, 5.0] (limites de ChoiceRequest).")
-
-    engine = await _get_engine_async()
-    req = ChoiceRequest(
-        premise=premise,
-        options=options,
-        temperature=temperature,
-    )
-    resp = await engine.evaluate_choice(req)
-
-    return {
-        "selected": resp.selected,
-        "confidence": round(resp.top_confidence, 4),
-        "probabilities": {k: round(v, 4) for k, v in resp.probabilities.items()},
-        "latency_ms": round(resp.latency_ms, 2),
-    }
+# NOTA (TICKET-HARNESS-47): as primitivas probabilísticas legadas do motor
+# Laya RLCD foram removidas deste servidor. A superfície MCP fica restrita a
+# `cirurgic_search` (+ alias `qmd_search`) e `agent_quality_guard` (+ alias
+# `needle_verify_delivery`), ambas determinísticas e sem ML/GPU.
 
 
-@app.tool(
-    name="openjev_noul",
-    description="Guardrail de validacao pre-acao critica (seguranca, isolamento, transacoes) usando Laya RLCD local na GPU.",
-)
-async def openjev_noul(
-    premise: str,
-    hypothesis: str,
-    threshold: float = 0.78,
-) -> dict:
-    """Verifica se a premissa implica a hipotese de seguranca com probabilidade >= threshold."""
-    engine = await _get_engine_async()
-    req = NoulRequest(
-        premise=premise,
-        hypothesis=hypothesis,
-        threshold=threshold,
-    )
-    resp = await engine.evaluate_noul(req)
-
-    return {
-        "passed": resp.passed,
-        "probability": round(resp.probability, 4),
-        "threshold": resp.threshold,
-        "confidence": round(resp.confidence, 4),
-        "latency_ms": round(resp.latency_ms, 2),
-    }
-
-
-@app.tool(
-    name="openjev_consulta",
-    description=(
-        "Consulta direta ('esse script funciona?', 'esse banco tem essa informação?') "
-        "retornando indício textual SEM booleano de aprovação. Postura: aceitar como "
-        "indício de algo a investigar; premise gaming proibido; indício desfavorável "
-        "exige investigação e alerta à usuária."
-    ),
-)
-async def openjev_consulta(premise: str, question: str) -> dict:
-    """Retorna indício textual (probability/confidence) — sem campo `passed`.
-
-    Usa a primitiva noul do motor por baixo, mas o contrato serializado é
-    ConsultaResponse (extra='forbid'): jamais expõe booleano de aprovação
-    que convide o agente a praticar premise gaming.
-    """
-    if not premise.strip() or not question.strip():
-        raise ValueError("openjev_consulta exige 'premise' e 'question' não vazios.")
-
-    engine = await _get_engine_async()
-    req = NoulRequest(
-        premise=premise,
-        hypothesis=question,
-        threshold=0.5,
-    )
-    resp = await engine.evaluate_noul(req)
-    prob = resp.probability
-
-    if prob >= 0.78:
-        forca = "forte a favor"
-    elif prob >= 0.5:
-        forca = "fraco a favor"
-    elif prob >= 0.22:
-        forca = "fraco contra"
-    else:
-        forca = "forte contra"
-
-    indicio = (
-        f"Indício {forca} de que a resposta à pergunta é verdadeira "
-        f"(P={prob:.4f}). Esta resposta é um INDÍCIO para investigação, não um "
-        "veredito nem aprovação: indício desfavorável exige investigar, consertar "
-        "o que precisar e alertar a usuária — nunca reformular a premissa para "
-        "inverter o resultado (premise gaming proibido)."
-    )
-
-    return ConsultaResponse(
-        indicio=indicio,
-        probability=round(prob, 4),
-        confidence=round(resp.confidence, 4),
-        latency_ms=round(resp.latency_ms, 2),
-    ).model_dump()
-
-
-DEFAULT_SCORE_RUBRIC = RUBRIC_CATALOG["codigo_producao"]
-
-# Teto rígido da premissa de score (anti-ruído: prosa longa distorce a nota).
-from src.core.score_gate import (  # noqa: E402
+from src.core.score_gate import (
     MAX_ATTEMPTS as _SCORE_GATE_MAX_ATTEMPTS,
-    SCORE_PREMISE_MAX_LEN,
     CAVEAT_BAND as _CAVEAT_BAND,
-    caveat_decision as _caveat_decision,
     get_workspace_git_signature as _score_gate_git_signature,
     history_get as _history_get,
     history_increment_attempts as _history_increment_attempts,
     history_set as _history_set,
     resolve_attempt_number as _resolve_attempt_number,
-    resolve_task_rubric as _resolve_task_rubric,
-    stages_cache_get as _stages_cache_get,
     stages_cache_set as _stages_cache_set,
-    validate_score_premise as _validate_score_premise,
-    _score_history,
 )
 
 MAX_ATTEMPTS = _SCORE_GATE_MAX_ATTEMPTS
@@ -1204,7 +1011,6 @@ needle_verify_delivery = app.tool(
 
 if __name__ == "__main__":
     import ctypes
-    import os
 
     # ── Proteção contra processos órfãos (Linux PR_SET_PDEATHSIG) ───────────
     # Garante que o Kernel envie SIGTERM no microssegundo em que a IDE / Language Server pai morrer
@@ -1217,11 +1023,6 @@ if __name__ == "__main__":
 
     def _graceful_exit(signum, frame) -> None:
         logger.info("Sinal %s recebido no servidor MCP, encerrando de forma limpa...", signum)
-        if os.path.exists("/tmp/openjev_ipc.sock"):
-            try:
-                os.unlink("/tmp/openjev_ipc.sock")
-            except OSError as unlink_err:
-                logger.debug("Não foi possível desvincular socket IPC no encerramento: %s", unlink_err)
         os._exit(0)
 
     try:
@@ -1232,22 +1033,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.debug("Sinais de terminação não puderam ser registrados: %s", e)
 
-    def _preload_engine() -> None:
-        try:
-            from src.decision.hardware import try_acquire_gpu_lock
-            if not try_acquire_gpu_lock():
-                logger.info(
-                    "Instância secundária sem lock de GPU detectada. "
-                    "Pré-carregamento em CPU suprimido para economizar ~2.3 GB de RAM física."
-                )
-                return
-            get_engine()
-            logger.info("Motor JEV pré-carregado no startup do MCP com GPU alocada.")
-        except Exception as e:
-            logger.warning("Pré-load do motor JEV falhou (retry no 1º uso): %s", e)
-
-    # Pré-load em background: a 1ª tool call não paga o load de pesos na GPU/CPU.
-    # O get_engine é thread-safe; se o preload ainda estiver rodando, o await
-    # de to_thread espera o mesmo singleton sob o lock.
-    threading.Thread(target=_preload_engine, daemon=True, name="jev-engine-preload").start()
+    # TICKET-HARNESS-47: sem pré-load de motor, sem alocação de VRAM, sem lock
+    # de GPU e sem socket IPC. O boot fica restrito ao registro das tools
+    # determinísticas (cirurgic_search/agent_quality_guard e aliases).
     app.run(transport="stdio")

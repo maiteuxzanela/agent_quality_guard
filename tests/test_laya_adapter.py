@@ -245,6 +245,12 @@ class TestLayaLoad:
 
 # ─── Integração Real com Laya ────────────────────────────────────────────────
 
+@pytest.mark.skip(
+    reason=(
+        "TICKET-HARNESS-47: Laya RLCD desativado. Integração real com pesos do "
+        "modelo aposentada junto com o caminho de inferência ML/GPU."
+    )
+)
 class TestLayaAdapterIntegracao:
     """Ponta-a-ponta contra o modelo Laya real carregado do disco (sem agente sintético).
 

@@ -76,19 +76,22 @@ class TestHardware(unittest.TestCase):
 
 class TestToolsCatalog(unittest.TestCase):
     def test_all_tools_present(self):
+        """TICKET-HARNESS-47: catálogo restrito às tools ativas + aliases."""
         names = [t["function"]["name"] for t in TOOL_DEFINITIONS]
-        self.assertIn("needle3_search", names)
-        self.assertIn("openjev_noul", names)
-        self.assertIn("openjev_choice", names)
-        self.assertNotIn("openjev_score_evaluate", names)
-        self.assertNotIn("openjev_score_and_diagnose", names)
+        self.assertIn("cirurgic_search", names)
+        self.assertIn("qmd_search", names)
+        self.assertIn("agent_quality_guard", names)
         self.assertIn("needle_verify_delivery", names)
-        self.assertIn("openjev_consulta", names)
+
+    def test_laya_tools_were_purged(self):
+        names = [t["function"]["name"] for t in TOOL_DEFINITIONS]
+        for retired in ("needle3_search", "openjev_noul", "openjev_choice", "openjev_consulta"):
+            self.assertNotIn(retired, names)
 
     def test_get_tool(self):
-        tool = get_tool_definition("openjev_noul")
+        tool = get_tool_definition("agent_quality_guard")
         self.assertEqual(tool["type"], "function")
-        self.assertNotIn("MANDATÓRIO", tool["function"]["description"])
+        self.assertIn("parameters", tool["function"])
 
 
 import json

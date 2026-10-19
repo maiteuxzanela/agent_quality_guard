@@ -1,237 +1,164 @@
 """Definições de ferramentas (Tool Definitions) padronizadas para agentes e LLMs orquestradoras.
+
 Compatível com OpenAI Function Calling, Anthropic Tool Use e Gemini Function Declarations.
+
+TICKET-HARNESS-47: o catálogo espelha estritamente a superfície MCP ativa:
+
+* ``cirurgic_search`` (canônica) + alias legado ``qmd_search``;
+* ``agent_quality_guard`` (canônica) + alias legado ``needle_verify_delivery``.
+
+As primitivas probabilísticas do motor Laya RLCD (``openjev_noul``,
+``openjev_choice``, ``openjev_consulta``) e o antigo ``needle3_search`` foram
+expurgados — não há caminho de inferência ML/GPU no catálogo.
 """
 
+import copy
 from typing import Any, Dict, List
+
+_SEARCH_PARAMETERS: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": (
+                "Consulta técnica ou semântica sobre o que precisa ser localizado "
+                "ou compreendido no código."
+            ),
+        },
+        "workspace": {
+            "type": "string",
+            "default": "",
+            "description": "Caminho do repositório/workspace a buscar (padrão: cwd).",
+        },
+        "scope": {
+            "type": "string",
+            "description": (
+                "Lista opcional de diretórios, módulos ou caminhos separados por "
+                "vírgula para restringir a busca."
+            ),
+        },
+        "max_tokens": {
+            "type": "integer",
+            "default": 1200,
+            "description": (
+                "Teto máximo de tokens para o contexto retornado "
+                "(canônico 1200; evita sobrecarregar a LLM)."
+            ),
+        },
+        "depth": {
+            "type": "integer",
+            "default": 2,
+            "description": (
+                "Profundidade de dependências no grafo de símbolos "
+                "(1 = apenas o símbolo, 2 = chamadores diretos, etc.)."
+            ),
+        },
+    },
+    "required": ["query"],
+}
+
+_SEARCH_DESCRIPTION = (
+    "Busca cirúrgica híbrida (Ripgrep + Needle 3/Árvore AST + RRF em CPU). "
+    "Ferramenta primária para explorar código, funções, regras de negócio e "
+    "investigar bugs, com controle estrito de janela de contexto (max_tokens)."
+)
+
+_QUALITY_GUARD_PARAMETERS: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "task_type": {
+            "type": "string",
+            "default": "codigo_producao",
+            "description": "Tipo de tarefa (codigo_producao).",
+        },
+        "workspace": {
+            "type": "string",
+            "default": "",
+            "description": "Caminho do repositório/workspace a validar (padrão: cwd).",
+        },
+        "attempt_number": {
+            "type": "integer",
+            "default": 1,
+            "description": (
+                "Informativo (1 a 5). A contagem de tentativas é exclusivamente "
+                "server-side: o valor do chamador não participa do circuit breaker."
+            ),
+        },
+        "pedido": {
+            "type": "string",
+            "description": "Descrição do pedido original (opcional para audit log).",
+        },
+        "resultado": {
+            "type": "string",
+            "description": "Descrição do resultado executado (opcional para audit log).",
+        },
+        "audit_mode": {
+            "type": "string",
+            "default": "delta",
+            "description": "Modo de auditoria do workspace ('delta' ou 'full').",
+        },
+    },
+}
+
+_QUALITY_GUARD_DESCRIPTION = (
+    "Homologação de entrega de código 100% DETERMINÍSTICA e sem ML. "
+    "Executa: 1º testes reais (pytest em chunks / runner multi-stack), "
+    "2º NeedleASTGuard (anti-mock em produção, SQLi, eval, segredos), "
+    "3º bridge nativa de compiladores/linters do projeto (tsc, eslint/biome, "
+    "ruff/mypy, clippy, go vet), 4º meta-regras universais de AST via Tree-Sitter "
+    "(floating promises, silent catch, resource leaks). "
+    "Circuit breaker universal de 5 tentativas: na 5ª tentativa sem aprovação "
+    "determinística, o código é liberado com ressalva (EMERGENCY_RELEASE)."
+)
+
+_NEEDLE_VERIFY_DELIVERY_DESCRIPTION = (
+    "Alias legado de agent_quality_guard (MESMA implementação e assinatura), "
+    "mantido para compatibilidade retroativa total. "
+    "Validação de entrega de código 100% determinística e sem ML. "
+    "Executa: 1º Pytest em chunks sequenciais, "
+    "2º NeedleASTGuard (anti-mock, SQLi, eval, segredos), "
+    "3º Camada 1 (compiladores/linters nativos) e "
+    "4º Camada 2 (meta-regras universais de AST via Tree-Sitter). "
+    "Circuit breaker universal de 5 tentativas: se a 5ª tentativa for atingida "
+    "sem aprovação determinística, o código é aprovado com ressalva (EMERGENCY_RELEASE)."
+)
+
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "needle3_search",
-            "description": (
-                "Aciona o motor Cactus Needle 3 para busca cirúrgica léxico-AST local "
-                "(grafo de dependências, não embeddings) em código, documentação densa ou logs. "
-                "Retorna trechos com preservação de relações de AST (chamadores, implementações, imports) "
-                "e controle estrito de janela de contexto (max_tokens)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Consulta técnica ou semântica sobre o que precisa ser localizado ou compreendido."
-                    },
-                    "scope": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Lista opcional de diretórios, módulos ou caminhos para restringir a busca."
-                    },
-                    "max_tokens": {
-                        "type": "integer",
-                        "default": 1000,
-                        "description": "Teto máximo de tokens para o contexto retornado (canônico 1000; evita sobrecarregar a LLM)."
-                    },
-                    "relational_depth": {
-                        "type": "integer",
-                        "default": 2,
-                        "description": "Profundidade de dependências no grafo de símbolos (1 = apenas o símbolo, 2 = chamadores diretos, etc.)."
-                    },
-                    "preserve_relational_integrity": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": "Garante que declarações e referências acopladas sejam trazidas em bloco coeso."
-                    }
-                },
-                "required": ["query"]
-            }
-        }
+            "name": "cirurgic_search",
+            "description": _SEARCH_DESCRIPTION,
+            "parameters": copy.deepcopy(_SEARCH_PARAMETERS),
+        },
     },
     {
         "type": "function",
         "function": {
-            "name": "openjev_noul",
+            "name": "qmd_search",
             "description": (
-                "Executa o modelo Open Jev local para avaliar uma condição lógica/booleana com probabilidade calibrada. "
-                "Uso OPCIONAL: a exigência de conferência de segurança pré-ação foi removida (anti premise gaming). "
-                "Se usada, reformular a premissa/hipótese para inverter o resultado é proibido; "
-                "resultado desfavorável exige mudança de atitude e alerta, não contornar a avaliação."
+                "Alias legado de cirurgic_search (MESMA implementação e assinatura), "
+                "mantido para compatibilidade retroativa total com clientes antigos. "
+                + _SEARCH_DESCRIPTION
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "premise": {
-                        "type": "string",
-                        "description": "O comando exato, plano de ação ou estado atual a ser executado."
-                    },
-                    "hypothesis": {
-                        "type": "string",
-                        "description": "A condição de segurança ou regra a validar (ex.: 'Esta operação é segura e não causa perda de dados irreversível')."
-                    },
-                    "threshold": {
-                        "type": "number",
-                        "default": 0.78,
-                        "description": "Limiar mínimo de probabilidade para aprovação da ação (guardrail calibrado 0.78)."
-                    }
-                },
-                "required": ["premise", "hypothesis"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "openjev_choice",
-            "description": (
-                "Distribuição probabilística de escolha (Laya RLCD local) entre subagentes, "
-                "ferramentas, skills, arquivos ou caminhos — não é roteamento determinístico. "
-                "Retorna selected, confidence e probabilities para a Protocolo de Dúvida (§3)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "premise": {
-                        "type": "string",
-                        "description": "A descrição detalhada do problema, bug, requisito ou subtarefa a ser resolvida."
-                    },
-                    "options": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Lista de opções de roteamento disponíveis (ex.: ['backend', 'frontend', 'security', 'devops', 'documentation'])."
-                    },
-                    "temperature": {
-                        "type": "number",
-                        "default": 1.0,
-                        "description": "Fator de calibração térmica do softmax (padrão 1.0)."
-                    }
-                },
-                "required": ["premise", "options"]
-            }
-        }
+            "parameters": copy.deepcopy(_SEARCH_PARAMETERS),
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "agent_quality_guard",
-            "description": (
-                "Homologação de entrega de código 100% DETERMINÍSTICA e sem ML. "
-                "Executa: 1º testes reais (pytest em chunks / runner multi-stack), "
-                "2º NeedleASTGuard (anti-mock em produção, SQLi, eval, segredos), "
-                "3º bridge nativa de compiladores/linters do projeto (tsc, eslint/biome, "
-                "ruff/mypy, clippy, go vet), 4º meta-regras universais de AST via Tree-Sitter "
-                "(floating promises, silent catch, resource leaks). "
-                "Circuit breaker universal de 5 tentativas: na 5ª tentativa sem aprovação "
-                "determinística, o código é liberado com ressalva (EMERGENCY_RELEASE)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_type": {
-                        "type": "string",
-                        "default": "codigo_producao",
-                        "description": "Tipo de tarefa (codigo_producao)."
-                    },
-                    "workspace": {
-                        "type": "string",
-                        "default": "",
-                        "description": "Caminho do repositório/workspace a validar (padrão: cwd)."
-                    },
-                    "attempt_number": {
-                        "type": "integer",
-                        "default": 1,
-                        "description": (
-                            "Informativo (1 a 5). A contagem de tentativas é exclusivamente "
-                            "server-side: o valor do chamador não participa do circuit breaker."
-                        )
-                    },
-                    "pedido": {
-                        "type": "string",
-                        "description": "Descrição do pedido original (opcional para audit log)."
-                    },
-                    "resultado": {
-                        "type": "string",
-                        "description": "Descrição do resultado executado (opcional para audit log)."
-                    }
-                }
-            }
-        }
+            "description": _QUALITY_GUARD_DESCRIPTION,
+            "parameters": copy.deepcopy(_QUALITY_GUARD_PARAMETERS),
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "needle_verify_delivery",
-            "description": (
-                "Alias legado de agent_quality_guard (MESMA implementação e assinatura), "
-                "mantido para compatibilidade retroativa total. "
-                "Validação de entrega de código 100% determinística e sem ML. "
-                "Executa: 1º Pytest em chunks sequenciais, "
-                "2º NeedleASTGuard (anti-mock, SQLi, eval, segredos), "
-                "3º Camada 1 (compiladores/linters nativos) e "
-                "4º Camada 2 (meta-regras universais de AST via Tree-Sitter). "
-                "Circuit breaker universal de 5 tentativas: se a 5ª tentativa for atingida "
-                "sem aprovação determinística, o código é aprovado com ressalva (EMERGENCY_RELEASE)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_type": {
-                        "type": "string",
-                        "default": "codigo_producao",
-                        "description": "Tipo de tarefa (codigo_producao)."
-                    },
-                    "workspace": {
-                        "type": "string",
-                        "default": "",
-                        "description": "Caminho do repositório/workspace a validar (padrão: cwd)."
-                    },
-                    "attempt_number": {
-                        "type": "integer",
-                        "default": 1,
-                        "description": (
-                            "Informativo (1 a 5). A contagem de tentativas é exclusivamente "
-                            "server-side: o valor do chamador não participa do circuit breaker."
-                        )
-                    },
-                    "pedido": {
-                        "type": "string",
-                        "description": "Descrição do pedido original (opcional para audit log)."
-                    },
-                    "resultado": {
-                        "type": "string",
-                        "description": "Descrição do resultado executado (opcional para audit log)."
-                    }
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "openjev_consulta",
-            "description": (
-                "Consulta direta ao Open Jev local (ex.: 'esse script funciona?', "
-                "'esse banco de dados tem essa informação?'). Recebe a evidência real e retorna "
-                "um indício textual (probability/confidence) SEM booleano de aprovação. "
-                "A resposta é indício para investigação, não veredito: premise gaming proibido; "
-                "indício desfavorável exige investigação e alerta à usuária."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "premise": {
-                        "type": "string",
-                        "description": (
-                            "Evidência objetiva: trecho do script, schema do banco, amostra de dados, "
-                            "estado real observado — nunca uma versão \"suavizada\" da realidade."
-                        ),
-                    },
-                    "question": {
-                        "type": "string",
-                        "description": "Pergunta direta a ser respondida como indício (ex.: 'Este script funciona?').",
-                    },
-                },
-                "required": ["premise", "question"],
-            },
+            "description": _NEEDLE_VERIFY_DELIVERY_DESCRIPTION,
+            "parameters": copy.deepcopy(_QUALITY_GUARD_PARAMETERS),
         },
     },
 ]

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Valida as 7 skills globais OpenCode/Antigravity, as skills intra-projeto e o command jev-fecha.
+"""Valida as 7 skills globais OpenCode/Antigravity e as skills intra-projeto.
 
 Fail-fast: exit 1 em qualquer violação. Sem mocks — lê o disco real.
+O fluxo de fechamento por score Laya foi retirado (TICKET-HARNESS-47); a
+homologação vigente é determinística (AGENTS.md §4, dois portões).
 """
 
 from __future__ import annotations
@@ -14,18 +16,17 @@ NAME_RX = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 EXPECTED_SKILLS = frozenset(
     {
         "skills-opencode-creator",
-        "needle3-busca",
+        "needle3-diagnostico",
         "anti-mock-failfast",
         "calibracao-score",
         "secret-scan-hardcoded",
-        "needle3-laya-diagnostico",
+        "qmd-search",
         "visual-qa-inspector",
     }
 )
 REQUIRED_FIELDS = ("name", "description")
 OPCODE_SKILLS = Path.home() / ".config" / "opencode" / "skills"
 GEMINI_SKILLS = Path.home() / ".gemini" / "config" / "skills"
-JEV_FECHA = Path_HOME_CMD = Path.home() / ".config" / "opencode" / "command" / "jev-fecha.md"
 
 # Skills intra em <repo>/.agents/skills/<name>/SKILL.md (OpenCode + Antigravity workspace)
 INTRA_SKILLS: dict[str, frozenset[str]] = {
@@ -124,19 +125,6 @@ def main() -> int:
             elif link.is_symlink() and not link.resolve().exists():
                 errors.append(f"broken symlink: {skill}")
 
-    if not JEV_FECHA.is_file():
-        errors.append("missing command jev-fecha.md")
-    else:
-        body = JEV_FECHA.read_text(encoding="utf-8")
-        if "threshold`: 3.40" not in body and "threshold: 3.40" not in body:
-            errors.append("jev-fecha: threshold is not 3.40")
-        if re.search(r"score ≥ 3\.60", body) or re.search(r"Aprovado \(≥ 3\.60\)", body):
-            errors.append("jev-fecha: still uses 3.60 as pass cutoff")
-        if "Confronto:" in body:
-            errors.append("jev-fecha: still contains verbose Confronto field")
-        if (OPCODE_SKILLS.parent / "skills" / "jev-entrega").exists():
-            errors.append("jev-entrega must not exist (command owns the flow)")
-
     # Intra-project .agents/skills
     for root_s, expected in INTRA_SKILLS.items():
         root = Path(root_s)
@@ -172,7 +160,7 @@ def main() -> int:
     n_intra = sum(len(v) for v in INTRA_SKILLS.values())
     print(
         f"OK {len(EXPECTED_SKILLS)} global + {n_intra} intra "
-        f"+ antigravity mirrors + jev-fecha 3.40 + no pred dup"
+        f"+ antigravity mirrors + no pred dup"
     )
     return 0
 

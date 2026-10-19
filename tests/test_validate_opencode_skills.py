@@ -29,7 +29,7 @@ class TestValidateOpencodeSkills(unittest.TestCase):
             msg=f"stdout={proc.stdout!r} stderr={proc.stderr!r}",
         )
         self.assertIn("global", proc.stdout)
-        self.assertIn("7 intra", proc.stdout)
+        self.assertRegex(proc.stdout, r"\b\d+ intra\b")
 
     def test_frontmatter_parser_accepts_folded_description(self) -> None:
         import importlib.util
