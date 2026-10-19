@@ -27,6 +27,80 @@ logger = logging.getLogger("jev.needle.local")
 # deve restringir `scope` em vez de varrer a árvore inteira.
 MAX_CANDIDATE_FILES = 800
 
+# TICKET-HARNESS-64 — Chunking adaptativo: um bloco lexical nunca excede
+# MAX_LEXICAL_CHUNK_LINES linhas *nem* MAX_LEXICAL_CHUNK_CHARS caracteres.
+# O teto de caracteres protege o orçamento de tokens contra payloads densos
+# (JS minificado, JSON compacto em uma única linha) que chegariam como um
+# bloco gigante e estourariam a janela cirúrgica.
+MAX_LEXICAL_CHUNK_LINES = 50
+MAX_LEXICAL_CHUNK_CHARS = 1800
+
+# TICKET-HARNESS-64 — Stopwords bilíngues (PT-BR / EN) compartilhadas entre
+# as duas rotas (léxica em qmd_search e simbólica aqui). Perguntas naturais
+# carregam ruído gramatical ("como", "onde", "how", "does") que dilui o
+# pattern léxico e desperdiça tokens. qmd_search importa este conjunto.
+STOPWORDS_PT = frozenset(
+    {
+        "como", "onde", "qual", "quais", "quando", "quem", "para", "com",
+        "por", "sem", "dos", "das", "nos", "nas", "num", "numa", "que",
+        "uma", "uns", "umas", "este", "esta", "está", "isso", "isto",
+        "aqui", "pelo", "pela", "pelos", "pelas", "mais", "menos", "muito",
+        "sobre", "entre", "depois", "antes", "funciona", "fazer", "estao",
+        "estão", "ser", "foi", "sao", "são", "tem", "nao", "não", "sim",
+        "ele", "ela", "eles", "elas", "seu", "sua", "seus", "suas", "meu",
+        "minha", "ao", "aos", "as", "os", "um", "de", "do", "da", "em",
+        "no", "na", "se", "ou", "e", "o", "a",
+    }
+)
+
+STOPWORDS_EN = frozenset(
+    {
+        "what", "where", "when", "which", "who", "whom", "whose", "why",
+        "how", "does", "did", "done", "with", "from", "into", "onto",
+        "upon", "about", "above", "below", "under", "over", "between",
+        "through", "during", "before", "after", "this", "that", "these",
+        "those", "have", "has", "had", "been", "being", "were", "was",
+        "are", "the", "and", "for", "nor", "but", "yet", "can", "will",
+        "just", "should", "would", "could", "now", "not", "only", "very",
+        "some", "any", "all", "both", "each", "few", "more", "most",
+        "other", "such", "than", "too", "same", "work", "works", "working",
+        "use", "used", "using", "get", "gets", "got", "make", "makes",
+        "made", "is", "in", "on", "at", "to", "of", "by", "as", "or",
+        "if", "it", "be", "do", "an", "a",
+    }
+)
+
+STOPWORDS = STOPWORDS_PT | STOPWORDS_EN
+
+# Fronteiras camelCase / PascalCase e runs de dígitos:
+# ``evaluateFailoverCooldown`` -> evaluate, Failover, Cooldown.
+_CAMEL_PART_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
+
+
+def substantive_terms(tokens: Any, min_length: int = 2) -> List[str]:
+    """Retorna os termos substantivos com fallback seguro.
+
+    Regra de fallback (TICKET-HARNESS-64): quando TODOS os tokens são
+    stopwords (ex.: busca literal por ``"from to"``), os tokens originais são
+    preservados para que o pattern nunca fique vazio. Tokens com menos de
+    ``min_length`` caracteres e duplicatas são descartados.
+
+    Exemplo:
+        >>> substantive_terms(["Como", "funciona", "Needle"])
+        ['needle']
+    """
+    raw: List[str] = []
+    seen: Set[str] = set()
+    for token in tokens:
+        lowered = str(token).lower()
+        if len(lowered) < min_length or lowered in seen:
+            continue
+        seen.add(lowered)
+        raw.append(lowered)
+    kept = [token for token in raw if token not in STOPWORDS]
+    return kept or raw
+
+
 # TICKET-HARNESS-41 — extração universal multi-linguagem via Tree-Sitter.
 # Nomes canônicos do tree_sitter_language_pack (ex.: "csharp", não "c_sharp").
 # Este mapa é EXCLUSIVO do extrator: o TreeSitterGuard mantém seu próprio
@@ -59,6 +133,30 @@ PY_FALLBACK_EXTENSIONS = frozenset({".py", ".pyi"})
 JS_FALLBACK_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
 # Nomes de idioma do pack para a família JS/TS (enriquecimento hook/API).
 _JS_FAMILY_LANGUAGES = frozenset({"javascript", "typescript", "tsx"})
+
+# TICKET-HARNESS-64 — Código-fonte é o alvo primário da busca cirúrgica;
+# docs/dados nunca podem consumir o teto de candidatos antes da implementação.
+SOURCE_EXTENSIONS = frozenset(NEEDLE_LANGUAGE_BY_EXTENSION)
+DOC_DATA_EXTENSIONS = frozenset({".rules", ".md", ".json", ".yaml", ".yml", ".toml"})
+ALLOWED_EXTENSIONS = SOURCE_EXTENSIONS | DOC_DATA_EXTENSIONS
+
+# Denylist de bundles e artefatos derivados (duplicam semântica com conteúdo
+# minificado). ``panel/*.js`` são bundles de UI gerados.
+IGNORED_ARTIFACT_SUFFIXES = (".min.js", ".min.mjs", ".bundle.js", ".map")
+
+
+def is_ignored_artifact(file_path: Path, rel_path: str) -> bool:
+    """Descarta bundles/artefatos derivados de forma lexical e determinística.
+
+    Exemplo:
+        >>> is_ignored_artifact(Path("app.min.js"), "app.min.js")
+        True
+    """
+    name = file_path.name.lower()
+    if name.endswith(IGNORED_ARTIFACT_SUFFIXES):
+        return True
+    parts = [part.lower() for part in Path(rel_path).parts]
+    return "panel" in parts[:-1] and name.endswith(".js")
 
 # Classificação de nós Tree-Sitter -> tipo relacional do Needle 3.
 _TS_KIND_BY_NODE_TYPE: Dict[str, str] = {
@@ -128,8 +226,41 @@ class LocalNeedleEngine:
         self._last_search_thread_ident: Optional[int] = None
 
     def tokenize(self, text: str) -> List[str]:
-        """Tokenização simples para cálculo léxico/BM25."""
-        return re.findall(r"\w+", text.lower())
+        """Tokeniza em palavras completas + sub-partes camel/snake.
+
+        Além do token completo em lowercase, emite as sub-partes extraídas de
+        transições camelCase / PascalCase e de separadores snake_case, para que
+        ``evaluateFailoverCooldown`` produza
+        ``['evaluatefailovercooldown', 'evaluate', 'failover', 'cooldown']``.
+        A ordem é estável e duplicatas são removidas.
+
+        Exemplo:
+            >>> LocalNeedleEngine().tokenize("evaluateFailoverCooldown")
+            ['evaluatefailovercooldown', 'evaluate', 'failover', 'cooldown']
+        """
+        tokens: List[str] = []
+        seen: Set[str] = set()
+
+        def emit(token: str) -> None:
+            lowered = token.lower()
+            if not lowered or lowered in seen:
+                return
+            seen.add(lowered)
+            tokens.append(lowered)
+
+        for word in re.findall(r"\w+", text):
+            emit(word)
+            # Snake_case / kebab-like separators (``\w`` preserva underscore).
+            for part in re.split(r"_+", word):
+                if not part:
+                    continue
+                pieces = _CAMEL_PART_RE.findall(part)
+                if not pieces:
+                    continue
+                emit(part)
+                for piece in pieces:
+                    emit(piece)
+        return tokens
 
     def _estimate_tokens(self, text: str) -> int:
         """Estimativa conservadora de tokens (aprox. 1 token a cada 3.8 caracteres)."""
@@ -214,19 +345,8 @@ class LocalNeedleEngine:
 
             matches = list(pattern.finditer(content))
             if not matches:
-                # Se não houver declarações explícitas, quebra em blocos de 60 linhas
-                chunk_size = 60
-                for i in range(0, len(lines), chunk_size):
-                    chunk_lines = lines[i : i + chunk_size]
-                    blocks.append({
-                        "file_path": rel_path,
-                        "start_line": i + 1,
-                        "end_line": min(i + chunk_size, len(lines)),
-                        "content": "\n".join(chunk_lines),
-                        "relations": [f"file:{file_path.name}"],
-                        "name": file_path.name,
-                    })
-                return blocks
+                # Sem declarações explícitas: chunking adaptativo (linhas e chars).
+                return self._chunk_lexical_blocks(file_path, lines)
 
             for idx, match in enumerate(matches):
                 func_name = match.group(1) or match.group(2) or match.group(3) or "anonymous"
@@ -241,9 +361,22 @@ class LocalNeedleEngine:
                     end_line = len(lines)
 
                 block_lines = lines[start_line - 1 : end_line]
-                block_content = "\n".join(block_lines[:80])  # limita preview do bloco
+                # Preview com teto duplo (80 linhas / 1800 chars): nenhum
+                # snippet pode furar o orçamento cirúrgico de tokens.
+                preview_lines: List[str] = []
+                preview_chars = 0
+                for preview_line in block_lines:
+                    projected = preview_chars + (1 if preview_lines else 0) + len(preview_line)
+                    if preview_lines and (
+                        len(preview_lines) >= 80
+                        or projected > MAX_LEXICAL_CHUNK_CHARS
+                    ):
+                        break
+                    preview_lines.append(preview_line)
+                    preview_chars = projected
+                block_content = "\n".join(preview_lines)[:MAX_LEXICAL_CHUNK_CHARS]
                 # Metadado end_line coerente com o conteúdo efetivamente retornado
-                reported_end = min(end_line, start_line + len(block_lines[:80]) - 1)
+                reported_end = min(end_line, start_line + len(preview_lines) - 1)
                 if reported_end < start_line:
                     reported_end = start_line
 
@@ -558,25 +691,81 @@ class LocalNeedleEngine:
             return []
 
     def _lexical_blocks(self, file_path: Path) -> List[Dict[str, Any]]:
-        """Fallback léxico: quebra arquivos sem AST em chunks de 50 linhas."""
+        """Fallback léxico: quebra arquivos sem AST em chunks adaptativos."""
         blocks: List[Dict[str, Any]] = []
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
             lines = content.splitlines()
-            rel_path = str(file_path.relative_to(self.workspace_root))
-            chunk_size = 50
-            for i in range(0, len(lines), chunk_size):
-                chunk_lines = lines[i : i + chunk_size]
-                blocks.append({
-                    "file_path": rel_path,
-                    "start_line": i + 1,
-                    "end_line": min(i + chunk_size, len(lines)),
-                    "content": "\n".join(chunk_lines),
-                    "relations": [f"file:{file_path.name}"],
-                    "name": file_path.name,
-                })
+            blocks = self._chunk_lexical_blocks(file_path, lines)
         except Exception as e:
             logger.debug(f"Falha no fallback léxico de {file_path}: {e}")
+        return blocks
+
+    def _chunk_lexical_blocks(
+        self, file_path: Path, lines: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Fatia ``lines`` respeitando o teto duplo de linhas e caracteres.
+
+        Um bloco é fechado quando a próxima linha ultrapassaria
+        ``MAX_LEXICAL_CHUNK_LINES`` linhas ou ``MAX_LEXICAL_CHUNK_CHARS``
+        caracteres. Uma linha isolada maior que o teto de caracteres (JS
+        minificado / JSON compacto) é fatiada em janelas de no máximo
+        ``MAX_LEXICAL_CHUNK_CHARS``, preservando o número da linha original.
+        """
+        blocks: List[Dict[str, Any]] = []
+        try:
+            rel_path = str(file_path.relative_to(self.workspace_root))
+        except ValueError:
+            rel_path = str(file_path)
+        chunk: List[str] = []
+        chunk_start = 1
+        chunk_chars = 0
+
+        def flush(end_line: int) -> None:
+            nonlocal chunk, chunk_chars
+            if not chunk:
+                return
+            blocks.append({
+                "file_path": rel_path,
+                "start_line": chunk_start,
+                "end_line": max(chunk_start, end_line),
+                "content": "\n".join(chunk),
+                "relations": [f"file:{file_path.name}"],
+                "name": file_path.name,
+            })
+            chunk = []
+            chunk_chars = 0
+
+        for index, line in enumerate(lines, start=1):
+            if len(line) > MAX_LEXICAL_CHUNK_CHARS:
+                # Payload denso em uma única linha: fecha o bloco pendente e
+                # emite janelas de caracteres da mesma linha física.
+                flush(index - 1)
+                for offset in range(0, len(line), MAX_LEXICAL_CHUNK_CHARS):
+                    blocks.append({
+                        "file_path": rel_path,
+                        "start_line": index,
+                        "end_line": index,
+                        "content": line[offset : offset + MAX_LEXICAL_CHUNK_CHARS],
+                        "relations": [f"file:{file_path.name}"],
+                        "name": file_path.name,
+                    })
+                continue
+
+            projected_chars = chunk_chars + (1 if chunk else 0) + len(line)
+            if chunk and (
+                len(chunk) + 1 > MAX_LEXICAL_CHUNK_LINES
+                or projected_chars > MAX_LEXICAL_CHUNK_CHARS
+            ):
+                flush(index - 1)
+                projected_chars = len(line)
+
+            if not chunk:
+                chunk_start = index
+            chunk.append(line)
+            chunk_chars = projected_chars
+
+        flush(len(lines))
         return blocks
 
     def _extract_blocks_for_file(self, file_path: Path) -> List[Dict[str, Any]]:
@@ -604,48 +793,86 @@ class LocalNeedleEngine:
         return self._lexical_blocks(file_path)
 
     def _find_candidate_files(self, scope: Optional[List[str]] = None) -> List[Path]:
-        """Localiza arquivos relevantes no escopo do projeto (com teto MAX_CANDIDATE_FILES)."""
-        candidate_paths: List[Path] = []
+        """Localiza arquivos relevantes no escopo do projeto (teto duplo de fila).
+
+        Código-fonte e docs/dados são coletados em filas separadas: a fila
+        primária (código) consome até ``MAX_CANDIDATE_FILES`` antes que
+        qualquer documento/JSON entre no corte. Artefatos derivados
+        (bundles, source maps, ``panel/*.js``) são descartados.
+        """
+        primary: List[Path] = []
+        secondary: List[Path] = []
         self.candidates_truncated = False
-        target_dirs = [self.workspace_root / p for p in scope] if scope else [self.workspace_root]
+
+        if scope:
+            target_dirs: List[Path] = []
+            for item in scope:
+                candidate = Path(item).expanduser()
+                if not candidate.is_absolute():
+                    candidate = self.workspace_root / candidate
+                target_dirs.append(candidate)
+        else:
+            target_dirs = [self.workspace_root]
 
         ignored_dirs = {
             ".git", ".venv", "venv", "__pycache__", "node_modules",
             ".pytest_cache", ".expo", "coverage", "android",
             "dist", "build", ".next", "out", "target", ".cache",
             ".mypy_cache", ".ruff_cache", ".tox", ".turbo",
-            "vendor", "third_party",
+            "vendor", "third_party", ".parcel-cache", ".agent-teams",
+            "screenshots",
         }
-        allowed_extensions = (
-            ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts",
-            ".go", ".rs", ".dart", ".kt", ".kts", ".java", ".cs",
-            ".rules", ".md", ".json", ".yaml", ".yml", ".toml",
-        )
+
+        def relative(candidate: Path) -> str:
+            try:
+                return str(candidate.relative_to(self.workspace_root))
+            except ValueError:
+                return str(candidate)
+
+        def collect(candidate: Path) -> bool:
+            """Enfileira o candidato; retorna False quando o teto primário fecha."""
+            if is_ignored_artifact(candidate, relative(candidate)):
+                return True
+            bucket = primary if candidate.suffix.lower() in SOURCE_EXTENSIONS else secondary
+            if len(bucket) < MAX_CANDIDATE_FILES:
+                bucket.append(candidate)
+                return True
+            self.candidates_truncated = True
+            return bucket is not primary
 
         for tdir in target_dirs:
             if not tdir.exists():
                 continue
             if tdir.is_file():
-                candidate_paths.append(tdir)
+                collect(tdir)
                 continue
             for root, dirs, files in os.walk(tdir):
                 dirs[:] = sorted(d for d in dirs if d not in ignored_dirs)
                 for f in sorted(files):
-                    if f.endswith(allowed_extensions):
-                        candidate_paths.append(Path(root) / f)
-                        if len(candidate_paths) >= MAX_CANDIDATE_FILES:
-                            self.candidates_truncated = True
-                            logger.warning(
-                                "Needle3: teto de %d candidatos atingido em %s — "
-                                "restringa `scope` para busca cirúrgica.",
-                                MAX_CANDIDATE_FILES,
-                                tdir,
-                            )
-                            self.candidates_found = len(candidate_paths)
-                            return candidate_paths
+                    if not f.endswith(tuple(ALLOWED_EXTENSIONS)):
+                        continue
+                    if not collect(Path(root) / f):
+                        # Quota de código esgotada: docs/dados não podem mais
+                        # entrar no corte, então o walk pode parar.
+                        logger.warning(
+                            "Needle3: teto de %d candidatos atingido em %s — "
+                            "restringa `scope` para busca cirúrgica.",
+                            MAX_CANDIDATE_FILES,
+                            tdir,
+                        )
+                        selected = primary[:MAX_CANDIDATE_FILES]
+                        self.candidates_found = len(selected)
+                        return selected
 
-        self.candidates_found = len(candidate_paths)
-        return candidate_paths
+        selected = primary[:MAX_CANDIDATE_FILES]
+        remaining = MAX_CANDIDATE_FILES - len(selected)
+        if remaining > 0:
+            selected.extend(secondary[:remaining])
+        elif secondary:
+            self.candidates_truncated = True
+
+        self.candidates_found = len(selected)
+        return selected
 
     async def search(self, query: Needle3Query) -> Needle3Response:
         """Executa a busca fora do event loop (worker thread do asyncio)."""
@@ -656,37 +883,64 @@ class LocalNeedleEngine:
         start_time = time.perf_counter()
         self._last_search_thread_ident = threading.get_ident()
 
-        query_tokens = set(self.tokenize(query.query))
+        # Stopwords bilíngues com fallback seguro (nunca query vazia).
+        raw_query_tokens = self.tokenize(query.query)
+        substantive = [t for t in raw_query_tokens if t not in STOPWORDS]
+        query_tokens = set(substantive or raw_query_tokens)
+
         files = self._find_candidate_files(query.scope)
 
         all_blocks: List[Dict[str, Any]] = []
         for f in files:
             all_blocks.extend(self._extract_blocks_for_file(f))
 
-        # Pontua relevância dos blocos
-        scored_blocks: List[Tuple[float, Dict[str, Any]]] = []
+        block_token_sets: List[Set[str]] = []
         for blk in all_blocks:
             text = f"{blk['name']} {' '.join(blk['relations'])} {blk['content']}"
-            blk_tokens = self.tokenize(text)
+            block_token_sets.append(set(self.tokenize(text)))
+
+        # IDF intra-busca sobre o universo dos blocos candidatos:
+        #   idf(t) = ln(1 + (N - df(t) + 0.5) / (df(t) + 0.5))
+        # Termos onipresentes (``self``, ``return``) perdem peso; identificadores
+        # raros dominam o score. N = len(all_blocks) (blocos candidatos da busca).
+        total_blocks = len(all_blocks)
+        idf_by_token: Dict[str, float] = {}
+        for token in query_tokens:
+            df = sum(1 for block_tokens in block_token_sets if token in block_tokens)
+            idf_by_token[token] = math.log(
+                1.0 + (total_blocks - df + 0.5) / (df + 0.5)
+            )
+        total_idf = sum(idf_by_token.values()) or 1.0
+
+        # Pontua relevância dos blocos
+        scored_blocks: List[Tuple[float, Dict[str, Any]]] = []
+        for blk, blk_tokens in zip(all_blocks, block_token_sets):
             if not blk_tokens:
                 continue
 
-            # Interseção e ponderação de termos
-            matches = query_tokens.intersection(set(blk_tokens))
+            matches = query_tokens.intersection(blk_tokens)
             if not matches:
                 continue
 
-            score = sum(1.0 for m in matches) / (len(query_tokens) + 0.1)
-            # Bônus se o nome do bloco/função/classe coincidir
-            for q in query_tokens:
-                if q in blk["name"].lower():
-                    score += 0.5
+            matched_idf = sum(idf_by_token[token] for token in matches)
+            score = matched_idf / total_idf
+            # Bônus se o nome do bloco/função/classe coincidir (inclui as
+            # sub-partes camelCase/snake_case emitidas por tokenize).
+            name_tokens = set(self.tokenize(blk["name"]))
+            name_matches = query_tokens.intersection(name_tokens)
+            if name_matches:
+                score += 0.5 * (len(name_matches) / max(1, len(query_tokens)))
 
             score = min(1.0, round(score, 4))
             scored_blocks.append((score, blk))
 
-        # Ordena por relevância decrescente
-        scored_blocks.sort(key=lambda x: x[0], reverse=True)
+        # Ordena por relevância decrescente. Desempate determinístico: o bloco
+        # cujo NOME (função/classe) cobre mais termos da query vence — evita
+        # que um fallback raw_file com muito texto empate com o símbolo real.
+        def _name_hits(block: Dict[str, Any]) -> int:
+            return len(query_tokens.intersection(set(self.tokenize(block["name"]))))
+
+        scored_blocks.sort(key=lambda x: (x[0], _name_hits(x[1])), reverse=True)
 
         selected_snippets: List[Needle3Snippet] = []
         current_tokens = 0

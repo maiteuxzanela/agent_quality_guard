@@ -22,9 +22,90 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core.schemas import Needle3Query, Needle3Response, Needle3Snippet
-from .local_needle import LocalNeedleEngine
+from .local_needle import LocalNeedleEngine, substantive_terms
 
 logger = logging.getLogger("jev.qmd")
+
+# Preview literal é fragmento de contexto, nunca dump de arquivo: precisa
+# caber no mesmo teto de caracteres do chunker adaptativo do Needle.
+MAX_LITERAL_PREVIEW_CHARS = 1800
+
+# Arquivos de código executável são o alvo usual da busca cirúrgica; docs e
+# dados continuam indexados, mas não devem vencer o código que implementa o
+# comportamento consultado.
+SOURCE_CODE_EXTENSIONS = frozenset(
+    {
+        ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts",
+        ".cts", ".rs", ".go", ".dart", ".kt", ".kts", ".java", ".cs", ".rb",
+        ".php", ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".sh", ".bash",
+    }
+)
+SOURCE_CODE_BOOST = 1.25
+DOC_SCOPE_MARKERS = frozenset({"docs", "doc", "personas"})
+DOC_SCOPE_EXTENSIONS = frozenset({".md", ".json"})
+
+# Denylist de bundles e artefatos derivados. Eles duplicam a semântica do
+# código-fonte com conteúdo minificado e poluem o recall léxico.
+IGNORED_GLOBS = (
+    "!**/.git/**",
+    "!**/node_modules/**",
+    "!**/__pycache__/**",
+    "!**/.venv/**",
+    "!**/venv/**",
+    "!**/dist/**",
+    "!**/build/**",
+    "!**/target/**",
+    "!**/.cache/**",
+    "!**/panel/*.js",
+    "!**/*.bundle.js",
+    "!**/*.min.js",
+    "!**/*.min.mjs",
+    "!**/*.map",
+    "!**/.turbo/**",
+    "!**/.parcel-cache/**",
+    "!**/.agent-teams/**",
+    "!**/screenshots/**",
+)
+
+GREP_EXCLUDED_DIRS = (
+    ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
+    "target", ".cache", ".parcel-cache", ".agent-teams", "screenshots",
+)
+
+# Arquivos densos repetem um identificador muitas vezes; truncar em 5 esconde
+# a evidência conjuntiva (cobertura de vários termos distintos da query).
+DEFAULT_MAX_MATCHES_PER_FILE = 20
+
+
+def _escape_literal(text: str) -> str:
+    """Escapa metacaracteres de regex sem escapar espaços.
+
+    O ``re.escape`` também escapa o espaço, o que o motor Rust do ripgrep
+    rejeita como sequência de escape inválida.
+    """
+    return re.sub(r"([\\.^$|?*+()\[\]{}])", r"\\\1", text)
+
+
+def _scope_is_documentation(scope: Optional[List[str]]) -> bool:
+    """Retorna True quando o chamador escopou explicitamente docs/dados."""
+    if not scope:
+        return False
+    for item in scope:
+        lowered = str(item).lower()
+        if Path(lowered).suffix in DOC_SCOPE_EXTENSIONS:
+            return True
+        if {part for part in Path(lowered).parts} & DOC_SCOPE_MARKERS:
+            return True
+    return False
+
+
+def _type_multiplier(file_path: str, documentation_scope: bool) -> float:
+    """Multiplicador tipológico do RRF para um arquivo."""
+    if documentation_scope:
+        return 1.0
+    if Path(file_path).suffix.lower() in SOURCE_CODE_EXTENSIONS:
+        return SOURCE_CODE_BOOST
+    return 1.0
 
 # Candidatos para o binário do ripgrep (rg)
 KNOWN_RG_PATHS = [
@@ -152,6 +233,8 @@ class QmdHybridSearchEngine:
             logger.debug("Falha ao ler preview de %s: %s", abs_path, read_err)
 
         content_preview = "\n".join(lines_preview) or "\n".join(m["text"] for m in grep_matches)
+        # Teto rígido de caracteres: preview literal nunca vira dump de arquivo.
+        content_preview = content_preview[:MAX_LITERAL_PREVIEW_CHARS]
         return {
             "file": file_path,
             "lines": f"{start_l}-{end_l}",
@@ -187,11 +270,70 @@ class QmdHybridSearchEngine:
             curr_tokens += snip_tokens
         return curr_tokens, False
 
+    def _resolve_scope(
+        self, scope: Optional[List[str]]
+    ) -> Tuple[List[str], List[str]]:
+        """Resolve ``scope`` em alvos absolutos existentes + filtros basename.
+
+        Entradas relativas são resolvidas contra ``self.workspace_root``,
+        comportando-se de forma consistente com o motor de AST. Entradas
+        *path-like* inexistentes retornam ``([], [])`` — a rota léxica devolve
+        nada em vez de ampliar silenciosamente para o workspace inteiro.
+
+        Compatibilidade: um basename puro sem separador de caminho (ex.:
+        ``scope="alpha.py"``) continua sendo um filtro de nome de arquivo,
+        aplicado como glob relativo ao workspace (nunca varredura de disco).
+        """
+        if not scope:
+            return [str(self.workspace_root)], []
+        targets: List[str] = []
+        globs: List[str] = []
+        for item in scope:
+            raw = item.strip()
+            if not raw:
+                continue
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.workspace_root / candidate
+            if candidate.exists():
+                targets.append(str(candidate.resolve()))
+                continue
+            is_basename = "/" not in raw and "\\" not in raw
+            if is_basename and Path(raw).suffix:
+                globs.append(f"*{raw}*")
+                continue
+            # Escopo path-like inexistente: nada a buscar.
+            return [], []
+        if not targets and globs:
+            targets.append(str(self.workspace_root))
+        return targets, globs
+
+    def _build_pattern(self, query: str) -> Tuple[str, List[str]]:
+        """Constrói o regex OR único do ripgrep e os termos substantivos.
+
+        Stopwords bilíngues são removidas para que o pattern seja guiado pelos
+        termos substantivos da pergunta. Fallback seguro: se a query inteira for
+        stopwords, os tokens originais são preservados e o pattern nunca fica
+        vazio.
+        """
+        clean_q = query.strip()
+        raw_words = [w for w in re.findall(r"[\w_]+", clean_q) if len(w) >= 2]
+        terms = substantive_terms(raw_words, min_length=2)
+
+        if not terms:
+            return _escape_literal(clean_q), terms
+        escaped_terms = [_escape_literal(term) for term in terms]
+        if len(terms) == 1 and len(raw_words) == 1:
+            return _escape_literal(clean_q), terms
+        if len(terms) == 1:
+            return escaped_terms[0], terms
+        return "|".join([_escape_literal(clean_q)] + escaped_terms[:6]), terms
+
     def _run_ripgrep(
         self,
         query: str,
         scope: Optional[List[str]] = None,
-        max_results_per_file: int = 5,
+        max_results_per_file: int = DEFAULT_MAX_MATCHES_PER_FILE,
         max_files: int = 40,
     ) -> Dict[str, Dict[str, Any]]:
         """Executa busca léxica via ripgrep e agrupa resultados por arquivo.
@@ -205,38 +347,38 @@ class QmdHybridSearchEngine:
         if not query.strip():
             return results_by_file
 
-        clean_q = query.strip()
-        words = [re.escape(w) for w in re.findall(r"[\w_]+", clean_q) if len(w) >= 3]
-        if len(words) > 1:
-            pattern = "|".join([re.escape(clean_q)] + words[:6])
-        else:
-            pattern = re.escape(clean_q)
+        pattern, terms = self._build_pattern(query)
+        targets, scope_globs = self._resolve_scope(scope)
+        if not targets:
+            return results_by_file
 
-        cmd = [
-            self.rg_binary or "grep",
-            "-n",
-            "-i",
-        ]
-
+        cmd = [self.rg_binary or "grep", "-n", "-i"]
         if self.rg_binary:
             cmd.extend([
+                "--no-messages",
+                # -H: alvo explícito de arquivo único também prefixa o path,
+                # preservando o contrato path:line:text do parser.
+                "-H",
                 "-e", pattern,
                 "--max-count", str(max_results_per_file),
-                "--glob", "!**/.git/**",
-                "--glob", "!**/node_modules/**",
-                "--glob", "!**/__pycache__/**",
-                "--glob", "!**/.agent-teams/**",
-                "--glob", "!**/.venv/**",
-                "--glob", "!**/venv/**",
             ])
-            if scope:
-                for sc in scope:
-                    cmd.extend(["-g", f"*{sc.strip()}*"])
-            cmd.extend(["--", str(self.workspace_root)])
+            for glob in IGNORED_GLOBS:
+                cmd.extend(["--glob", glob])
+            for glob in scope_globs:
+                cmd.extend(["-g", glob])
+            cmd.append("--")
+            cmd.extend(targets)
         else:
             # Fallback para grep padrão se rg não estiver presente
-            cmd.extend(["-E", "-r", "-I", "--exclude-dir=.git", "--exclude-dir=node_modules", "-e", pattern, str(self.workspace_root)])
+            cmd.extend(["-E", "-r", "-I"])
+            for directory in GREP_EXCLUDED_DIRS:
+                cmd.extend(["--exclude-dir", directory])
+            for glob in scope_globs:
+                cmd.extend(["--include", glob])
+            cmd.extend(["-e", pattern])
+            cmd.extend(targets)
 
+        all_texts: Dict[str, List[str]] = {}
         try:
             res = subprocess.run(
                 cmd,
@@ -252,8 +394,19 @@ class QmdHybridSearchEngine:
                 rel_p, line_no, matched_text = parsed
                 if rel_p not in results_by_file and len(results_by_file) >= max_files:
                     break
-                entry = results_by_file.setdefault(rel_p, {"file": rel_p, "match_count": 0, "matches": []})
+                entry = results_by_file.setdefault(
+                    rel_p,
+                    {
+                        "file": rel_p,
+                        "match_count": 0,
+                        "matches": [],
+                        "distinct_terms": 0,
+                        "term_coverage": 0.0,
+                        "matched_terms": [],
+                    },
+                )
                 entry["match_count"] += 1
+                all_texts.setdefault(rel_p, []).append(matched_text)
                 if len(entry["matches"]) < max_results_per_file:
                     entry["matches"].append({
                         "line": line_no,
@@ -262,6 +415,16 @@ class QmdHybridSearchEngine:
 
         except Exception as e:
             logger.debug(f"Erro ao executar busca léxica: {e}")
+
+        # Cobertura conjuntiva: quantos termos DISTINTOS da query o arquivo
+        # realmente contém. Um arquivo que repete um único keyword quente
+        # perde para outro que cobre os dois termos da pergunta.
+        for rel_p, entry in results_by_file.items():
+            haystack = "\n".join(all_texts.get(rel_p, [])).lower()
+            matched = [term for term in terms if term in haystack]
+            entry["matched_terms"] = matched
+            entry["distinct_terms"] = len(matched)
+            entry["term_coverage"] = round(len(matched) / max(1, len(terms)), 4)
 
         return results_by_file
 
@@ -301,10 +464,22 @@ class QmdHybridSearchEngine:
         grep_results, needle_resp = await asyncio.gather(grep_future, needle_task)
 
         # 3. Ranqueamento de Arquivos
-        # Grep: arquivos com mais matches recebem rank mais alto
+        # Grep: ordem conjuntiva — arquivos que cobrem mais termos DISTINTOS da
+        # query vencem os que apenas repetem um keyword quente muitas vezes.
+        query_terms = substantive_terms(re.findall(r"[\w_]+", query), min_length=2)
+        multi_term_query = len(query_terms) > 1
+
+        def lexical_sort_key(file_path: str) -> Tuple[int, int, float]:
+            entry = grep_results[file_path]
+            return (
+                int(entry.get("distinct_terms", 1)),
+                int(entry.get("match_count", 0)),
+                float(entry.get("term_coverage", 0.0)),
+            )
+
         sorted_grep_files = sorted(
             grep_results.keys(),
-            key=lambda f: grep_results[f]["match_count"],
+            key=lexical_sort_key,
             reverse=True,
         )
         grep_rank: Dict[str, int] = {f: idx + 1 for idx, f in enumerate(sorted_grep_files)}
@@ -321,16 +496,26 @@ class QmdHybridSearchEngine:
         )
         needle_rank: Dict[str, int] = {f: idx + 1 for idx, f in enumerate(sorted_needle_files)}
 
-        # 4. Fusão RRF (Reciprocal Rank Fusion)
+        # 4. Fusão RRF (Reciprocal Rank Fusion) com multiplicador tipológico.
+        # Código-fonte recebe +25% sobre docs/dados; a neutralidade de escopo
+        # preserva 1.0x quando o chamador apontou explicitamente para docs.
         all_candidate_files = set(grep_rank.keys()) | set(needle_rank.keys())
+        documentation_scope = _scope_is_documentation(scope)
         rrf_scores: Dict[str, float] = {}
 
         for f in all_candidate_files:
             score = 0.0
             if f in grep_rank:
-                score += weight_grep / (k + grep_rank[f])
+                lexical_weight = weight_grep
+                entry = grep_results.get(f, {})
+                # Match isolado de termo único é evidência fraca quando a
+                # query contém múltiplos termos distintos.
+                if multi_term_query and int(entry.get("distinct_terms", 1)) <= 1:
+                    lexical_weight *= 0.5
+                score += lexical_weight / (k + grep_rank[f])
             if f in needle_rank:
                 score += weight_needle / (k + needle_rank[f])
+            score *= _type_multiplier(f, documentation_scope)
             rrf_scores[f] = score
 
         # Refinamento 1: Fallback Assimétrico
