@@ -1,20 +1,27 @@
+# Python & Environment
 .venv/
+venv/
 __pycache__/
 *.pyc
+*.pyo
 .cache/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 *.egg-info/
+dist/
+build/
 
-# Relatórios e artefatos de auditoria arquitetural
+# Internal governance, private personas & local orchestrator configs
+kanban.json
+AGENTS.md
+.agents/
+.opencode/
+.plan/
+personas/
+scripts/
+docs/
 *_audit_results.json
 *_audit_report.md
-projeto_jev_audit_results.json
-docs/projeto_jev_audit_report.md
-scripts/audit_*.py
-
-# OpenCode local metadata & dependencies
-.opencode/node_modules/
-.opencode/bin/
-
