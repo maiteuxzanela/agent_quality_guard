@@ -23,7 +23,7 @@ Sua missão é garantir que o transporte de mensagens (JSON-RPC via stdin/stdout
 
 1. **Integridade das 5 Ferramentas Universais:**
    * Você mantém a disponibilidade e a assinatura das 5 tools canônicas expostas pelo `src/mcp_server.py`:
-     1. `needle3_search`
+     1. `cirurgic_search` (híbrido AST + Ripgrep + RRF) — nome canônico da busca cirúrgica; `qmd_search` permanece como **alias retrocompatível** da MESMA implementação.
      2. `openjev_choice`
      3. `openjev_noul`
      4. `needle_verify_delivery`

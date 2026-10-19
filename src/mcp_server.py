@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""MCP Server para a Arquitetura Tri-Camada (Projeto JEV).
-Disponibiliza Needle 3, Choice, Noul e Score via protocolo padrão MCP (stdio).
+"""MCP Server `cirurgic-search-mcp` (Projeto JEV).
+
+Disponibiliza a busca cirúrgica (`cirurgic_search`, com o alias legado
+`qmd_search`), as primitivas discriminativas (`openjev_choice`,
+`openjev_noul`, `openjev_consulta`) e a homologação determinística
+(`agent_quality_guard` + alias `needle_verify_delivery`) via protocolo MCP
+(stdio).
 """
 
 import asyncio
@@ -74,7 +79,7 @@ from src.orchestrator.multi_stack_runner import MultiStackRunner
 
 logger = logging.getLogger("jev.mcp")
 
-app = MCPServer("open-jev-server")
+app = MCPServer("cirurgic-search-mcp")
 
 _engine_instance: Optional[OpenJevEngine] = None
 _engine_lock = threading.Lock()
@@ -138,15 +143,29 @@ async def _get_engine_async() -> OpenJevEngine:
     return await asyncio.to_thread(get_engine)
 
 
-@app.tool(
-    name="qmd_search",
-    description=(
-        "Busca hibrida cirurgica (Ripgrep + Needle 3 + RRF em CPU). "
-        "Ferramenta primaria obrigatoria para explorar codigo, funcoes, regras de negocio e investigacao de bugs. "
-        "Combina busca lexica exata com analise semantica/AST e ranqueamento Reciprocal Rank Fusion."
-    ),
+# ──────────────────────────────────────────────────────────────────────────────
+# Busca cirúrgica: nome canônico `cirurgic_search` + alias legado `qmd_search`
+# (MESMA implementação, mesmos schemas de input/output, retrocompatibilidade
+# total com clientes antigos e chamadas em cache).
+# ──────────────────────────────────────────────────────────────────────────────
+_CIRURGIC_SEARCH_DESCRIPTION = (
+    "Busca cirurgica (cirurgic-search-mcp): hibrido AST + Ripgrep + RRF em CPU. "
+    "Ferramenta primaria obrigatoria para explorar codigo, funcoes, regras de negocio "
+    "e investigacao de bugs. Combina busca lexica exata com analise semantica/AST e "
+    "ranqueamento Reciprocal Rank Fusion. Nome canonico atual; `qmd_search` permanece "
+    "disponivel como alias retrocompativel da MESMA implementacao."
 )
-async def qmd_search(
+
+_QMD_SEARCH_LEGACY_ALIAS_DESCRIPTION = (
+    "Alias legado de `cirurgic_search` (MESMA implementacao e assinatura), mantido para "
+    "compatibilidade retroativa total com clientes e caches que ainda chamam `qmd_search`. "
+    "Busca hibrida cirurgica (Ripgrep + Needle 3 + RRF em CPU). Ferramenta primaria "
+    "obrigatoria para explorar codigo, funcoes, regras de negocio e investigacao de bugs. "
+    "Combina busca lexica exata com analise semantica/AST e ranqueamento Reciprocal Rank Fusion."
+)
+
+
+async def _cirurgic_search_core(
     query: str,
     workspace: str = "",
     scope: str = "",
@@ -155,9 +174,12 @@ async def qmd_search(
 ) -> dict:
     """Executa busca híbrida de código via QMD (Ripgrep + Needle 3 + RRF).
 
+    Núcleo único compartilhado por `cirurgic_search` (canônico) e `qmd_search`
+    (alias legado), garantindo contratos idênticos de entrada e saída.
+
     Exemplo:
         >>> import asyncio
-        >>> res = asyncio.run(qmd_search(query="needle_verify_delivery"))
+        >>> res = asyncio.run(cirurgic_search(query="agent_quality_guard"))
         >>> isinstance(res, dict)
         True
     """
@@ -171,6 +193,14 @@ async def qmd_search(
         max_tokens=max_tokens,
         depth=depth,
     )
+
+
+cirurgic_search = app.tool(
+    name="cirurgic_search", description=_CIRURGIC_SEARCH_DESCRIPTION
+)(_cirurgic_search_core)
+qmd_search = app.tool(
+    name="qmd_search", description=_QMD_SEARCH_LEGACY_ALIAS_DESCRIPTION
+)(_cirurgic_search_core)
 
 
 @app.tool(

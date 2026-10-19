@@ -18,12 +18,13 @@ O projeto JEV é composto pelos seguintes componentes centrais sob `src/`:
   * `needle_defect_screener.py`: Camada 2 estrutural — alertas de tipagem, docstrings e recursos.
 * **`src/orchestrator/`:** Orquestração e gerenciamento de execução.
   * `pytest_chunk_runner.py`: Execução sequencial de testes reais em 3-4 chunks com isolamento de testes pesados (ML/Hardware).
-* **`src/mcp_server.py`:** Servidor MCP (Model Context Protocol) que expõe as ferramentas universais:
-  * `needle3_search` — busca cirúrgica relacional de código (AST).
+* **`src/mcp_server.py`:** Servidor MCP `cirurgic-search-mcp` (Model Context Protocol) que expõe as ferramentas universais:
+  * `cirurgic_search` — busca cirúrgica híbrida de código (AST + Ripgrep + RRF). **Nome canônico**; o alias legado `qmd_search` permanece registrado e resolve para a MESMA implementação (retrocompatibilidade total).
   * `openjev_choice` — roteamento categórico de especialistas por distribuição de probabilidade.
   * `openjev_noul` — avaliação booleana opcional (threshold ≥ 0.78).
   * `openjev_consulta` — consulta direta retornando indício textual (probability/confidence) sem booleano.
-  * `needle_verify_delivery` — **tool de homologação de entrega de código de uso exclusivo da Diana**: validação determinística (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º NeedleASTScreener).
+  * `agent_quality_guard` — **tool canônica de homologação de entrega de código de uso exclusivo da Diana**: validação determinística (1º Pytest em Chunks Sequenciais $\rightarrow$ 2º NeedleASTGuard $\rightarrow$ 3º toolchain/AST). O alias legado `needle_verify_delivery` permanece registrado com a MESMA implementação.
+  * **Nota:** o catálogo core de definições para LLM em `src/core/tools.py` mantém a entrada `needle3_search`, que **não** é registrada no app MCP de `src/mcp_server.py`.
 
 > **🚨 REGRA INEGOCIÁVEL DE COMMIT:** O `git status` NÃO PODE ser limpo antes da aprovação completa da entrega técnica. O agente está terminantemente proibido de realizar `git commit` antes da homologação final dos testes e aprovação formal da Diana.
 
