@@ -10,7 +10,6 @@ Refinamentos de Produção:
 """
 
 import asyncio
-import json
 import logging
 import math
 import os
@@ -19,9 +18,9 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from ..core.schemas import Needle3Query, Needle3Response, Needle3Snippet
+from ..core.schemas import Needle3Query, Needle3Snippet
 from .local_needle import LocalNeedleEngine, substantive_terms
 
 logger = logging.getLogger("jev.qmd")
