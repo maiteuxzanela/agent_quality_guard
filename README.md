@@ -84,22 +84,17 @@ The primary tool to audit and validate delivery before closing an issue or card.
 **Output Schema:**
 ```json
 {
-  "approved": true,
-  "circuit_breaker": {
-    "attempt": 1,
-    "max_attempts": 5,
-    "emergency_release": false
-  },
-  "layer0_tests": {
-    "passed": true,
-    "total": 42,
-    "failed": 0
-  },
-  "layer1_toolchain_diagnostics": {
-    "tools": ["tsc", "eslint"],
-    "blocking": 0,
-    "warnings": 0
-  },
+  "passed": true,
+  "status": "APPROVED",
+  "attempt_number": 1,
+  "pytest_success": true,
+  "blocking_ast_violations": [],
+  "structural_ast_warnings": [],
+  "layer1_toolchain_diagnostics": [],
+  "toolchain_status": [
+    { "tool": "tsc", "available": true, "status": "clean" },
+    { "tool": "eslint", "available": true, "status": "clean" }
+  ],
   "layer2_meta_rule_violations": [],
   "tool_name": "agent_quality_guard"
 }

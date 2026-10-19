@@ -1,19 +1,14 @@
-# Core API & Async
-fastapi>=0.110.0
-uvicorn>=0.28.0
+# Core API & Schemas
+mcp>=1.0.0
 pydantic>=2.6.0
 pydantic-settings>=2.2.0
 pyyaml>=6.0
-httpx>=0.27.0
 
-# Deep Learning & Transformers (Open Jev)
-# Nota para GTX 1050 Ti: utilizar torch com CUDA 12.x / 11.x ou CPU fallback.
-# Pascal (compute capability 6.1) NÃO suporta bfloat16. Usar float16 ou float32.
-torch>=2.2.0
-transformers>=4.38.0
-accelerate>=0.27.0
-safetensors>=0.4.0
+# AST & Deterministic Analysis
+tree-sitter>=0.22.0
 
-# Testes e Qualidade
+# Testing & Verification
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+ruff>=0.3.0
+mypy>=1.9.0
