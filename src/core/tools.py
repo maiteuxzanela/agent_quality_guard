@@ -7,9 +7,9 @@ TICKET-HARNESS-47: o catálogo espelha estritamente a superfície MCP ativa:
 * ``cirurgic_search`` (canônica) + alias legado ``qmd_search``;
 * ``agent_quality_guard`` (canônica) + alias legado ``needle_verify_delivery``.
 
-As primitivas probabilísticas do motor Laya RLCD (``openjev_noul``,
-``openjev_choice``, ``openjev_consulta``) e o antigo ``needle3_search`` foram
-expurgados — não há caminho de inferência ML/GPU no catálogo.
+As primitivas probabilísticas do motor legado de decisão e o antigo nome de
+busca ``needle3_search`` foram expurgados — não há caminho de inferência ML/GPU
+no catálogo.
 """
 
 import copy

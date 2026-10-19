@@ -3,10 +3,9 @@
 
 Expõe a busca cirúrgica (Needle 3) diretamente no terminal.
 
-TICKET-HARNESS-47: as primitivas probabilísticas do motor Laya RLCD
-(``choice``, ``noul``) e a avaliação de score dependente de ``OpenJevEngine``
-foram desativadas. O CLI não importa ``src.decision.engine``, não carrega
-``convaiinnovations/laya`` e não aloca VRAM.
+TICKET-HARNESS-47: as primitivas probabilísticas do motor legado de decisão e
+a avaliação de score dependente dele foram desativadas. O CLI não importa
+``src.decision.engine``, não carrega pesos de modelo e não aloca VRAM.
 """
 
 import argparse
