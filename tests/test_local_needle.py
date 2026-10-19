@@ -35,14 +35,14 @@ class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
     async def test_needle_client_defaults_to_local_without_api_key(self):
         client = Needle3Client(mode="local")
         query = Needle3Query(
-            query="OpenJevEngine evaluate_noul",
-            scope=["src/decision"],
+            query="LocalNeedleEngine",
+            scope=["src/memory"],
             max_tokens=600,
         )
         response = await client.search(query)
         self.assertIsNotNone(response)
         self.assertGreater(len(response.snippets), 0)
-        self.assertIn("engine.py", response.snippets[0].file_path)
+        self.assertIn("local_needle.py", response.snippets[0].file_path)
 
     async def test_token_budget_never_exceeds_max_tokens(self):
         """Regressão do off-by-one: o 1º snippet não pode furar max_tokens.
