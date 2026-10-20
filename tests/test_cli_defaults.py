@@ -1,15 +1,12 @@
-"""Testes de regressão do CLI após a desativação do motor Laya (TICKET-HARNESS-47).
+"""Testes de regressão do CLI determinístico do Search Guard.
 
-O CLI deixou de expor `choice`, `noul` e `score` (dependentes de
-`OpenJevEngine`/`convaiinnovations/laya`). Permanece apenas a busca cirúrgica
-`needle`, sem importar torch nem o motor de decisão.
+O CLI expõe apenas a busca cirúrgica `needle`, sem importar torch nem motores
+neurais locais.
 """
 
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,10 +19,10 @@ def _parse_real(argv):
 
 
 def test_cli_module_importable_without_engine():
-    """src.cli deve importar sem carregar o motor Laya/PyTorch.
+    """agent_quality_guard.cli deve importar sem carregar PyTorch nem motor neural.
 
     Roda em subprocesso para não sofrer contaminação de sys.modules por outros
-    testes da suíte que legitimamente importam o motor de decisão.
+    testes da suíte.
     """
     code = (
         "import sys; sys.path.insert(0, {root!r}); import agent_quality_guard.cli as cli; "
@@ -54,17 +51,3 @@ def test_needle_subcommand_defaults():
     assert args.depth == 2
     assert args.no_integrity is False
     assert args.json is False
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["choice", "x", "-o", "a,b"],
-        ["noul", "x", "-y", "h"],
-        ["score", "x"],
-    ],
-)
-def test_retired_laya_subcommands_are_rejected(argv):
-    """Subcomandos Laya aposentados devem falhar no parse (SystemExit)."""
-    with pytest.raises(SystemExit):
-        _parse_real(argv)

@@ -66,7 +66,7 @@ def test_format_score_rejection_reason_with_defects():
     assert "[Robin — Guardião da Qualidade] (Tentativa 2/5):" in reason
     assert "3.10 < 3.40" in reason
     assert "src/database.py (Bloco 1/2): Score 2.95 < 3.40" in reason
-    assert "Diagnóstico JEV: 'robustez_excecoes_recursos'" in reason
+    assert "Diagnóstico Search Guard: 'robustez_excecoes_recursos'" in reason
     assert "falha_de_tratamento_de_excecoes" in reason
     assert DEFECT_ACTION_PRESCRIPTIONS["robustez_excecoes_recursos"] in reason
     assert MANDATORY_ACTION_DIRECTIVE in reason

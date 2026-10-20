@@ -1,7 +1,7 @@
 """Testes do catálogo de ferramentas do Orquestrador.
 
-TICKET-HARNESS-47: o catálogo espelha a superfície MCP ativa (busca cirúrgica +
-quality guard determinístico, com aliases). As primitivas Laya foram expurgadas.
+O catálogo espelha a superfície MCP ativa (busca cirúrgica + quality guard
+determinístico, com aliases).
 """
 
 import pytest
@@ -15,25 +15,10 @@ ACTIVE_TOOLS = {
     "needle_verify_delivery",
 }
 
-RETIRED_TOOLS = {
-    "needle3_search",
-    "openjev_noul",
-    "openjev_choice",
-    "openjev_consulta",
-    "openjev_score_and_diagnose",
-}
-
-
 def test_tool_catalog_matches_active_mcp_surface():
     """Catálogo = exatamente as 2 tools lógicas ativas + aliases legados."""
     tool_names = {t["function"]["name"] for t in TOOL_DEFINITIONS}
     assert tool_names == ACTIVE_TOOLS
-
-
-def test_retired_laya_tools_are_absent():
-    """Nenhuma primitiva do motor Laya RLCD pode sobreviver no catálogo."""
-    tool_names = {t["function"]["name"] for t in TOOL_DEFINITIONS}
-    assert tool_names.isdisjoint(RETIRED_TOOLS)
 
 
 def test_search_canonical_and_alias_share_the_same_schema():

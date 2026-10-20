@@ -24,7 +24,7 @@ async def test_needle_verify_delivery_clean_workspace_approved():
     with tempfile.TemporaryDirectory() as tmp_dir:
         # Inicializa repositório Git
         subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=tmp_dir, check=True)
+        subprocess.run(["git", "config", "user.email", "test@searchguard.local"], cwd=tmp_dir, check=True)
         subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=tmp_dir, check=True)
 
         # Cria código de produção limpo
@@ -73,7 +73,7 @@ async def test_needle_verify_delivery_ast_violation_rejected():
     with tempfile.TemporaryDirectory() as tmp_dir:
         # Inicializa repositório Git
         subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=tmp_dir, check=True)
+        subprocess.run(["git", "config", "user.email", "test@searchguard.local"], cwd=tmp_dir, check=True)
         subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=tmp_dir, check=True)
 
         # Commit inicial para ter baseline
@@ -280,7 +280,7 @@ def _build_untyped_workspace(tmp_dir: str) -> None:
     NENHUMA violação determinística bloqueante.
     """
     subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=tmp_dir, check=True)
+    subprocess.run(["git", "config", "user.email", "test@searchguard.local"], cwd=tmp_dir, check=True)
     subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=tmp_dir, check=True)
 
     (Path(tmp_dir) / "README.md").write_text("# Project\n", encoding="utf-8")

@@ -1,1 +1,1 @@
-"""Testes automatizados da arquitetura JEV."""
+"""Testes automatizados do Search Guard Agent."""

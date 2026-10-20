@@ -413,7 +413,7 @@ def test_execute_native_tool_skips_when_budget_exhausted(tmp_path: Path):
 def test_execute_native_tool_missing_binary_is_error_not_crash(tmp_path: Path):
     runs: list[NativeToolRun] = []
     output = MultiStackRunner._execute_native_tool(
-        "ghost", ["binario-inexistente-jev-xyz"], tmp_path, os.environ.copy(), time.monotonic() + 1.0, runs
+        "ghost", ["binario-inexistente-xyz"], tmp_path, os.environ.copy(), time.monotonic() + 1.0, runs
     )
     assert output is None
     assert runs[-1].status == "error"
@@ -422,9 +422,9 @@ def test_execute_native_tool_missing_binary_is_error_not_crash(tmp_path: Path):
 def test_execute_native_tool_returns_output_for_real_command(tmp_path: Path):
     runs: list[NativeToolRun] = []
     output = MultiStackRunner._execute_native_tool(
-        "echoer", ["sh", "-c", "echo ola-jev"], tmp_path, os.environ.copy(), time.monotonic() + 2.0, runs
+        "echoer", ["sh", "-c", "echo ola-searchguard"], tmp_path, os.environ.copy(), time.monotonic() + 2.0, runs
     )
-    assert output is not None and "ola-jev" in output
+    assert output is not None and "ola-searchguard" in output
     assert runs[-1].status == "executed" and runs[-1].returncode == 0
 
 

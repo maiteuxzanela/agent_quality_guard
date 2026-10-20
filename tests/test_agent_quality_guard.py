@@ -231,7 +231,7 @@ def test_layer1_and_layer2_helpers_are_subsecond(tmp_path: Path, monkeypatch):
 
 def _build_python_workspace(root: str) -> None:
     subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@searchguard.local"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=root, check=True)
     (Path(root) / "README.md").write_text("# Project\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=root, check=True)
