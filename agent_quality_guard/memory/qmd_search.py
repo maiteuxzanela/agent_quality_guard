@@ -20,10 +20,21 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..core.schemas import Needle3Query, Needle3Snippet
-from .local_needle import LocalNeedleEngine, substantive_terms
+from ..core.schemas import Needle3Query, Needle3Response, Needle3Snippet
+from .local_needle import (
+    LocalNeedleEngine,
+    SandboxViolationError,
+    ensure_within_allowed_roots,
+    resolve_allowed_roots,
+    substantive_terms,
+)
 
 logger = logging.getLogger("jev.qmd")
+
+# TICKET-SGA-03 — timeout rígido da lane léxica (ripgrep). Estourou => a lane
+# degrada (status='partial' + degraded_lanes=['ripgrep_lexical']), nunca um
+# sucesso vazio silencioso.
+RIPGREP_TIMEOUT_SECONDS = 5.0
 
 # Preview literal é fragmento de contexto, nunca dump de arquivo: precisa
 # caber no mesmo teto de caracteres do chunker adaptativo do Needle.
@@ -160,9 +171,29 @@ class QmdHybridSearchEngine:
     """Motor Híbrido de Busca Cirúrgica (Needle 3 + Ripgrep + RRF)."""
 
     def __init__(self, workspace_root: Optional[str] = None):
-        self.workspace_root = Path(workspace_root or os.getcwd()).resolve()
+        # TICKET-SGA-03: workspace canônico validado pela sandbox (mesma
+        # autoridade do Needle Local) + raízes autorizadas resolvidas.
+        self.workspace_root = self._resolve_workspace(workspace_root)
+        self.allowed_roots: List[Path] = resolve_allowed_roots(self.workspace_root)
         self.needle_engine = LocalNeedleEngine(workspace_root=str(self.workspace_root))
         self.rg_binary = find_rg_binary()
+
+    def _resolve_workspace(self, workspace_root: Optional[str] = None) -> Path:
+        """Resolve a raiz do workspace de forma canônica e validada pela sandbox.
+
+        Sem ``CIRURGIC_ALLOWED_ROOTS``, a própria raiz resolvida é a autoridade
+        (comportamento legado). Com a env definida, o workspace precisa caber em
+        alguma das raízes autorizadas; caso contrário :class:`SandboxViolationError`.
+
+        Exemplo:
+            >>> QmdHybridSearchEngine()._resolve_workspace(None) == Path.cwd().resolve()
+            True
+        """
+        resolved = Path(workspace_root or os.getcwd()).expanduser().resolve()
+        ensure_within_allowed_roots(
+            resolved, resolve_allowed_roots(resolved), context="workspace_root"
+        )
+        return resolved
 
     def _estimate_tokens(self, text: str) -> int:
         """Estima a contagem de tokens a partir do comprimento do texto.
@@ -282,6 +313,10 @@ class QmdHybridSearchEngine:
         Compatibilidade: um basename puro sem separador de caminho (ex.:
         ``scope="alpha.py"``) continua sendo um filtro de nome de arquivo,
         aplicado como glob relativo ao workspace (nunca varredura de disco).
+
+        TICKET-SGA-03 — sandbox: todo alvo é resolvido canonicamente e precisa
+        caber em ``self.allowed_roots``; ``..``/symlink/absoluto fora da
+        sandbox viram :class:`SandboxViolationError` explícita.
         """
         if not scope:
             return [str(self.workspace_root)], []
@@ -294,8 +329,13 @@ class QmdHybridSearchEngine:
             candidate = Path(raw).expanduser()
             if not candidate.is_absolute():
                 candidate = self.workspace_root / candidate
-            if candidate.exists():
-                targets.append(str(candidate.resolve()))
+            # Contenção canônica antes de qualquer teste de existência: um
+            # caminho que escapa da sandbox é violação mesmo que não exista.
+            resolved = ensure_within_allowed_roots(
+                candidate, self.allowed_roots, context=f"scope '{raw}'"
+            )
+            if resolved.exists():
+                targets.append(str(resolved))
                 continue
             is_basename = "/" not in raw and "\\" not in raw
             if is_basename and Path(raw).suffix:
@@ -335,21 +375,42 @@ class QmdHybridSearchEngine:
         max_results_per_file: int = DEFAULT_MAX_MATCHES_PER_FILE,
         max_files: int = 40,
     ) -> Dict[str, Dict[str, Any]]:
-        """Executa busca léxica via ripgrep e agrupa resultados por arquivo.
+        """Fachada legada: só o dicionário por arquivo (compat testes/CLI).
 
         Exemplo:
             >>> res = QmdHybridSearchEngine()._run_ripgrep("needle")
             >>> isinstance(res, dict)
             True
         """
+        results, _warnings, _degraded = self._run_ripgrep_detailed(
+            query, scope, max_results_per_file, max_files
+        )
+        return results
+
+    def _run_ripgrep_detailed(
+        self,
+        query: str,
+        scope: Optional[List[str]] = None,
+        max_results_per_file: int = DEFAULT_MAX_MATCHES_PER_FILE,
+        max_files: int = 40,
+    ) -> Tuple[Dict[str, Dict[str, Any]], List[str], List[str]]:
+        """Busca léxica via ripgrep com diagnóstico de resiliência (TICKET-SGA-03).
+
+        Retorna ``(resultados_por_arquivo, warnings, degraded_lanes)``.
+        Timeout do subprocesso (``subprocess.TimeoutExpired``) e falhas de
+        I/O/execução (``OSError``) degradam a lane ``ripgrep_lexical`` com
+        warning explícito — nunca um sucesso vazio silencioso.
+        """
         results_by_file: Dict[str, Dict[str, Any]] = {}
+        warnings: List[str] = []
+        degraded_lanes: List[str] = []
         if not query.strip():
-            return results_by_file
+            return results_by_file, warnings, degraded_lanes
 
         pattern, terms = self._build_pattern(query)
         targets, scope_globs = self._resolve_scope(scope)
         if not targets:
-            return results_by_file
+            return results_by_file, warnings, degraded_lanes
 
         cmd = [self.rg_binary or "grep", "-n", "-i"]
         if self.rg_binary:
@@ -383,37 +444,49 @@ class QmdHybridSearchEngine:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=5.0,
+                timeout=RIPGREP_TIMEOUT_SECONDS,
                 check=False,
             )
-            for line in res.stdout.splitlines():
-                parsed = _parse_grep_line(line, self.workspace_root)
-                if not parsed:
-                    continue
-                rel_p, line_no, matched_text = parsed
-                if rel_p not in results_by_file and len(results_by_file) >= max_files:
-                    break
-                entry = results_by_file.setdefault(
-                    rel_p,
-                    {
-                        "file": rel_p,
-                        "match_count": 0,
-                        "matches": [],
-                        "distinct_terms": 0,
-                        "term_coverage": 0.0,
-                        "matched_terms": [],
-                    },
-                )
-                entry["match_count"] += 1
-                all_texts.setdefault(rel_p, []).append(matched_text)
-                if len(entry["matches"]) < max_results_per_file:
-                    entry["matches"].append({
-                        "line": line_no,
-                        "text": matched_text,
-                    })
+        except subprocess.TimeoutExpired:
+            # TICKET-SGA-03: timeout não é sucesso vazio — degrada a lane.
+            msg = f"ripgrep timed out after {RIPGREP_TIMEOUT_SECONDS}s"
+            logger.warning("QMD: %s (query=%r)", msg, query)
+            warnings.append(msg)
+            degraded_lanes.append("ripgrep_lexical")
+            return results_by_file, warnings, degraded_lanes
+        except OSError as io_err:
+            # Falha de I/O/execução do binário (ex.: binário ausente, permissão).
+            msg = f"lexical lane I/O failure: {io_err}"
+            logger.warning("QMD: %s (query=%r)", msg, query)
+            warnings.append(msg)
+            degraded_lanes.append("ripgrep_lexical")
+            return results_by_file, warnings, degraded_lanes
 
-        except Exception as e:
-            logger.debug(f"Erro ao executar busca léxica: {e}")
+        for line in res.stdout.splitlines():
+            parsed = _parse_grep_line(line, self.workspace_root)
+            if not parsed:
+                continue
+            rel_p, line_no, matched_text = parsed
+            if rel_p not in results_by_file and len(results_by_file) >= max_files:
+                break
+            entry = results_by_file.setdefault(
+                rel_p,
+                {
+                    "file": rel_p,
+                    "match_count": 0,
+                    "matches": [],
+                    "distinct_terms": 0,
+                    "term_coverage": 0.0,
+                    "matched_terms": [],
+                },
+            )
+            entry["match_count"] += 1
+            all_texts.setdefault(rel_p, []).append(matched_text)
+            if len(entry["matches"]) < max_results_per_file:
+                entry["matches"].append({
+                    "line": line_no,
+                    "text": matched_text,
+                })
 
         # Cobertura conjuntiva: quantos termos DISTINTOS da query o arquivo
         # realmente contém. Um arquivo que repete um único keyword quente
@@ -425,7 +498,7 @@ class QmdHybridSearchEngine:
             entry["distinct_terms"] = len(matched)
             entry["term_coverage"] = round(len(matched) / max(1, len(terms)), 4)
 
-        return results_by_file
+        return results_by_file, warnings, degraded_lanes
 
     async def search(
         self,
@@ -439,6 +512,11 @@ class QmdHybridSearchEngine:
     ) -> Dict[str, Any]:
         """Executa a busca híbrida unificada com fusão RRF em CPU.
 
+        TICKET-SGA-03 — contrato de resiliência (dict): ``status`` é
+        ``'success'`` ou ``'partial'``; ``degraded_lanes`` lista lanes que
+        falharam (ex.: ``['ripgrep_lexical']``, ``['needle_ast']``) e
+        ``warnings`` carrega o motivo (timeout, I/O, teto de tokens).
+
         Exemplo:
             >>> import asyncio
             >>> res = asyncio.run(QmdHybridSearchEngine().search(query="needle_engine"))
@@ -447,10 +525,12 @@ class QmdHybridSearchEngine:
         """
         t0 = time.perf_counter()
 
-        # 1. Executa busca léxica via Ripgrep em thread
-        grep_future = asyncio.to_thread(self._run_ripgrep, query, scope)
+        # 1. Executa busca léxica via Ripgrep em thread (com diagnóstico)
+        grep_task = asyncio.create_task(
+            asyncio.to_thread(self._run_ripgrep_detailed, query, scope)
+        )
 
-        # 2. Executa busca semântica/AST via Needle 3
+        # 2. Executa busca semântica/AST via Needle 3 (com diagnóstico)
         needle_q = Needle3Query(
             query=query,
             scope=scope,
@@ -458,9 +538,20 @@ class QmdHybridSearchEngine:
             relational_depth=depth,
             preserve_relational_integrity=True,
         )
-        needle_task = asyncio.create_task(self.needle_engine.search(needle_q))
+        needle_task = asyncio.create_task(
+            self.needle_engine.search_with_diagnostics(needle_q)
+        )
 
-        grep_results, needle_resp = await asyncio.gather(grep_future, needle_task)
+        # Ambas as lanes rodam em paralelo; SandboxViolationError (ValueError)
+        # propaga explicitamente para rejeitar path traversal.
+        (grep_results, grep_warnings, grep_degraded), (
+            needle_resp,
+            needle_warnings,
+            needle_degraded,
+        ) = await asyncio.gather(grep_task, needle_task)
+
+        warnings: List[str] = list(grep_warnings) + list(needle_warnings)
+        degraded_lanes: List[str] = list(grep_degraded) + list(needle_degraded)
 
         # 3. Ranqueamento de Arquivos
         # Grep: ordem conjuntiva — arquivos que cobrem mais termos DISTINTOS da
@@ -571,12 +662,28 @@ class QmdHybridSearchEngine:
         est_raw_tokens = max(1, math.ceil(raw_bytes_evaluated / 3.8)) if raw_bytes_evaluated else total_tokens
         savings_pct = max(0.0, round((1.0 - (total_tokens / max(est_raw_tokens, total_tokens, 1))) * 100.0, 2))
 
+        # TICKET-SGA-03 — alerta de orçamento de tokens insuficiente: havia
+        # arquivos candidatos, mas o teto rígido de max_tokens não coube
+        # nenhum snippet. Warning explícito, nunca sucesso silencioso.
+        files_found = len(ranked_files)
+        snippets_count = len(final_snippets)
+        if files_found > 0 and snippets_count == 0:
+            warnings.append(
+                f"Token budget max_tokens={max_tokens} was too small to fit any "
+                f"snippet; 0 snippets included from {files_found} matching files."
+            )
+
+        # TICKET-SGA-03: status parcial quando alguma lane degradou; senão success.
+        status = "partial" if degraded_lanes else "success"
+
         return {
-            "status": "success",
+            "status": status,
             "latency_ms": round(total_latency_ms, 2),
             "total_tokens": total_tokens,
             "token_savings_pct": savings_pct,
-            "snippets_count": len(final_snippets),
-            "files_found": len(ranked_files),
+            "snippets_count": snippets_count,
+            "files_found": files_found,
             "snippets": final_snippets,
+            "degraded_lanes": degraded_lanes,
+            "warnings": warnings,
         }

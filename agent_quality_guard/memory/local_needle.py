@@ -35,6 +35,109 @@ MAX_CANDIDATE_FILES = 800
 MAX_LEXICAL_CHUNK_LINES = 50
 MAX_LEXICAL_CHUNK_CHARS = 1800
 
+# TICKET-SGA-03 — Sandbox de Workspace/Scope (prevenção de path traversal).
+# Toda busca cirúrgica opera sob raízes canônicas autorizadas: a env
+# ``CIRURGIC_ALLOWED_ROOTS`` (separada por ``:`` ou ``,``) lista caminhos
+# ABSOLUTOS permitidos; sem ela, a única raiz autorizada é o workspace
+# resolvido atual (comportamento legado). A validação canônica
+# (``Path.resolve`` + ``is_relative_to``) bloqueia ``..``, symlinks e
+# caminhos absolutos que tentem escapar da sandbox, com erro explícito —
+# nunca varredura silenciosa fora do perímetro.
+ALLOWED_ROOTS_ENV = "CIRURGIC_ALLOWED_ROOTS"
+
+_ROOT_SPLIT_RE = re.compile(r"[:,]")
+
+
+class SandboxViolationError(ValueError):
+    """Tentativa de path traversal / workspace fora das raízes autorizadas.
+
+    Subclasse de ``ValueError``: chamadores legados que já capturam
+    ``ValueError`` continuam funcionando; o servidor MCP mapeia explicitamente
+    para ``{"status": "error", "error": "sandbox_violation"}``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        path: Optional[Path] = None,
+        allowed_roots: Optional[List[Path]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.path = path
+        self.allowed_roots = list(allowed_roots or [])
+
+
+def _configured_allowed_roots() -> List[Path]:
+    """Parseia ``CIRURGIC_ALLOWED_ROOTS`` em raízes canônicas (``[]`` se ausente).
+
+    Entradas relativas/vazias são ignoradas com warning: configuração inválida
+    não pode derrubar a busca — o fallback é a raiz do workspace.
+
+    Exemplo:
+        >>> roots = _configured_allowed_roots()
+        >>> roots == [] or all(p.is_absolute() for p in roots)
+        True
+    """
+    raw = os.environ.get(ALLOWED_ROOTS_ENV, "")
+    roots: List[Path] = []
+    for chunk in _ROOT_SPLIT_RE.split(raw):
+        item = chunk.strip()
+        if not item:
+            continue
+        candidate = Path(item).expanduser()
+        if not candidate.is_absolute():
+            logger.warning(
+                "Sandbox: entrada relativa em %s ignorada (%r) — use caminhos absolutos.",
+                ALLOWED_ROOTS_ENV,
+                item,
+            )
+            continue
+        resolved = candidate.resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def resolve_allowed_roots(workspace_root: Path) -> List[Path]:
+    """Raízes autorizadas efetivas: env configurada, senão o próprio workspace.
+
+    Exemplo:
+        >>> ws = Path.cwd().resolve()
+        >>> resolve_allowed_roots(ws) == [ws] or all(r.is_absolute() for r in resolve_allowed_roots(ws))
+        True
+    """
+    configured = _configured_allowed_roots()
+    return configured or [Path(workspace_root).resolve()]
+
+
+def ensure_within_allowed_roots(
+    path: Path, allowed_roots: List[Path], *, context: str
+) -> Path:
+    """Resolve ``path`` canonicamente e exige contenção em alguma raiz autorizada.
+
+    Symlinks e ``..`` são resolvidos ANTES da comparação: um symlink interno
+    apontando para fora da sandbox é tratado como violação, não como alvo
+    legítimo.
+
+    Exemplo:
+        >>> p = ensure_within_allowed_roots(Path.cwd(), [Path.cwd()], context="demo")
+        >>> p == Path.cwd().resolve()
+        True
+    """
+    resolved = Path(path).expanduser().resolve()
+    for root in allowed_roots:
+        if resolved.is_relative_to(root):
+            return resolved
+    roots_txt = ", ".join(str(r) for r in allowed_roots) or "<none>"
+    raise SandboxViolationError(
+        f"Sandbox violation ({context}): '{path}' resolves to '{resolved}' "
+        f"outside allowed roots [{roots_txt}] — set {ALLOWED_ROOTS_ENV} "
+        f"to permit this path.",
+        path=resolved,
+        allowed_roots=allowed_roots,
+    )
+
 # TICKET-HARNESS-64 — Stopwords bilíngues (PT-BR / EN) compartilhadas entre
 # as duas rotas (léxica em qmd_search e simbólica aqui). Perguntas naturais
 # carregam ruído gramatical ("como", "onde", "how", "does") que dilui o
@@ -218,12 +321,40 @@ class LocalNeedleEngine:
     """
 
     def __init__(self, workspace_root: Optional[str] = None):
-        self.workspace_root = Path(workspace_root or os.getcwd()).resolve()
+        # TICKET-SGA-03: workspace canônico validado pela sandbox + raízes
+        # autorizadas resolvidas uma única vez na construção do engine.
+        self.workspace_root = self._resolve_workspace(workspace_root)
+        self.allowed_roots: List[Path] = resolve_allowed_roots(self.workspace_root)
         self.candidates_truncated: bool = False
         self.candidates_found: int = 0
         # Registrado por _search_blocking: ident da thread que executou o walk
         # (deve ser != thread do event loop — ver test_search_does_not_block_event_loop).
         self._last_search_thread_ident: Optional[int] = None
+        # TICKET-SGA-03 — diagnóstico de resiliência da última busca: warnings
+        # operacionais e lanes degradadas (ex.: ['needle_ast'] quando a extração
+        # AST falhou por I/O em um dos candidatos).
+        self.last_warnings: List[str] = []
+        self.last_degraded_lanes: List[str] = []
+
+    def _resolve_workspace(self, workspace_root: Optional[str] = None) -> Path:
+        """Resolve a raiz do workspace de forma canônica e validada pela sandbox.
+
+        Sem ``CIRURGIC_ALLOWED_ROOTS``, qualquer workspace é aceito (a própria
+        raiz vira a autoridade da sandbox). Com a env definida, o workspace
+        precisa residir em alguma das raízes autorizadas; caso contrário a
+        construção do engine falha com :class:`SandboxViolationError`.
+
+        Exemplo:
+            >>> LocalNeedleEngine()._resolve_workspace(None) == Path.cwd().resolve()
+            True
+        """
+        resolved = Path(workspace_root or os.getcwd()).expanduser().resolve()
+        # Raízes autorizadas: env configurada -> valida contenção; sem env ->
+        # a própria raiz é a autoridade (trivialmente contida).
+        ensure_within_allowed_roots(
+            resolved, resolve_allowed_roots(resolved), context="workspace_root"
+        )
+        return resolved
 
     def tokenize(self, text: str) -> List[str]:
         """Tokeniza em palavras completas + sub-partes camel/snake.
@@ -810,7 +941,13 @@ class LocalNeedleEngine:
                 candidate = Path(item).expanduser()
                 if not candidate.is_absolute():
                     candidate = self.workspace_root / candidate
-                target_dirs.append(candidate)
+                # TICKET-SGA-03: contenção canônica — '..'/symlink/absoluto
+                # fora da sandbox viram SandboxViolationError explícita.
+                target_dirs.append(
+                    ensure_within_allowed_roots(
+                        candidate, self.allowed_roots, context=f"scope '{item}'"
+                    )
+                )
         else:
             target_dirs = [self.workspace_root]
 
@@ -876,12 +1013,33 @@ class LocalNeedleEngine:
 
     async def search(self, query: Needle3Query) -> Needle3Response:
         """Executa a busca fora do event loop (worker thread do asyncio)."""
+        response, _warnings, _degraded = await self.search_with_diagnostics(query)
+        return response
+
+    async def search_with_diagnostics(
+        self, query: Needle3Query
+    ) -> Tuple[Needle3Response, List[str], List[str]]:
+        """Busca com diagnósticos de resiliência: (resposta, warnings, lanes degradadas).
+
+        TICKET-SGA-03: a lane AST não pode falhar em silêncio — I/O errors em
+        um candidato degradam a busca (status parcial) em vez de derrubar a
+        busca inteira ou retornar sucesso vazio sem explicação.
+        """
         return await asyncio.to_thread(self._search_blocking, query)
 
-    def _search_blocking(self, query: Needle3Query) -> Needle3Response:
-        """Corpo síncrono da busca relacional (roda em thread, não no event loop)."""
+    def _search_blocking(
+        self, query: Needle3Query
+    ) -> Tuple[Needle3Response, List[str], List[str]]:
+        """Corpo síncrono da busca relacional (roda em thread, não no event loop).
+
+        Retorna ``(resposta, warnings, degraded_lanes)`` — TICKET-SGA-03: o
+        diagnóstico de resiliência é explícito, nunca um sucesso vazio
+        silencioso quando a extração AST falhou parcialmente.
+        """
         start_time = time.perf_counter()
         self._last_search_thread_ident = threading.get_ident()
+        warnings: List[str] = []
+        degraded_lanes: List[str] = []
 
         # Stopwords bilíngues com fallback seguro (nunca query vazia).
         raw_query_tokens = self.tokenize(query.query)
@@ -891,8 +1049,21 @@ class LocalNeedleEngine:
         files = self._find_candidate_files(query.scope)
 
         all_blocks: List[Dict[str, Any]] = []
+        extraction_failures = 0
         for f in files:
-            all_blocks.extend(self._extract_blocks_for_file(f))
+            # TICKET-SGA-03: I/O error em um arquivo candidato degrada a lane
+            # AST (warning explícito), mas não derruba a busca dos demais.
+            try:
+                all_blocks.extend(self._extract_blocks_for_file(f))
+            except OSError as io_err:
+                extraction_failures += 1
+                logger.warning("Needle3: falha de I/O extraindo %s: %s", f, io_err)
+        if extraction_failures:
+            degraded_lanes.append("needle_ast")
+            warnings.append(
+                f"{extraction_failures} candidate file(s) failed AST extraction "
+                f"with I/O errors; results may be incomplete."
+            )
 
         block_token_sets: List[Set[str]] = []
         for blk in all_blocks:
@@ -989,6 +1160,20 @@ class LocalNeedleEngine:
                 self.candidates_found,
                 MAX_CANDIDATE_FILES,
             )
+            warnings.append(
+                f"candidates truncated at {MAX_CANDIDATE_FILES} files "
+                f"({self.candidates_found} found); narrow `scope` for full recall."
+            )
+
+        # TICKET-SGA-03 — alerta de orçamento insuficiente: havia arquivos
+        # candidatos relevantes, mas o teto rígido de max_tokens não coube
+        # nenhum snippet. Nunca é sucesso silencioso: warning explícito.
+        if self.candidates_found > 0 and not selected_snippets and scored_blocks:
+            warnings.append(
+                f"Token budget max_tokens={query.max_tokens} was too small to fit "
+                f"any snippet; 0 snippets included from {self.candidates_found} "
+                f"matching files."
+            )
 
         # Economia real: tokens selecionados vs. todos os blocos candidatos indexados.
         total_available_tokens = sum(
@@ -1002,9 +1187,20 @@ class LocalNeedleEngine:
         else:
             token_savings_pct = 0.0
 
-        return Needle3Response(
+        self.last_warnings = list(warnings)
+        self.last_degraded_lanes = list(degraded_lanes)
+
+        response_kwargs: Dict[str, Any] = dict(
             snippets=selected_snippets,
             total_tokens=current_tokens,
             query_latency_ms=round(latency_ms, 2),
             token_savings_pct=token_savings_pct,
         )
+        # TICKET-SGA-03: campos de diagnóstico no schema (Túlio) — preenchidos
+        # apenas quando expostos pelo modelo, para não acoplar o import.
+        if "warnings" in getattr(Needle3Response, "model_fields", {}):
+            response_kwargs["warnings"] = warnings
+        if "degraded_lanes" in getattr(Needle3Response, "model_fields", {}):
+            response_kwargs["degraded_lanes"] = degraded_lanes
+
+        return Needle3Response(**response_kwargs), warnings, degraded_lanes

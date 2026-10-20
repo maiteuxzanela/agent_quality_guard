@@ -8,7 +8,7 @@
  * Mesmo padrão de resolução de bin/agent-quality-guard.js e
  * agent_quality_guard/orchestrator/pytest_chunk_runner.py.
  */
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
@@ -44,6 +44,27 @@ function findPython() {
 }
 
 const pythonBin = findPython();
+
+// Blindagem pré-spawn (TICKET-SGA-03): a suíte determinística exige
+// Python >= 3.10 (requires-python do pyproject.toml). Falha amigável
+// em vez de SyntaxError opaco vindo do pytest no filho.
+const versionCheck = spawnSync(
+  pythonBin,
+  ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"],
+  { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" }
+);
+if (versionCheck.error || versionCheck.status !== 0) {
+  const versionLine = versionCheck.error
+    ? "indisponível"
+    : (spawnSync(pythonBin, ["--version"], { encoding: "utf8" }).stdout?.trim() || "versão desconhecida");
+  console.error(
+    `[agent-quality-guard] Python >= 3.10 é obrigatório para rodar a suíte, mas "${pythonBin}" (${versionLine}) não atende.\n` +
+    "Atualize o interpretador ou aponte PYTHON para um virtualenv Python 3.10+:\n" +
+    "  python3.10 -m venv .venv && export PYTHON=\"$PWD/.venv/bin/python3\""
+  );
+  process.exit(1);
+}
+
 const env = {
   ...process.env,
   // Ressalva do SDET: fora do CI, rodar sempre com JEV_USE_HERMES=false.
