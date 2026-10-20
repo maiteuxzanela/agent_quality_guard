@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
-logger = logging.getLogger("jev.orchestrator.pytest_chunk_runner")
+logger = logging.getLogger("agent_quality_guard.orchestrator.pytest_chunk_runner")
 
 
 HEAVY_TEST_PATTERNS = [

@@ -22,7 +22,7 @@ from ..core.schemas import CHARS_PER_TOKEN, Needle3Query, Needle3Response, Needl
 from .ast_cache import file_size_allowed, file_stat_key, get_file_index, set_file_index
 from .tree_sitter_guard import TreeSitterGuard
 
-logger = logging.getLogger("jev.needle.local")
+logger = logging.getLogger("agent_quality_guard.needle.local")
 
 # Teto de arquivos candidatos por busca (defesa contra workspace de dezenas de GB).
 # Ao atingir o teto, o walk para e a resposta indica truncamento — o chamador
@@ -47,6 +47,32 @@ MAX_LEXICAL_CHUNK_CHARS = 1800
 # nunca varredura silenciosa fora do perímetro.
 ALLOWED_ROOTS_ENV = "CIRURGIC_ALLOWED_ROOTS"
 
+# TICKET-SGA-06 — Denylist rígida de diretórios de sistema operacional.
+# Independente da allowlist (que é opt-in), nenhum workspace/scope pode
+# apontar para raízes críticas do SO, para um descendente delas ou para um
+# ancestral que as contenha (ex.: "/", "/usr"). O fluxo padrão continua sem
+# atrito: projetos e worktrees do usuário (``~/.local/share/opencode/...``)
+# são aceitos livremente; só o perímetro de sistema é vedado.
+STRICT_SANDBOX_ENV = "CIRURGIC_SANDBOX_STRICT"
+SYSTEM_RESTRICTED_MESSAGE = "Acesso negado: diretório de sistema restrito"
+SYSTEM_RESTRICTED_ROOTS: frozenset[Path] = frozenset(
+    Path(p)
+    for p in (
+        "/",
+        "/etc",
+        "/sys",
+        "/proc",
+        "/dev",
+        "/boot",
+        "/root",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/usr/bin",
+        "/usr/sbin",
+    )
+)
+
 _ROOT_SPLIT_RE = re.compile(r"[:,]")
 
 
@@ -68,6 +94,63 @@ class SandboxViolationError(ValueError):
         super().__init__(message)
         self.path = path
         self.allowed_roots = list(allowed_roots or [])
+
+
+def _strict_sandbox_enabled() -> bool:
+    """``True`` quando ``CIRURGIC_SANDBOX_STRICT`` pede whitelist corporativa.
+
+    A flag é opt-in: ausente/``0``/``false`` mantém o fluxo padrão sem atrito,
+    em que qualquer workspace de projeto (incluindo worktrees) é aceito.
+
+    Exemplo:
+        >>> isinstance(_strict_sandbox_enabled(), bool)
+        True
+    """
+    raw = os.environ.get(STRICT_SANDBOX_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def ensure_not_system_restricted(path: Path, *, context: str = "path") -> Path:
+    """Resolve ``path`` e veda diretórios críticos do sistema operacional.
+
+    Bloqueia três formas de tocar o perímetro de sistema: o próprio diretório
+    restrito (``/etc``), um descendente dele (``/etc/passwd``) e um ancestral
+    que o contenha (``/usr`` contém ``/usr/bin``). A raiz ``/`` é bloqueada
+    apenas por igualdade exata, já que todo caminho absoluto é relativo a ela.
+    A checagem roda depois de ``Path.resolve`` para impedir bypass via symlink
+    ou ``..``.
+
+    Exemplo:
+        >>> ensure_not_system_restricted(Path.cwd()) == Path.cwd().resolve()
+        True
+    """
+    resolved = Path(path).expanduser().resolve()
+    # Também inspeciona o caminho absoluto sem seguir symlinks: aliases do SO
+    # como ``/lib -> /usr/lib`` precisam ser bloqueados pelo nome, não só pelo
+    # alvo canônico.
+    absolute = Path(os.path.abspath(Path(path).expanduser()))
+    for candidate in (resolved, absolute):
+        for restricted in SYSTEM_RESTRICTED_ROOTS:
+            if candidate == restricted:
+                raise SandboxViolationError(
+                    SYSTEM_RESTRICTED_MESSAGE,
+                    path=resolved,
+                    allowed_roots=sorted(SYSTEM_RESTRICTED_ROOTS, key=str),
+                )
+            # A raiz do filesystem ("/") não é tratada como "ancestral de tudo":
+            # todo caminho absoluto é relativo a ela, o que bloquearia o usuário
+            # inteiro. Para "/" vale apenas a igualdade exata acima.
+            if restricted == Path("/"):
+                continue
+            if candidate.is_relative_to(restricted) or restricted.is_relative_to(
+                candidate
+            ):
+                raise SandboxViolationError(
+                    SYSTEM_RESTRICTED_MESSAGE,
+                    path=resolved,
+                    allowed_roots=sorted(SYSTEM_RESTRICTED_ROOTS, key=str),
+                )
+    return resolved
 
 
 def _configured_allowed_roots() -> List[Path]:
@@ -102,7 +185,11 @@ def _configured_allowed_roots() -> List[Path]:
 
 
 def resolve_allowed_roots(workspace_root: Path) -> List[Path]:
-    """Raízes autorizadas efetivas: env configurada, senão o próprio workspace.
+    """Raízes autorizadas efetivas segundo a política de sandbox vigente.
+
+    Precedência: ``CIRURGIC_ALLOWED_ROOTS`` (whitelist explícita) > modo
+    estrito (``CIRURGIC_SANDBOX_STRICT=1``, que confia apenas no diretório de
+    trabalho corrente) > fluxo padrão sem atrito (a própria raiz do workspace).
 
     Exemplo:
         >>> ws = Path.cwd().resolve()
@@ -110,7 +197,11 @@ def resolve_allowed_roots(workspace_root: Path) -> List[Path]:
         True
     """
     configured = _configured_allowed_roots()
-    return configured or [Path(workspace_root).resolve()]
+    if configured:
+        return configured
+    if _strict_sandbox_enabled():
+        return [Path.cwd().resolve()]
+    return [Path(workspace_root).resolve()]
 
 
 def ensure_within_allowed_roots(
@@ -120,14 +211,15 @@ def ensure_within_allowed_roots(
 
     Symlinks e ``..`` são resolvidos ANTES da comparação: um symlink interno
     apontando para fora da sandbox é tratado como violação, não como alvo
-    legítimo.
+    legítimo. Diretórios críticos do SO são rejeitados mesmo que constem na
+    allowlist (denylist de sistema é inegociável).
 
     Exemplo:
         >>> p = ensure_within_allowed_roots(Path.cwd(), [Path.cwd()], context="demo")
         >>> p == Path.cwd().resolve()
         True
     """
-    resolved = Path(path).expanduser().resolve()
+    resolved = ensure_not_system_restricted(path, context=context)
     for root in allowed_roots:
         if resolved.is_relative_to(root):
             return resolved
@@ -508,18 +600,26 @@ class LocalNeedleEngine:
     def _resolve_workspace(self, workspace_root: Optional[str] = None) -> Path:
         """Resolve a raiz do workspace de forma canônica e validada pela sandbox.
 
-        Sem ``CIRURGIC_ALLOWED_ROOTS``, qualquer workspace é aceito (a própria
-        raiz vira a autoridade da sandbox). Com a env definida, o workspace
-        precisa residir em alguma das raízes autorizadas; caso contrário a
-        construção do engine falha com :class:`SandboxViolationError`.
+        Política TICKET-SGA-06:
+
+        * Denylist de sistema SEMPRE ativa — ``/``, ``/etc``, ``/sys``,
+          ``/proc``, ``/dev``, ``/boot``, ``/root``, ``/bin``, ``/sbin``,
+          ``/lib``, ``/usr/bin`` e ``/usr/sbin`` (e seus descendentes/ancestrais)
+          viram :class:`SandboxViolationError` com a mensagem
+          ``"Acesso negado: diretório de sistema restrito"``.
+        * Sem ``CIRURGIC_ALLOWED_ROOTS`` e sem ``CIRURGIC_SANDBOX_STRICT``,
+          qualquer workspace de projeto/worktree é aceito (sem atrito).
+        * Com a allowlist configurada ou ``CIRURGIC_SANDBOX_STRICT=1``, o
+          workspace precisa residir no perímetro autorizado.
 
         Exemplo:
             >>> LocalNeedleEngine()._resolve_workspace(None) == Path.cwd().resolve()
             True
         """
-        resolved = Path(workspace_root or os.getcwd()).expanduser().resolve()
-        # Raízes autorizadas: env configurada -> valida contenção; sem env ->
-        # a própria raiz é a autoridade (trivialmente contida).
+        raw = Path(workspace_root or os.getcwd()).expanduser()
+        # Valida o caminho ORIGINAL (antes de resolver symlinks) para que
+        # aliases como ``/lib`` não escapem virando ``/usr/lib``.
+        resolved = ensure_not_system_restricted(raw, context="workspace_root")
         ensure_within_allowed_roots(
             resolved, resolve_allowed_roots(resolved), context="workspace_root"
         )

@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger("openjev.sniffer")
+logger = logging.getLogger("agent_quality_guard.sniffer")
 
 SCORE_PREMISE_MAX_LEN = 1500
 SAFE_PREMISE_CEILING = 1400

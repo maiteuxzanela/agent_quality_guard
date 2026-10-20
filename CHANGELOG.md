@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agent_quality_guard` quality verification workflow.
 
 ### Changed
+- Package identity unified as `search-guard-agent` for both the NPM package and
+  the Python distribution. The NPM `bin` map ships `search-guard-agent` and the
+  backward-compatible `agent-quality-guard` alias; the historical
+  `agent_quality_guard` (underscore) alias was retired. Repository, homepage,
+  issue tracker and security-advisory URLs now point to
+  `github.com/maiteuxzanela/search-guard-agent`. Historical JEV documentation
+  was archived under `docs/archive/`.
 - `depth` on `cirurgic_search`/`qmd_search` now defaults to `None`
   (unlimited): the value caps the directory-tree walk depth (ripgrep
   `--max-depth` / walk cutoff) and, when applicable, the AST relational depth

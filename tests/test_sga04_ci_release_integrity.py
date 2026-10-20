@@ -166,7 +166,9 @@ def test_ci_triggers_permissions_and_env_are_strict():
 
     assert workflow["permissions"] == {"contents": "read"}
     env = workflow["env"]
-    assert env["JEV_USE_HERMES"] == "false"
+    # TICKET-SGA-06: variáveis legadas do Projeto JEV foram expurgadas do CI.
+    assert "JEV_USE_HERMES" not in env
+    assert not [key for key in env if key.startswith("JEV_")], env
     # Loopback sempre fora de proxies no runner (evita flakiness de rede local).
     assert "127.0.0.1" in env["NO_PROXY"] and "::1" in env["NO_PROXY"]
 

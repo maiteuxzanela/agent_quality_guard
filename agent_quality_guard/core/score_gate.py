@@ -21,7 +21,7 @@ import logging
 import os
 import tempfile
 
-logger = logging.getLogger("jev.score_gate")
+logger = logging.getLogger("agent_quality_guard.score_gate")
 
 SCORE_PREMISE_MAX_LEN = 1500
 MAX_ATTEMPTS = 5

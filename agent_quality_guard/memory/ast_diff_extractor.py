@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .ast_cache import get_cached_ast
 
-logger = logging.getLogger("openjev.ast_diff_extractor")
+logger = logging.getLogger("agent_quality_guard.ast_diff_extractor")
 
 # NOTA (set/2026): "tests"/"test" NÃO entram neste ignore — alinhado ao
 # IGNORE_DIR_PARTS do diff_inspector. A rubrica codigo_producao avalia

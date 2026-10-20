@@ -26,8 +26,8 @@ migrate to the unified `search-guard-agent` package.
 Please report vulnerabilities privately through one of the following channels:
 
 1. **GitHub Security Advisories (preferred):** open a private vulnerability
-   report at
-   [`https://github.com/maiteuxzanela/search-guard-agent/security/advisories/new`](https://github.com/maiteuxzanela/search-guard-agent/security/advisories/new).
+   report in the official repository at
+   [`maiteuxzanela/search-guard-agent` → Security → Advisories](https://github.com/maiteuxzanela/search-guard-agent/security/advisories/new).
 2. **Email:** contact the maintainer through the private channel listed on the
    maintainer's GitHub profile (`maiteuxzanela`). If you need a PGP key for
    encrypted email, request it through the GitHub Security Advisory flow.

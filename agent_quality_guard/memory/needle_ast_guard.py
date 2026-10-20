@@ -21,7 +21,7 @@ from typing import Any, List, Optional, Set
 from ..core.diff_inspector import get_workspace_diff_files, is_ignored_path, normalize_workspace_relpath
 from .ast_cache import get_cached_ast
 
-logger = logging.getLogger("jev.needle.ast_guard")
+logger = logging.getLogger("agent_quality_guard.needle.ast_guard")
 
 # Comandos SQL clássicos sujeitos a injeção via interpolação de strings
 SQL_KEYWORDS = re.compile(

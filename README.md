@@ -1,12 +1,12 @@
-# 🛡️ Search Guard Agent
+# 🛡️ search-guard-agent
 
-[![npm version](https://img.shields.io/npm/v/agent-quality-guard.svg?color=cb3837&style=flat-square)](https://www.npmjs.com/package/agent-quality-guard)
+[![npm version](https://img.shields.io/npm/v/search-guard-agent.svg?color=cb3837&style=flat-square)](https://www.npmjs.com/package/search-guard-agent)
 [![MCP Standard](https://img.shields.io/badge/MCP-Standard%20stdio-blue.svg?style=flat-square)](https://modelcontextprotocol.io/)
 [![100% Deterministic](https://img.shields.io/badge/Validation-100%25%20Deterministic-brightgreen.svg?style=flat-square)]()
 [![Zero ML Overhead](https://img.shields.io/badge/Inference-Zero%20GPU%20%2F%20Zero%20ML-success.svg?style=flat-square)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](./LICENSE)
 
-**Search Guard Agent** is a 100% deterministic, zero-ML code-verification and
+**search-guard-agent** is a 100% deterministic, zero-ML code-verification and
 surgical-search engine delivered as a Model Context Protocol (MCP) server. It
 safeguards autonomous AI agent workflows (Claude Desktop, Cursor, OpenCode,
 Codex) with two canonical tools:
@@ -19,10 +19,10 @@ Codex) with two canonical tools:
 
 ```bash
 # Run universally via NPX (Node/Bun):
-npx -y agent-quality-guard
+npx -y search-guard-agent
 
 # Or add to Claude Desktop / Cursor / OpenCode MCP config:
-# { "command": "npx", "args": ["-y", "agent-quality-guard"] }
+# { "command": "npx", "args": ["-y", "search-guard-agent"] }
 ```
 
 It prevents the most common failure modes of AI code generation —
@@ -367,25 +367,30 @@ of what changed:
 
 | Before                                             | After                                          |
 | -------------------------------------------------- | ---------------------------------------------- |
-| `npx -y cirurgic-search-mcp`                       | `npx -y agent-quality-guard`                   |
-| `npx -y agent-quality-guard`                       | `npx -y agent-quality-guard` (unchanged)       |
+| `npx -y cirurgic-search-mcp`                       | `npx -y search-guard-agent`                    |
+| `npx -y agent-quality-guard`                       | `npx -y search-guard-agent`                    |
 | Tool `qmd_search`                                  | Tool `cirurgic_search` (alias kept)            |
 | Tool `needle_verify_delivery`                      | Tool `agent_quality_guard` (alias kept)        |
-| Python package `agent-quality-guard-mcp`           | Same package, unified docs                     |
+| Python package `agent-quality-guard-mcp`           | Python package `search-guard-agent`            |
 
 **What you need to do:**
 
 1. **NPM users of `cirurgic-search-mcp`:** switch your `npx`/`package.json`
-   reference to `agent-quality-guard`. The old package is deprecated and will
+   reference to `search-guard-agent`. The old package is deprecated and will
    not receive new features.
-2. **NPM users of `agent-quality-guard`:** no action required — you are
-   already on the unified package. Update at your convenience to pick up the
-   new tools.
+2. **NPM users of `agent-quality-guard`:** switch to `search-guard-agent`.
+   The `agent-quality-guard` bin alias is still shipped for backward
+   compatibility, so existing local scripts keep working.
 3. **Callers of `qmd_search`:** rename to `cirurgic_search` when convenient.
    The alias continues to work with an identical signature; it is soft-deprecated
    and only maintained for backward compatibility.
 4. **Callers of `needle_verify_delivery`:** rename to `agent_quality_guard`
    when convenient. Same compatibility guarantee.
+
+> **CLI alias note:** the historical underscore bin alias `agent_quality_guard`
+> was retired in this unification. Use the canonical `search-guard-agent`
+> command or the hyphenated `agent-quality-guard` alias — both still map to the
+> same `bin/agent-quality-guard.js` entry point.
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for the full history.
 
@@ -393,7 +398,7 @@ See [`CHANGELOG.md`](./CHANGELOG.md) for the full history.
 
 ## 🧪 Testing
 
-Search Guard Agent enforces rigorous anti-mock testing on itself:
+search-guard-agent enforces rigorous anti-mock testing on itself:
 
 ```bash
 # Run the complete deterministic test suite

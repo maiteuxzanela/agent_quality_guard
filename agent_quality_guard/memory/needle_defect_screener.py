@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from agent_quality_guard.memory.ast_diff_extractor import AstSymbolSlice
 from agent_quality_guard.memory.ast_cache import get_cached_ast
 
-logger = logging.getLogger("openjev.defect_screener")
+logger = logging.getLogger("agent_quality_guard.defect_screener")
 
 # Constante de texto: caminho absoluto ou URL embutida (gatilho A9).
 _PATH_URL_RE = re.compile(r"^(https?://|ftp://|/home/|/Users/|[A-Za-z]:\\)")

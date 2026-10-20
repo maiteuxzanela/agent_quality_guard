@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger("jev.multi_stack")
+logger = logging.getLogger("agent_quality_guard.multi_stack")
 
 RULE_SUGGESTIONS: Dict[str, str] = {
     "SECURITY_EVAL": (

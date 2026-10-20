@@ -55,7 +55,7 @@ from agent_quality_guard.memory.needle_ast_guard import NeedleASTGuard
 from agent_quality_guard.orchestrator.pytest_chunk_runner import PytestChunkRunner
 from agent_quality_guard.orchestrator.multi_stack_runner import MultiStackRunner
 
-logger = logging.getLogger("jev.mcp")
+logger = logging.getLogger("agent_quality_guard.mcp")
 
 app = MCPServer("cirurgic-search-mcp")
 

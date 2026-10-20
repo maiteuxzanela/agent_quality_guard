@@ -30,7 +30,7 @@ from ..core.schemas import (
 
 from .local_needle import LocalNeedleEngine
 
-logger = logging.getLogger("jev.needle")
+logger = logging.getLogger("agent_quality_guard.needle")
 
 
 class Needle3Client:

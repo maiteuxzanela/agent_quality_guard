@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
-logger = logging.getLogger("jev.needle.tree_sitter_guard")
+logger = logging.getLogger("agent_quality_guard.needle.tree_sitter_guard")
 
 try:  # pragma: no cover - depende do ambiente
     from tree_sitter import Node  # type: ignore

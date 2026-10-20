@@ -25,7 +25,7 @@ from ..core.schemas import (
 )
 from ..memory.needle_ast_guard import NeedleASTGuard
 
-logger = logging.getLogger("jev.orchestrator.subagent_runner")
+logger = logging.getLogger("agent_quality_guard.orchestrator.subagent_runner")
 
 # Locais conhecidos de personas de fallback no ecossistema (derivado da raiz do repositório)
 GLOBAL_PERSONAS_DIR = Path(__file__).resolve().parents[2] / "personas"

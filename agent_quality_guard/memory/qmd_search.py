@@ -27,6 +27,7 @@ from .local_needle import (
     LocalNeedleEngine,
     SandboxViolationError,
     UNIVERSAL_EXCLUDED_DIRS,
+    ensure_not_system_restricted,
     ensure_within_allowed_roots,
     exclude_patterns_to_rg_globs,
     merge_exclude_patterns,
@@ -35,7 +36,7 @@ from .local_needle import (
     substantive_terms,
 )
 
-logger = logging.getLogger("jev.qmd")
+logger = logging.getLogger("agent_quality_guard.qmd")
 
 # TICKET-SGA-03 — timeout rígido da lane léxica (ripgrep). Estourou => a lane
 # degrada (status='partial' + degraded_lanes=['ripgrep_lexical']), nunca um
@@ -214,15 +215,20 @@ class QmdHybridSearchEngine:
     def _resolve_workspace(self, workspace_root: Optional[str] = None) -> Path:
         """Resolve a raiz do workspace de forma canônica e validada pela sandbox.
 
-        Sem ``CIRURGIC_ALLOWED_ROOTS``, a própria raiz resolvida é a autoridade
-        (comportamento legado). Com a env definida, o workspace precisa caber em
-        alguma das raízes autorizadas; caso contrário :class:`SandboxViolationError`.
+        Política TICKET-SGA-06: a denylist de sistema é sempre aplicada; sem
+        ``CIRURGIC_ALLOWED_ROOTS`` e sem ``CIRURGIC_SANDBOX_STRICT=1`` qualquer
+        workspace de projeto/worktree é aceito (fluxo sem atrito). Com allowlist
+        explícita ou modo estrito, o workspace precisa caber no perímetro
+        autorizado; caso contrário :class:`SandboxViolationError`.
 
         Exemplo:
             >>> QmdHybridSearchEngine()._resolve_workspace(None) == Path.cwd().resolve()
             True
         """
-        resolved = Path(workspace_root or os.getcwd()).expanduser().resolve()
+        raw = Path(workspace_root or os.getcwd()).expanduser()
+        # Valida o caminho ORIGINAL (antes de resolver symlinks) para que
+        # aliases como ``/lib`` não escapem virando ``/usr/lib``.
+        resolved = ensure_not_system_restricted(raw, context="workspace_root")
         ensure_within_allowed_roots(
             resolved, resolve_allowed_roots(resolved), context="workspace_root"
         )

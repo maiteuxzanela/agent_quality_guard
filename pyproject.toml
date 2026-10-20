@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-quality-guard-mcp"
+name = "search-guard-agent"
 version = "0.1.0"
-description = "Deterministic code quality gate and MCP server for autonomous AI coding agents"
+description = "Deterministic code quality gate, surgical search and MCP server for autonomous AI coding agents"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -21,6 +21,11 @@ dependencies = [
     "tree-sitter-language-pack>=0.21.0",
     "httpx>=0.24.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/maiteuxzanela/search-guard-agent"
+Repository = "https://github.com/maiteuxzanela/search-guard-agent"
+"Bug Tracker" = "https://github.com/maiteuxzanela/search-guard-agent/issues"
 
 [project.scripts]
 agent-quality-guard-mcp = "agent_quality_guard.mcp_server:main"

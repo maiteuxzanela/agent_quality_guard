@@ -19,7 +19,7 @@ invariant.
 ### Local Setup
 
 ```bash
-# 1. Fork and clone your fork
+# 1. Fork https://github.com/maiteuxzanela/search-guard-agent and clone your fork
 git clone git@github.com:<your-username>/search-guard-agent.git
 cd search-guard-agent
 
@@ -156,8 +156,10 @@ A contribution is ready for review when this gate returns `passed: true` /
 
 ## Reporting Bugs & Security Issues
 
-- **Bugs:** open a GitHub issue with reproduction steps, expected vs. actual
-  behavior, and your environment (OS, Python/Node version).
+- **Bugs:** open an issue at
+  [github.com/maiteuxzanela/search-guard-agent/issues](https://github.com/maiteuxzanela/search-guard-agent/issues)
+  with reproduction steps, expected vs. actual behavior, and your environment
+  (OS, Python/Node version).
 - **Security vulnerabilities:** follow the private disclosure process in
   [SECURITY.md](./SECURITY.md). Do not open a public issue for security
   reports.
