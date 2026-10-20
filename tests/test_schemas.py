@@ -1,5 +1,9 @@
 """Testes unitários dos contratos de dados e schemas Pydantic."""
 
+import asyncio
+import tempfile
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -7,6 +11,7 @@ from agent_quality_guard.core.schemas import (
     ASTViolation,
     ChoiceRequest,
     ChoiceResponse,
+    CirurgicSearchResponse,
     ConsultaRequest,
     ConsultaResponse,
     Needle3Query,
@@ -270,3 +275,112 @@ def test_needle3_query_scope_coercion():
 
     q5 = Needle3Query(query="def test", scope="")
     assert q5.scope is None
+
+
+# ==============================================================================
+# TICKET-SGA-03: warnings / degraded_lanes nos contratos de busca cirúrgica
+# ==============================================================================
+
+def test_needle3_response_defaults_include_empty_warnings_and_degraded_lanes():
+    """Needle3Response: warnings/degraded_lanes existem com default_factory=list (retrocompat)."""
+    resp = Needle3Response(
+        snippets=[],
+        total_tokens=0,
+        query_latency_ms=1.0,
+    )
+    assert resp.warnings == []
+    assert resp.degraded_lanes == []
+
+
+def test_needle3_response_accepts_warnings_and_degraded_lanes():
+    """Needle3Response: propagação de avisos e lanes degradadas preservada no modelo."""
+    resp = Needle3Response(
+        snippets=[],
+        total_tokens=10,
+        query_latency_ms=2.0,
+        warnings=["ripgrep timed out after 5.0s"],
+        degraded_lanes=["ripgrep_lexical"],
+    )
+    assert resp.warnings == ["ripgrep timed out after 5.0s"]
+    assert resp.degraded_lanes == ["ripgrep_lexical"]
+
+
+def test_cirurgic_search_response_defaults_are_retrocompatible():
+    """CirurgicSearchResponse: defaults preservam construções antigas (success, listas vazias)."""
+    resp = CirurgicSearchResponse.model_validate(
+        {
+            "latency_ms": 12.3,
+            "total_tokens": 100,
+            "token_savings_pct": 88.5,
+            "snippets_count": 1,
+            "files_found": 1,
+            "snippets": [],
+        }
+    )
+    assert resp.status == "success"
+    assert resp.warnings == []
+    assert resp.degraded_lanes == []
+    assert resp.error is None
+    assert resp.message is None
+
+
+def test_cirurgic_search_response_rejects_unknown_status():
+    """Contrato estrito: status fora de success|partial|error é rejeitado."""
+    with pytest.raises(ValidationError):
+        CirurgicSearchResponse.model_validate({"status": "super-success"})
+
+
+def test_cirurgic_search_error_payload_contract_matches_schema():
+    """Payload de erro estruturado do MCP (sandbox_violation) valida no schema documentado.
+
+    Espelha exatamente o dict que `_cirurgic_search_core` retorna ao capturar
+    ``ValueError`` de sandbox — garante que o contrato declarado no servidor
+    bate com o schema CirurgicSearchResponse.
+    """
+    error_payload = {
+        "status": "error",
+        "error": "sandbox_violation",
+        "message": "workspace fora das raízes autorizadas: CIRURGIC_ALLOWED_ROOTS",
+        "degraded_lanes": ["sandbox"],
+        "warnings": ["Sandbox rejeitou a busca: workspace fora das raízes autorizadas"],
+        "latency_ms": 0.0,
+        "total_tokens": 0,
+        "token_savings_pct": 0.0,
+        "snippets_count": 0,
+        "files_found": 0,
+        "snippets": [],
+    }
+    resp = CirurgicSearchResponse.model_validate(error_payload)
+    assert resp.status == "error"
+    assert resp.error == "sandbox_violation"
+    assert resp.degraded_lanes == ["sandbox"]
+
+
+def test_cirurgic_search_mcp_tool_normalizes_contract_with_real_engine():
+    """Tool MCP `cirurgic_search` sempre emite status/warnings/degraded_lanes (sem mocks).
+
+    Valida a camada de normalização do servidor MCP contra o motor real de
+    busca híbrida em um workspace temporário de verdade.
+    """
+    from agent_quality_guard.mcp_server import cirurgic_search
+
+    with tempfile.TemporaryDirectory(prefix="sga03_schema_ws_") as tmp:
+        ws = Path(tmp)
+        (ws / "billing.py").write_text(
+            "def calculate_total_billing(days: int) -> float:\n"
+            "    return days * 1500.0\n",
+            encoding="utf-8",
+        )
+
+        res = asyncio.run(
+            cirurgic_search(query="calculate_total_billing", workspace=str(ws))
+        )
+
+    # Contrato normalizado pelo servidor (setdefault) — chaves sempre presentes.
+    assert res["status"] in ("success", "partial")
+    assert isinstance(res["warnings"], list)
+    assert isinstance(res["degraded_lanes"], list)
+
+    # O dict real do engine valida no schema documentado de referência.
+    validated = CirurgicSearchResponse.model_validate(res)
+    assert validated.status == res["status"]

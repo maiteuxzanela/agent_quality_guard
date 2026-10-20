@@ -4,7 +4,7 @@
 3. Execução & Orquestração
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -877,6 +877,14 @@ class Needle3Response(BaseModel):
         le=100.0,
         description="Percentual real de tokens economizados vs. indexar todos os blocos candidatos.",
     )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Avisos operacionais e alertas de degradação.",
+    )
+    degraded_lanes: List[str] = Field(
+        default_factory=list,
+        description="Lanes de busca que falharam ou sofreram degradação/timeout.",
+    )
 
 
 class NeedleSearchHttpRequest(BaseModel):
@@ -897,6 +905,57 @@ class NeedleSearchHttpRequest(BaseModel):
             ['src/decision']
         """
         return Needle3Query.coerce_scope_to_list(v)
+
+
+class CirurgicSearchResponse(BaseModel):
+    """Contrato documentado da resposta do MCP `cirurgic_search` (+ alias `qmd_search`).
+
+    O runtime MCP retorna um ``dict`` plain (para preservar paridade byte-a-byte
+    entre o nome canônico e o alias legado e não quebrar clientes que fazem
+    ``res["status"]``); este schema existe como contrato de referência validável
+    e para clientes Python que queiram ``CirurgicSearchResponse.model_validate(res)``.
+
+    Os campos ``status``/``warnings``/``degraded_lanes`` são aditivos e
+    retrocompatíveis: construções antigas que não os informam recebem os
+    defaults (`success`, listas vazias).
+    """
+    status: Literal["success", "partial", "error"] = Field(
+        default="success",
+        description=(
+            "success = todas as lanes ok; partial = pelo menos uma lane degradada "
+            "(snippets ainda úteis); error = falha total (ex: violação de sandbox)."
+        ),
+    )
+    degraded_lanes: List[str] = Field(
+        default_factory=list,
+        description="Lanes de busca que falharam ou sofreram degradação/timeout (ex: 'ripgrep_lexical', 'needle_ast', 'sandbox').",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Avisos operacionais e alertas de degradação (ex: timeout de lane, token budget insuficiente).",
+    )
+    latency_ms: float = Field(default=0.0, ge=0.0, description="Latência total da busca híbrida em milissegundos.")
+    total_tokens: int = Field(default=0, ge=0, description="Total de tokens consumidos pelos snippets retornados.")
+    token_savings_pct: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Percentual estimado de tokens economizados vs. indexar todos os candidatos brutos.",
+    )
+    snippets_count: int = Field(default=0, ge=0, description="Quantidade de snippets no recorte final.")
+    files_found: int = Field(default=0, ge=0, description="Quantidade de arquivos candidatos rankeados.")
+    snippets: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Snippets cirúrgicos brutos (dict por arquivo com rrf_score, source, relations, exact_matches, content).",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Código/identificador do erro quando status='error' (ex: 'sandbox_violation').",
+    )
+    message: Optional[str] = Field(
+        default=None,
+        description="Mensagem humana explicando o erro ou a degradação quando aplicável.",
+    )
 
 
 # ==============================================================================

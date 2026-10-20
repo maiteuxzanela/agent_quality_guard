@@ -107,6 +107,16 @@ async def _cirurgic_search_core(
     Núcleo único compartilhado por `cirurgic_search` (canônico) e `qmd_search`
     (alias legado), garantindo contratos idênticos de entrada e saída.
 
+    Contrato de saída (aditivo e retrocompatível — TICKET-SGA-03): o dict
+    retornado sempre inclui as chaves ``status`` (``success`` | ``partial`` |
+    ``error``), ``warnings`` (avisos operacionais) e ``degraded_lanes``
+    (lanes de busca degradadas). Validação de referência: schema
+    ``CirurgicSearchResponse`` em ``agent_quality_guard.core.schemas``.
+
+    Violações de sandbox/allowlist do workspace são capturadas (``ValueError``
+    explícito do motor) e convertidas em ``status="error"`` estruturado — o
+    servidor MCP nunca derruba o transporte stdio por caminho inválido.
+
     Exemplo:
         >>> import asyncio
         >>> res = asyncio.run(cirurgic_search(query="agent_quality_guard"))
@@ -114,15 +124,47 @@ async def _cirurgic_search_core(
         True
     """
     target_workspace = workspace.strip() if workspace and workspace.strip() else os.getcwd()
-    engine = QmdHybridSearchEngine(workspace_root=target_workspace)
     scope_list = [s.strip() for s in scope.split(",") if s.strip()] if scope else None
 
-    return await engine.search(
-        query=query,
-        scope=scope_list,
-        max_tokens=max_tokens,
-        depth=depth,
-    )
+    try:
+        engine = QmdHybridSearchEngine(workspace_root=target_workspace)
+        result = await engine.search(
+            query=query,
+            scope=scope_list,
+            max_tokens=max_tokens,
+            depth=depth,
+        )
+    except ValueError as sandbox_err:
+        # Allowlist/sandbox do motor: workspace/scope fora das raízes
+        # autorizadas (CIRURGIC_ALLOWED_ROOTS). Nunca vaza exceção crua
+        # para o cliente MCP — erro estruturado, contrato CirurgicSearchResponse.
+        logger.warning(
+            "cirurgic_search: violação de sandbox rejeitada (workspace=%r, scope=%r): %s",
+            target_workspace,
+            scope_list,
+            sandbox_err,
+        )
+        return {
+            "status": "error",
+            "error": "sandbox_violation",
+            "message": str(sandbox_err),
+            "degraded_lanes": ["sandbox"],
+            "warnings": [f"Sandbox rejeitou a busca: {sandbox_err}"],
+            "latency_ms": 0.0,
+            "total_tokens": 0,
+            "token_savings_pct": 0.0,
+            "snippets_count": 0,
+            "files_found": 0,
+            "snippets": [],
+        }
+
+    # Normalização aditiva do contrato (TICKET-SGA-03): garante as chaves
+    # status/warnings/degraded_lanes mesmo quando o motor ainda não as emite
+    # (no-op assim que o motor passar a emitir — setdefault nunca sobrescreve).
+    result.setdefault("status", "success")
+    result.setdefault("warnings", [])
+    result.setdefault("degraded_lanes", [])
+    return result
 
 
 cirurgic_search = app.tool(
