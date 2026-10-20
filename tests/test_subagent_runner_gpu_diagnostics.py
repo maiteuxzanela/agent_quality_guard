@@ -33,7 +33,8 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_FILE = REPO_ROOT / "src" / "orchestrator" / "subagent_runner.py"
+# Layout migrado (TICKET-AQG-02): o runner vive no pacote `agent_quality_guard`.
+SRC_FILE = REPO_ROOT / "agent_quality_guard" / "orchestrator" / "subagent_runner.py"
 
 # Prefixos de pacotes que compõem a stack CUDA/Torch e devem ficar FORA da
 # farm de symlinks para que `import torch` falhe de verdade com ImportError.
@@ -61,7 +62,10 @@ def _diagnose_function() -> Tuple[ast.FunctionDef, str]:
             segment = ast.get_source_segment(source, node)
             assert segment, "Falha ao extrair o corpo real de _diagnose_gpu_hardware"
             return node, segment
-    pytest.fail("_diagnose_gpu_hardware ausente em src/orchestrator/subagent_runner.py")
+    pytest.fail(
+        "_diagnose_gpu_hardware ausente em "
+        "agent_quality_guard/orchestrator/subagent_runner.py"
+    )
 
 
 def _run_report_subprocess(
@@ -74,7 +78,7 @@ def _run_report_subprocess(
         "import json, sys\n"
         f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
         "import importlib.util\n"
-        "from src.orchestrator.subagent_runner import SubagentRunner\n"
+        "from agent_quality_guard.orchestrator.subagent_runner import SubagentRunner\n"
         "report = SubagentRunner()._diagnose_gpu_hardware()\n"
         "payload = {\n"
         "    'report': report,\n"
@@ -149,7 +153,7 @@ def test_diagnostics_use_torch_native_api_as_single_source_of_truth() -> None:
 # ---------------------------------------------------------------------------
 def test_live_report_matches_real_hardware() -> None:
     torch = pytest.importorskip("torch")
-    from src.orchestrator.subagent_runner import SubagentRunner
+    from agent_quality_guard.orchestrator.subagent_runner import SubagentRunner
 
     report = SubagentRunner()._diagnose_gpu_hardware()
 
@@ -219,7 +223,7 @@ def test_import_error_fallback_without_torch_installed() -> None:
             f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
             "import importlib.util\n"
             "assert importlib.util.find_spec('torch') is None\n"
-            "from src.orchestrator.subagent_runner import SubagentRunner\n"
+            "from agent_quality_guard.orchestrator.subagent_runner import SubagentRunner\n"
             "report = SubagentRunner()._diagnose_gpu_hardware()\n"
             "print('__REPORT__' + json.dumps({'report': report, 'torch_spec': False}))\n"
         )

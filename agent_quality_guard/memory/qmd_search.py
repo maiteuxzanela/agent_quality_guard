@@ -18,10 +18,17 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ..core.schemas import Needle3Query, Needle3Snippet
-from .local_needle import LocalNeedleEngine, substantive_terms
+from ..core.schemas import CHARS_PER_TOKEN, Needle3Query, Needle3Snippet
+from .local_needle import (
+    LocalNeedleEngine,
+    UNIVERSAL_EXCLUDED_DIRS,
+    exclude_patterns_to_rg_globs,
+    merge_exclude_patterns,
+    path_is_excluded,
+    substantive_terms,
+)
 
 logger = logging.getLogger("jev.qmd")
 
@@ -43,33 +50,25 @@ SOURCE_CODE_BOOST = 1.25
 DOC_SCOPE_MARKERS = frozenset({"docs", "doc", "personas"})
 DOC_SCOPE_EXTENSIONS = frozenset({".md", ".json"})
 
-# Denylist de bundles e artefatos derivados. Eles duplicam a semântica do
-# código-fonte com conteúdo minificado e poluem o recall léxico.
-IGNORED_GLOBS = (
-    "!**/.git/**",
-    "!**/node_modules/**",
-    "!**/__pycache__/**",
-    "!**/.venv/**",
-    "!**/venv/**",
-    "!**/dist/**",
-    "!**/build/**",
-    "!**/target/**",
-    "!**/.cache/**",
-    "!**/panel/*.js",
+# TICKET-SGA-05 — Denylist UNIVERSAL (segura em qualquer repositório): caches,
+# VCS e build artifacts. Regras particulares de ambiente local (ex.:
+# ``panel/*.js``, ``.agent-teams``, ``screenshots``) foram DESACOPLADAS daqui:
+# entram via ``.cirurgicignore`` na raiz do workspace ou pelo parâmetro
+# opcional ``exclude_patterns`` das tools de busca. Os diretórios vêm da fonte
+# única ``UNIVERSAL_EXCLUDED_DIRS`` (memory/local_needle.py), garantindo
+# paridade exata com o walk da rota AST.
+IGNORED_GLOBS = tuple(
+    f"!**/{directory}/**" for directory in sorted(UNIVERSAL_EXCLUDED_DIRS)
+) + (
+    # Artefatos derivados universais (duplicam a semântica do código-fonte com
+    # conteúdo minificado e poluem o recall léxico).
     "!**/*.bundle.js",
     "!**/*.min.js",
     "!**/*.min.mjs",
     "!**/*.map",
-    "!**/.turbo/**",
-    "!**/.parcel-cache/**",
-    "!**/.agent-teams/**",
-    "!**/screenshots/**",
 )
 
-GREP_EXCLUDED_DIRS = (
-    ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
-    "target", ".cache", ".parcel-cache", ".agent-teams", "screenshots",
-)
+GREP_EXCLUDED_DIRS = tuple(sorted(UNIVERSAL_EXCLUDED_DIRS))
 
 # Arquivos densos repetem um identificador muitas vezes; truncar em 5 esconde
 # a evidência conjuntiva (cobertura de vários termos distintos da query).
@@ -156,6 +155,34 @@ def _parse_grep_line(line: str, workspace_root: Path) -> Optional[Tuple[str, int
     return rel_p, line_no, matched_text.strip()
 
 
+def _within_depth(
+    abs_candidate: Path,
+    targets: Sequence[Path],
+    max_depth: Optional[int],
+) -> bool:
+    """True quando o caminho respeita o corte de profundidade dos alvos.
+
+    Semântica (paridade com o ``--max-depth`` do ripgrep): a profundidade é o
+    número de níveis abaixo de cada alvo de escopo. Um arquivo direto no alvo
+    tem profundidade 1; um alvo explícito de arquivo vale profundidade 0 e
+    sempre é aceito. ``max_depth=None`` (padrão) desliga o corte.
+    """
+    if max_depth is None:
+        return True
+    for target in targets:
+        if target.is_file():
+            if abs_candidate == target:
+                return True
+            continue
+        try:
+            rel = abs_candidate.relative_to(target)
+        except ValueError:
+            continue
+        if len(rel.parts) <= max_depth:
+            return True
+    return False
+
+
 class QmdHybridSearchEngine:
     """Motor Híbrido de Busca Cirúrgica (Needle 3 + Ripgrep + RRF)."""
 
@@ -167,11 +194,14 @@ class QmdHybridSearchEngine:
     def _estimate_tokens(self, text: str) -> int:
         """Estima a contagem de tokens a partir do comprimento do texto.
 
+        Usa ``CHARS_PER_TOKEN = 3.8`` (heurística de alta fidelidade para
+        orçamento rápido de snippets; não é garantia criptográfica estrita).
+
         Exemplo:
             >>> QmdHybridSearchEngine()._estimate_tokens("exemplo de codigo") > 0
             True
         """
-        return max(1, math.ceil(len(text) / 3.8))
+        return max(1, math.ceil(len(text) / CHARS_PER_TOKEN))
 
     def _collect_needle_snippets_for_file(
         self,
@@ -334,8 +364,16 @@ class QmdHybridSearchEngine:
         scope: Optional[List[str]] = None,
         max_results_per_file: int = DEFAULT_MAX_MATCHES_PER_FILE,
         max_files: int = 40,
+        exclude_patterns: Optional[Sequence[str]] = None,
+        max_depth: Optional[int] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Executa busca léxica via ripgrep e agrupa resultados por arquivo.
+
+        ``exclude_patterns`` (já mesclados com o ``.cirurgicignore`` da raiz)
+        e ``max_depth`` (None = ilimitado) valem para as duas rotas léxicas:
+        nomes puros de exclusão são empurrados ao ripgrep como negations de
+        glob, e o filtro determinístico em Python cobre padrões ancorados e o
+        corte de profundidade com a mesma semântica da rota AST.
 
         Exemplo:
             >>> res = QmdHybridSearchEngine()._run_ripgrep("needle")
@@ -351,6 +389,8 @@ class QmdHybridSearchEngine:
         if not targets:
             return results_by_file
 
+        extra_patterns = merge_exclude_patterns(exclude_patterns, self.workspace_root)
+
         cmd = [self.rg_binary or "grep", "-n", "-i"]
         if self.rg_binary:
             cmd.extend([
@@ -361,7 +401,15 @@ class QmdHybridSearchEngine:
                 "-e", pattern,
                 "--max-count", str(max_results_per_file),
             ])
+            if max_depth is not None:
+                # Profundidade máxima de varredura (níveis abaixo de cada alvo);
+                # paridade com o walk da rota AST (Needle 3).
+                cmd.extend(["--max-depth", str(max_depth)])
             for glob in IGNORED_GLOBS:
+                cmd.extend(["--glob", glob])
+            # Otimização de latência: só nomes puros (semântica idêntica ao
+            # matcher em Python); padrões ancorados ficam no pós-filtro.
+            for glob in exclude_patterns_to_rg_globs(extra_patterns):
                 cmd.extend(["--glob", glob])
             for glob in scope_globs:
                 cmd.extend(["-g", glob])
@@ -372,6 +420,10 @@ class QmdHybridSearchEngine:
             cmd.extend(["-E", "-r", "-I"])
             for directory in GREP_EXCLUDED_DIRS:
                 cmd.extend(["--exclude-dir", directory])
+            for pattern_name in extra_patterns:
+                core = pattern_name.rstrip("/")
+                if core and "/" not in core:
+                    cmd.extend(["--exclude-dir", core])
             for glob in scope_globs:
                 cmd.extend(["--include", glob])
             cmd.extend(["-e", pattern])
@@ -386,11 +438,17 @@ class QmdHybridSearchEngine:
                 timeout=5.0,
                 check=False,
             )
+            resolved_targets = [Path(t) for t in targets]
             for line in res.stdout.splitlines():
                 parsed = _parse_grep_line(line, self.workspace_root)
                 if not parsed:
                     continue
                 rel_p, line_no, matched_text = parsed
+                abs_candidate = self.workspace_root / rel_p
+                if path_is_excluded(rel_p, extra_patterns):
+                    continue
+                if not _within_depth(abs_candidate, resolved_targets, max_depth):
+                    continue
                 if rel_p not in results_by_file and len(results_by_file) >= max_files:
                     break
                 entry = results_by_file.setdefault(
@@ -432,12 +490,22 @@ class QmdHybridSearchEngine:
         query: str,
         scope: Optional[List[str]] = None,
         max_tokens: int = 1200,
-        depth: int = 2,
+        depth: Optional[int] = None,
         k: float = 60.0,
         weight_grep: float = 1.0,
         weight_needle: float = 1.2,
+        exclude_patterns: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Executa a busca híbrida unificada com fusão RRF em CPU.
+
+        Contrato TICKET-SGA-05:
+        * ``depth`` (padrão ``None`` = profundidade ILIMITADA) corta a árvore
+          de diretórios em ``depth`` níveis abaixo de cada alvo de escopo e
+          sobrepõe ``relational_depth`` do Needle 3 quando enviado — clientes
+          que já enviam ``depth`` permanecem 100% retrocompatíveis.
+        * ``exclude_patterns`` soma exclusões pontuais às universais padrão e
+          ao ``.cirurgicignore`` da raiz do workspace (se existir), aplicadas
+          de forma idêntica nas rotas léxica (ripgrep/grep) e AST (walk).
 
         Exemplo:
             >>> import asyncio
@@ -448,14 +516,25 @@ class QmdHybridSearchEngine:
         t0 = time.perf_counter()
 
         # 1. Executa busca léxica via Ripgrep em thread
-        grep_future = asyncio.to_thread(self._run_ripgrep, query, scope)
+        grep_future = asyncio.to_thread(
+            self._run_ripgrep,
+            query,
+            scope,
+            exclude_patterns=exclude_patterns,
+            max_depth=depth,
+        )
 
         # 2. Executa busca semântica/AST via Needle 3
         needle_q = Needle3Query(
             query=query,
             scope=scope,
             max_tokens=max_tokens * 2,  # Captura candidatos amplos para rankear
-            relational_depth=depth,
+            # `depth=None` mantém o padrão canônico do schema (2) no grafo
+            # relacional AST e libera a árvore de diretórios (ilimitada);
+            # quando enviado, o valor sobrepõe ambos sem quebra retroativa.
+            relational_depth=depth if depth is not None else 2,
+            max_depth=depth,
+            exclude_patterns=list(exclude_patterns) if exclude_patterns else None,
             preserve_relational_integrity=True,
         )
         needle_task = asyncio.create_task(self.needle_engine.search(needle_q))
@@ -568,7 +647,9 @@ class QmdHybridSearchEngine:
                 break
 
         total_latency_ms = (time.perf_counter() - t0) * 1000.0
-        est_raw_tokens = max(1, math.ceil(raw_bytes_evaluated / 3.8)) if raw_bytes_evaluated else total_tokens
+        # Heurística CHARS_PER_TOKEN (aproximação de alta fidelidade, não
+        # garantia criptográfica estrita) para estimar o custo bruto avaliado.
+        est_raw_tokens = max(1, math.ceil(raw_bytes_evaluated / CHARS_PER_TOKEN)) if raw_bytes_evaluated else total_tokens
         savings_pct = max(0.0, round((1.0 - (total_tokens / max(est_raw_tokens, total_tokens, 1))) * 100.0, 2))
 
         return {
