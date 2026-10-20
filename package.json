@@ -34,11 +34,11 @@
     "url": "https://github.com/maiteuxzanela/agent_quality_guard/issues"
   },
   "files": [
-    "bin",
     "agent_quality_guard",
-    "configs",
-    "pyproject.toml",
+    "bin",
+    "LICENSE",
     "README.md",
-    "LICENSE"
+    "pyproject.toml",
+    "requirements.txt"
   ]
 }

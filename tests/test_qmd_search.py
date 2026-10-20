@@ -4,8 +4,10 @@ Validação estrita SEM MOCKS utilizando sistema de arquivos e subprocessos reai
 """
 
 import asyncio
+import inspect
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -112,3 +114,62 @@ def test_qmd_search_estimate_tokens_type_error():
     engine = QmdHybridSearchEngine()
     with pytest.raises(TypeError):
         engine._estimate_tokens(None)  # type: ignore
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Timeout global: cancelamento gracioso das lanes pendentes
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_global_timeout_leaves_no_pending_lane_tasks(sample_workspace: Path):
+    """Comportamental: após ``status="timeout"`` não sobra nenhuma task de lane órfã.
+
+    ``grep_task`` (ripgrep em thread) e ``needle_task`` (AST) são criados antes
+    do ``asyncio.wait_for`` do timeout global; a espera abaixo é ativa (estado
+    + deadline duro de 5 s), sem sleep cego de sincronização.
+    """
+    engine = QmdHybridSearchEngine(workspace_root=str(sample_workspace))
+    res = await engine.search(query="calculate_total_billing", timeout=0.0001)
+
+    assert res["status"] == "timeout"
+    assert res["timeout_s"] == 0.0001
+
+    deadline = time.monotonic() + 5.0
+    while True:
+        pending = [
+            t for t in asyncio.all_tasks()
+            if t is not asyncio.current_task() and not t.done()
+        ]
+        if not pending or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.01)
+
+    assert not pending, (
+        f"task(s) de lane ainda pendente(s) após timeout global: "
+        f"{[t.get_name() for t in pending]}"
+    )
+
+
+def test_global_timeout_handler_cancels_lanes_explicitly():
+    """Contrato estrutural: o handler de ``TimeoutError`` cancela as duas lanes.
+
+    Garantia dupla sobre o cancelamento do ``gather`` interno do
+    ``asyncio.wait_for`` — sem ``grep_task.cancel()``/``needle_task.cancel()``
+    explícitos no handler, o veredito ``status="timeout"`` pode ser devolvido
+    deixando tarefas agendadas no loop. O comportamento efetivo de interrupção
+    da thread do ripgrep não é observável de forma determinística (threads não
+    são canceláveis), por isso o lock estrutural sobre o corpo do handler —
+    remover qualquer uma das duas chamadas derruba este teste.
+    """
+    src = inspect.getsource(QmdHybridSearchEngine.search)
+    idx = src.find("except asyncio.TimeoutError")
+    assert idx != -1, "handler de asyncio.TimeoutError ausente no search() híbrido"
+
+    handler = src[idx:idx + 900]
+    assert "grep_task.cancel()" in handler, (
+        "handler de timeout não cancela explicitamente grep_task (lane ripgrep)"
+    )
+    assert "needle_task.cancel()" in handler, (
+        "handler de timeout não cancela explicitamente needle_task (lane AST)"
+    )

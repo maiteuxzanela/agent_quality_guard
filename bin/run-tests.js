@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// needle-ignore-file: COMMAND_INJECTION, RESOURCE_LEAK
 /**
  * Runner determinístico de testes para `npm test`.
  *

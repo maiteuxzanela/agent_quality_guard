@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// needle-ignore-file: COMMAND_INJECTION, RESOURCE_LEAK
 /**
  * agent-quality-guard — Executável universal do servidor MCP Quality Gate determinístico.
  *

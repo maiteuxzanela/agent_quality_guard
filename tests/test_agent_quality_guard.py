@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import subprocess
 import tempfile
 import time
@@ -357,3 +358,79 @@ def test_quality_guard_core_rejects_blocking_violation_from_layer2_or_guard():
     guard_block = source[source.index("def _quality_guard_core"):source.index("# Registro das tools")]
     for forbidden in ("evaluate_noul", "_get_engine_async", "torch", "cuda", "laya"):
         assert forbidden not in guard_block, f"caminho crítico do gate referencia {forbidden}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Gate 2: auto-aprovação do repositório real em audit_mode="full"
+# ──────────────────────────────────────────────────────────────────────────────
+
+#: Sentinel de ambiente que quebra a recursão do auto-teste do gate.
+#: Definido por ``test_quality_guard_full_audit_self_approves_repo_root``
+#: ANTES da chamada interna; o run interno de pytest herda o env via
+#: ``PytestChunkRunner`` (``os.environ.copy()``) e este teste se auto-pula,
+#: limitando a profundidade de aninhamento a exatamente 2 níveis.
+_NESTED_RUN_ENV = "JEV_AQG_NESTED_RUN"
+
+
+def test_quality_guard_full_audit_self_approves_repo_root():
+    """Gate 2 real: ``agent_quality_guard(workspace=".", audit_mode="full")`` aprova.
+
+    Verifica os três contratos do estado limpo do pipeline completo sobre o
+    PRÓPRIO repositório (pytest em chunks + NeedleASTGuard + Screener +
+    bridge nativa + meta-regras Tree-Sitter):
+
+    * ``passed is True`` e ``status == "APPROVED"``;
+    * ``blocking_ast_violations == []`` (zero bloqueios);
+    * ``pytest_success`` com todos os chunks verdes (suíte real, sem mocks).
+
+    Isolamentos determinísticos (nenhum mock):
+      * ``JEV_STATE_DIR`` → diretório temporário: o histórico do circuit
+        breaker deste workspace (estado real) não é lido nem contaminado;
+        a tentativa server-side nasce em 1.
+      * ``JEV_AQG_NESTED_RUN=1`` → o run interno de pytest do gate herda o
+        env e este teste se auto-pula, quebrando a recursão.
+    """
+    if os.environ.get(_NESTED_RUN_ENV) == "1":
+        pytest.skip("execução aninhada do quality gate: auto-pulado para quebrar recursão")
+
+    root = Path(__file__).resolve().parents[1]
+    prev_cwd = os.getcwd()
+    prev_state = os.environ.get("JEV_STATE_DIR")
+    prev_nested = os.environ.get(_NESTED_RUN_ENV)
+
+    try:
+        if Path(prev_cwd).resolve() != root:
+            os.chdir(root)
+        with tempfile.TemporaryDirectory(prefix="aqg_self_state_") as state_dir:
+            os.environ["JEV_STATE_DIR"] = state_dir
+            os.environ[_NESTED_RUN_ENV] = "1"
+            try:
+                resp = asyncio.run(agent_quality_guard(workspace=".", audit_mode="full"))
+            finally:
+                os.environ.pop(_NESTED_RUN_ENV, None)
+    finally:
+        if prev_state is None:
+            os.environ.pop("JEV_STATE_DIR", None)
+        else:
+            os.environ["JEV_STATE_DIR"] = prev_state
+        if prev_nested is None:
+            os.environ.pop(_NESTED_RUN_ENV, None)
+        else:
+            os.environ[_NESTED_RUN_ENV] = prev_nested
+        if Path(os.getcwd()).resolve() != Path(prev_cwd).resolve():
+            os.chdir(prev_cwd)
+
+    assert resp["passed"] is True, resp["message"]
+    assert resp["status"] == "APPROVED", resp["message"]
+    assert resp["blocking_ast_violations"] == [], (
+        f"{len(resp['blocking_ast_violations'])} bloqueio(s): "
+        f"{[v['rule_id'] + '@' + v['file_path'] for v in resp['blocking_ast_violations']]}"
+    )
+    assert resp["pytest_success"] is True, "suíte real do repositório falhou no pipeline"
+    assert resp["attempt_number"] == 1, (
+        f"estado do circuit breaker não isolado: tentativa {resp['attempt_number']} (esperado 1)"
+    )
+    chunks = resp["pytest_chunks"]
+    assert chunks, "pipeline não executou nenhum chunk de pytest"
+    failed = [c["chunk_id"] for c in chunks if not c["passed"]]
+    assert not failed, f"chunks vermelhos: {failed}"

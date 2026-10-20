@@ -679,6 +679,11 @@ class QmdHybridSearchEngine:
                     timeout=effective_timeout,
                 )
             except asyncio.TimeoutError:
+                # Cancelamento gracioso das lanes pendentes: `asyncio.wait_for`
+                # já cancela o `gather` interno, mas garantimos explicitamente
+                # para não deixar tarefas órfãs rodando após o retorno.
+                grep_task.cancel()
+                needle_task.cancel()
                 elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
                 logger.warning(
                     "cirurgic_search: timeout global de %.2fs atingido "

@@ -1,0 +1,14 @@
+# Higiene do tarball NPM: nada de artefatos Python, caches, logs ou pastas mortas.
+# ATENÇÃO (npm 10 / npm-packlist): entradas do campo `files` do package.json NÃO
+# podem ser reduzidas por este .npmignore da raiz. Por isso existe também um
+# .npmignore aninhado em agent_quality_guard/ varrendo __pycache__/*.pyc dentro
+# do pacote Python incluído — apague-o apenas junto com a regra da raiz.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.log
+.venv/
+tests/
+.git/
+.github/
+configs/

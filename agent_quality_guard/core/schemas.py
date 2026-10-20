@@ -1007,15 +1007,16 @@ class CirurgicSearchResponse(BaseModel):
     ``res["status"]``); este schema existe como contrato de referência validável
     e para clientes Python que queiram ``CirurgicSearchResponse.model_validate(res)``.
 
-    Os campos ``status``/``warnings``/``degraded_lanes`` são aditivos e
-    retrocompatíveis: construções antigas que não os informam recebem os
-    defaults (`success`, listas vazias).
+    Os campos ``status``/``warnings``/``degraded_lanes``/``timeout_s`` são
+    aditivos e retrocompatíveis: construções antigas que não os informam
+    recebem os defaults (`success`, listas vazias, `None`).
     """
-    status: Literal["success", "partial", "error"] = Field(
+    status: Literal["success", "partial", "timeout", "error"] = Field(
         default="success",
         description=(
             "success = todas as lanes ok; partial = pelo menos uma lane degradada "
-            "(snippets ainda úteis); error = falha total (ex: violação de sandbox)."
+            "(snippets ainda úteis); timeout = timeout global da busca híbrida "
+            "atingido (snippets vazios); error = falha total (ex: violação de sandbox)."
         ),
     )
     degraded_lanes: List[str] = Field(
@@ -1027,6 +1028,10 @@ class CirurgicSearchResponse(BaseModel):
         description="Avisos operacionais e alertas de degradação (ex: timeout de lane, token budget insuficiente).",
     )
     latency_ms: float = Field(default=0.0, ge=0.0, description="Latência total da busca híbrida em milissegundos.")
+    timeout_s: Optional[float] = Field(
+        default=None,
+        description="Timeout global da busca em segundos, quando aplicável.",
+    )
     total_tokens: int = Field(default=0, ge=0, description="Total de tokens consumidos pelos snippets retornados.")
     token_savings_pct: float = Field(
         default=0.0,

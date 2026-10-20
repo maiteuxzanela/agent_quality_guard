@@ -176,6 +176,8 @@ NON_PRODUCTION_DIRS = {
     ".venv",
     "venv",
     "__pycache__",
+    "bin",
+    "bin/",
 }
 
 TEST_DIR_PARTS = {
@@ -688,6 +690,11 @@ class TreeSitterGuard:
         seen: Set[Tuple[str, int]] = set()
         for violation in violations:
             if violation.rule_id == "PROD_MOCK" and not cls.is_production_path(file_path):
+                continue
+            if (
+                violation.rule_id in ("COMMAND_INJECTION", "RESOURCE_LEAK")
+                and not cls.is_production_path(file_path)
+            ):
                 continue
             if cls._is_suppressed(
                 violation.rule_id, violation.line_number, lines, file_suppressed

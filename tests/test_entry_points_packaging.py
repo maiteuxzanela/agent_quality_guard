@@ -18,6 +18,7 @@ reativação de caminho ``src/`` neste repo derruba estes asserts.
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -203,4 +204,92 @@ class TestPackageDataAssets:
         assert "agent_quality_guard" in include, f"include stale: {include!r}"
         assert not re.search(r"\bsrc\b", include + " " + where), (
             f"empacotamento ainda referencia src/: include={include!r} where={where!r}"
+        )
+
+
+class TestNpmignorePackagingHygiene:
+    """Higiene do tarball NPM: zero artefatos Python (``__pycache__``/``*.pyc``).
+
+    O campo ``files`` do ``package.json`` é um whitelist que o ``.npmignore``
+    da RAIZ não consegue reduzir (regra do npm-packlist); por isso as regras
+    ``__pycache__``/``*.pyc`` dentro do pacote Python vivem num ``.npmignore``
+    ANINHADO em ``agent_quality_guard/``. Ambos os arquivos são contrato:
+    apagar qualquer um derruba os asserts abaixo — o teste ``npm pack`` prova
+    de forma observável que os 23+ ``.pyc`` reais do disco ficam de fora.
+    """
+
+    ROOT_NPMIGNORE = ROOT / ".npmignore"
+    NESTED_NPMIGNORE = PKG_DIR / ".npmignore"
+
+    def test_root_and_nested_npmignore_declare_bytecode_rules(self):
+        """Os dois ``.npmignore`` existem e declaram as regras anti-bytecode."""
+        assert self.ROOT_NPMIGNORE.is_file(), ".npmignore da raiz ausente"
+        assert self.NESTED_NPMIGNORE.is_file(), "agent_quality_guard/.npmignore ausente"
+
+        root_txt = self.ROOT_NPMIGNORE.read_text(encoding="utf-8")
+        for rule in ("**/__pycache__/", "**/*.pyc", "**/*.pyo"):
+            assert rule in root_txt, f"regra '{rule}' ausente no .npmignore da raiz"
+
+        nested_txt = self.NESTED_NPMIGNORE.read_text(encoding="utf-8")
+        for rule in ("__pycache__/", "*.pyc", "*.pyo"):
+            assert rule in nested_txt, f"regra '{rule}' ausente no .npmignore aninhado"
+
+    def test_npm_pack_dry_run_contains_no_python_bytecode(self):
+        """``npm pack --dry-run`` real: nenhum caminho ``__pycache__``/``*.pyc``/``*.pyo``."""
+        npm = shutil.which("npm")
+        if npm is None:
+            pytest.skip("npm indisponível no ambiente: verificação de tarball não executável")
+
+        proc = subprocess.run(
+            [npm, "pack", "--dry-run", "--json", "--ignore-scripts"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, f"npm pack falhou: {proc.stderr[-500:]}"
+
+        payload = json.loads(proc.stdout)
+        paths = [f["path"] for f in payload[0]["files"]]
+        assert paths, "npm pack não listou nenhum arquivo"
+        offenders = [
+            p for p in paths
+            if "__pycache__" in p or p.endswith((".pyc", ".pyo"))
+        ]
+        assert not offenders, (
+            f"{len(offenders)} artefato(s) Python no tarball: {offenders[:5]}"
+        )
+
+    def test_package_json_files_excludes_configs_directory(self):
+        """``package.json#files`` não empacota mais ``configs/`` (sanitização)."""
+        manifest = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
+        assert "configs" not in manifest["files"], (
+            "configs/ reintroduzido no whitelist de files do package.json"
+        )
+
+
+def test_settings_yaml_sanitized_of_retired_engine_markers():
+    """``configs/settings.yaml`` sanitizado: zero marcadores de engines aposentadas.
+
+    Portão 2: o manifesto de referência não pode reintroduzir alvo de GPU fixo,
+    engine neural local, thresholds noul/score (TICKET-HARNESS-47) ou endpoint
+    de terceiros — homologação é 100% determinística.
+    """
+    settings = (ROOT / "configs" / "settings.yaml").read_text(encoding="utf-8")
+    retired_markers = (
+        "cactuscompute",       # endpoint de terceiros (Needle legado)
+        "convaiinnovations",   # modelo neural local
+        "laya",                # engine neural (TICKET-HARNESS-47)
+        "GTX 1050",            # hardware específico de estação
+        "target_gpu",
+        "server_host",
+        "min_score_required",  # gate probabilístico aposentado
+        "noul_default",
+        "noul_guardrail",
+        "disallow_bfloat16",
+        "openjev:",
+    )
+    for marker in retired_markers:
+        assert marker not in settings, (
+            f"marcador legado '{marker}' reintroduzido em configs/settings.yaml"
         )

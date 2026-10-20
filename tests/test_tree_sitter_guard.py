@@ -687,3 +687,69 @@ def test_module_has_no_gpu_or_ml_inference_dependency():
     text = source.read_text(encoding="utf-8").lower()
     for forbidden in ("torch", "cuda", "llama_cpp", "transformers", "noul", "laya"):
         assert forbidden not in text, f"Camada 2 não pode referenciar {forbidden} (sem GPU/ML)"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Exenção de wrappers/bin (TICKET Gate 2): COMMAND_INJECTION + RESOURCE_LEAK
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_command_injection_exempt_in_bin_wrapper_path():
+    """Arquivo em ``bin/`` (não-produção) não pode gerar COMMAND_INJECTION bloqueante.
+
+    Regressão Gate 2: ``bin/agent-quality-guard.js`` usava ``spawnSync(pythonBin, ...)``
+    com argumento dinâmico e o próprio repositório se auto-reprovava no modo full.
+    """
+    violations = TreeSitterGuard.scan_content(
+        "const cp = require('child_process');\nfunction f(input){ cp.exec(input); }\n",
+        "bin/wrapper.js",
+    )
+    assert "COMMAND_INJECTION" not in _rules(violations)
+
+
+def test_resource_leak_exempt_in_bin_wrapper_path():
+    """``RESOURCE_LEAK`` (alerta) também é isento em wrappers de ``bin/``."""
+    violations = TreeSitterGuard.scan_content(
+        "function f(){\n  el.addEventListener('click', h);\n}\n",
+        "bin/wrapper.js",
+    )
+    assert "RESOURCE_LEAK" not in _rules(violations)
+
+
+def test_command_injection_still_detected_in_production_path():
+    """Sensibilidade: em ``src/`` (produção) o COMMAND_INJECTION continua bloqueando.
+
+    Sem esta âncora, a exenção de ``bin/`` poderia mascarar regressão que
+    silencia a regra em produção.
+    """
+    violations = TreeSitterGuard.scan_content(
+        "const cp = require('child_process');\nfunction f(input){ cp.exec(input); }\n",
+        "src/a.js",
+    )
+    assert "COMMAND_INJECTION" in _rules(violations)
+    assert _first(violations, "COMMAND_INJECTION").severity == "blocking"
+
+
+def test_needle_ignore_file_suppresses_command_injection_and_resource_leak():
+    """Diretiva de cabeçalho suprime COMMAND_INJECTION (bloqueante) e RESOURCE_LEAK (alerta)."""
+    js = (
+        "// needle-ignore-file: COMMAND_INJECTION, RESOURCE_LEAK\n"
+        "const cp = require('child_process');\n"
+        "function f(input){ cp.exec(input); el.addEventListener('click', h); }\n"
+    )
+    assert TreeSitterGuard.scan_content(js, "src/a.js") == []
+
+
+def test_real_bin_wrappers_have_no_blocking_or_leak_violations():
+    """Os wrappers reais em ``bin/`` não podem gerar COMMAND_INJECTION nem RESOURCE_LEAK.
+
+    Conteúdo lido do disco (sem mocks): valida a diretiva de cabeçalho e a
+    exenção de não-produção contra o código que de fato dispara o Gate 2.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    for name in ("agent-quality-guard.js", "run-tests.js"):
+        path = repo_root / "bin" / name
+        assert path.is_file(), f"wrapper ausente: {path}"
+        violations = TreeSitterGuard.scan_file(path, workspace=repo_root)
+        rules = _rules(violations)
+        assert "COMMAND_INJECTION" not in rules, f"{name}: COMMAND_INJECTION em wrapper de bin/"
+        assert "RESOURCE_LEAK" not in rules, f"{name}: RESOURCE_LEAK em wrapper de bin/"

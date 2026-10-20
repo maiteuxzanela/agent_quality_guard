@@ -1,28 +1,19 @@
 # Manifesto de referência (nenhum loader lê este arquivo; thresholds efetivos
 # estão em agent_quality_guard/core/schemas.py e agent_quality_guard/mcp_server.py).
+#
+# Sanitizado no Portão 2: sem referências legadas a engines neurais locais,
+# hardware específico de estação nem endpoints de terceiros.
 
 hardware:
-  # Alvo: NVIDIA GeForce GTX 1050 Ti (4096 MiB total)
-  target_gpu: "GeForce GTX 1050 Ti"
-  max_vram_mb: 3000          # Limite de segurança de VRAM em MB (deixa margem para o display manager)
-  disallow_bfloat16: true    # Trava mandatória para arquitetura Pascal (sm_61 não suporta bfloat16)
-  force_dtype: "float16"     # "float16" ou "float32"
-  max_sequence_length: 1024  # Janela compacta para evitar CUDA OOM
-  cpu_fallback: true         # Permite offload seguro para CPU caso a VRAM seja disputada
+  # Parâmetros genéricos de execução determinística (sem alvo de GPU fixo).
+  allow_gpu: false             # O gate é 100% determinístico e roda em CPU
+  cpu_only: true
+  max_sequence_length: 1024    # Janela compacta para buffers de contexto
+  cpu_fallback: true           # Sempre seguro: nada depende de aceleração
 
-openjev:
-  model_id: "convaiinnovations/laya"
-  server_host: "0.0.0.0"
-  server_port: 8005
-  timeout_seconds: 15.0
-  thresholds:
-    noul_default: 0.78
-    noul_guardrail_critical: 0.78
-    score_default_pass: 3.40
-
-needle3:
-  api_endpoint: "https://api.cactuscompute.com/v1"
-    default_max_tokens: 1000
+search:
+  # Busca cirúrgica híbrida (Ripgrep léxico + Needle AST + RRF).
+  default_max_tokens: 1000
   default_relational_depth: 2
   timeout_seconds: 10.0
 
@@ -34,10 +25,6 @@ orchestrator:
     - "devops"
     - "documentation"
   guardrails:
-    # Exigência de noul pré-ação removida (set/2026): agente praticava premise gaming.
-    # A tool openjev_noul permanece disponível como avaliação OPCIONAL.
-    require_noul_before_destructive_tool: false
-    min_guardrail_probability: 0.78
-  evaluation:
-    require_score_before_merge: true
-    min_score_required: 3.40
+    # Avaliações probabilísticas (noul/score) aposentadas pelo TICKET-HARNESS-47:
+    # a homologação é determinística (Pytest real + AST Guard + toolchain/AST).
+    require_deterministic_gate: true

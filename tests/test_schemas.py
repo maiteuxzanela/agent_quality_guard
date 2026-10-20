@@ -322,12 +322,39 @@ def test_cirurgic_search_response_defaults_are_retrocompatible():
     assert resp.degraded_lanes == []
     assert resp.error is None
     assert resp.message is None
+    assert resp.timeout_s is None
 
 
 def test_cirurgic_search_response_rejects_unknown_status():
-    """Contrato estrito: status fora de success|partial|error é rejeitado."""
+    """Contrato estrito: status fora de success|partial|timeout|error é rejeitado."""
     with pytest.raises(ValidationError):
         CirurgicSearchResponse.model_validate({"status": "super-success"})
+
+
+def test_cirurgic_search_timeout_payload_contract_matches_schema():
+    """Payload de timeout global do MCP valida no schema documentado.
+
+    Espelha exatamente o dict que `QmdSearchEngine.search` retorna ao atingir o
+    timeout global (`asyncio.TimeoutError`), incluindo `status="timeout"` e o
+    campo aditivo `timeout_s`.
+    """
+    timeout_payload = {
+        "status": "timeout",
+        "latency_ms": 10000.0,
+        "total_tokens": 0,
+        "token_savings_pct": 0.0,
+        "snippets_count": 0,
+        "files_found": 0,
+        "snippets": [],
+        "timeout_s": 10.0,
+        "message": "Busca híbrida excedeu 10.0s.",
+        "warnings": ["Busca híbrida excedeu o timeout global de 10.0s."],
+        "degraded_lanes": ["global_timeout"],
+    }
+    resp = CirurgicSearchResponse.model_validate(timeout_payload)
+    assert resp.status == "timeout"
+    assert resp.timeout_s == 10.0
+    assert resp.degraded_lanes == ["global_timeout"]
 
 
 def test_cirurgic_search_error_payload_contract_matches_schema():
