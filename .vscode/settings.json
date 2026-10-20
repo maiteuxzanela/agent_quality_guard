@@ -2,11 +2,11 @@
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python.analysis.extraPaths": [
         "${workspaceFolder}",
-        "${workspaceFolder}/src"
+        "${workspaceFolder}/agent_quality_guard"
     ],
     "python.autoComplete.extraPaths": [
         "${workspaceFolder}",
-        "${workspaceFolder}/src"
+        "${workspaceFolder}/agent_quality_guard"
     ],
     "python.analysis.diagnosticSeverityOverrides": {
         "reportOptionalMemberAccess": "none",

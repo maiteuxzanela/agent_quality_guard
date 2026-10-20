@@ -8,7 +8,7 @@
     "agent_quality_guard": "./bin/agent-quality-guard.js"
   },
   "scripts": {
-    "test": "pytest tests/test_agent_quality_guard.py tests/test_tree_sitter_guard.py tests/test_needle_ast_guard.py",
+    "test": "node bin/run-tests.js",
     "start": "node bin/agent-quality-guard.js"
   },
   "keywords": [
@@ -35,7 +35,7 @@
   },
   "files": [
     "bin",
-    "src",
+    "agent_quality_guard",
     "configs",
     "pyproject.toml",
     "README.md",

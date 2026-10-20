@@ -1,5 +1,5 @@
 # Manifesto de referência (nenhum loader lê este arquivo; thresholds efetivos
-# estão em src/core/schemas.py, src/decision/laya_adapter.py e src/mcp_server.py).
+# estão em agent_quality_guard/core/schemas.py e agent_quality_guard/mcp_server.py).
 
 hardware:
   # Alvo: NVIDIA GeForce GTX 1050 Ti (4096 MiB total)
