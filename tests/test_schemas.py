@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.core.schemas import (
+from agent_quality_guard.core.schemas import (
     ASTViolation,
     ChoiceRequest,
     ChoiceResponse,
@@ -225,7 +225,7 @@ def test_consulta_request_empty_fields_rejected():
 
 def test_spawn_subagent_request_and_response_schemas():
     """Valida schemas de despacho de subagente com timeout opcional."""
-    from src.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
+    from agent_quality_guard.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
 
     req = SpawnSubagentRequest(
         persona="juliana",

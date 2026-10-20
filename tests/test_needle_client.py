@@ -2,8 +2,8 @@
 
 import pytest
 
-from src.core.schemas import Needle3NotAvailableError, Needle3Query
-from src.memory.needle_client import Needle3Client
+from agent_quality_guard.core.schemas import Needle3NotAvailableError, Needle3Query
+from agent_quality_guard.memory.needle_client import Needle3Client
 
 
 @pytest.mark.asyncio
@@ -21,7 +21,7 @@ async def test_needle3_client_fails_fast_on_unreachable_host():
 def test_scan_local_ast_relations():
     client = Needle3Client()
     # Analisa o próprio schema do projeto
-    relations = client.scan_local_ast_relations("src/core/schemas.py")
+    relations = client.scan_local_ast_relations("agent_quality_guard/core/schemas.py")
     assert len(relations) > 0
     names = [r["name"] for r in relations]
     assert "NoulRequest" in names

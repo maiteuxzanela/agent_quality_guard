@@ -9,7 +9,7 @@ pedir desculpas em texto livre.
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.core.schemas import DEFECT_DESCRIPTIONS, DEFECT_MEMBERS
+from agent_quality_guard.core.schemas import DEFECT_DESCRIPTIONS, DEFECT_MEMBERS
 
 logger = logging.getLogger("feedback_formatter")
 
@@ -139,7 +139,7 @@ def format_score_rejection_reason(
 
         # Diagnóstico da categoria de defeito (apenas se disponível)
         if diag_dict:
-            lines.append(f"🔍 Diagnóstico JEV: '{selected}' (Confiança: {confidence:.1%}) — {description}")
+            lines.append(f"🔍 Diagnóstico Search Guard: '{selected}' (Confiança: {confidence:.1%}) — {description}")
             if candidate_defects:
                 lines.append(f"🎯 Focos prioritários de investigação: {', '.join(candidate_defects[:4])}")
             prescription = DEFECT_ACTION_PRESCRIPTIONS.get(selected) or GENERIC_PRESCRIPTION

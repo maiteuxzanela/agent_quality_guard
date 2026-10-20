@@ -16,7 +16,7 @@ import fs from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
-const srcDir = path.join(rootDir, "src");
+const srcDir = path.join(rootDir, "agent_quality_guard");
 
 // Identificar executável Python disponível no host
 const pythonCandidates = [

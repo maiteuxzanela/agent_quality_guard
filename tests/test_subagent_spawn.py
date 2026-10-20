@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from src.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
-from src.orchestrator.subagent_runner import (
+from agent_quality_guard.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
+from agent_quality_guard.orchestrator.subagent_runner import (
     SubagentRunner,
     classify_execution_level,
     extract_system_prompt_from_markdown,
@@ -24,13 +24,13 @@ from src.orchestrator.subagent_runner import (
 @pytest.fixture
 def temp_git_workspace():
     """Cria um workspace Git real em diretório temporário."""
-    tmp_dir = tempfile.mkdtemp(prefix="jev_test_subagent_")
+    tmp_dir = tempfile.mkdtemp(prefix="searchguard_test_subagent_")
     ws_path = Path(tmp_dir).resolve()
 
     # Inicializa repo Git real
     subprocess.run(["git", "init"], cwd=str(ws_path), check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test Runner"], cwd=str(ws_path), check=True)
-    subprocess.run(["git", "config", "user.email", "test@jev.local"], cwd=str(ws_path), check=True)
+    subprocess.run(["git", "config", "user.email", "test@searchguard.local"], cwd=str(ws_path), check=True)
 
     # Cria diretório de personas
     personas_dir = ws_path / "personas"
@@ -71,8 +71,23 @@ def test_resolve_persona_and_prompt(temp_git_workspace: Path):
     assert sys_prompt2 == sys_prompt
 
 
-def test_resolve_global_persona_fallback(temp_git_workspace: Path):
-    """Testa o fallback para personas do projeto JEV quando não estiverem no workspace alvo."""
+def test_resolve_global_persona_fallback(temp_git_workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Testa o fallback para o catálogo global de personas quando ausentes no workspace alvo."""
+    from agent_quality_guard.orchestrator import subagent_runner
+
+    if not subagent_runner.GLOBAL_PERSONAS_DIR.exists() or not list(subagent_runner.GLOBAL_PERSONAS_DIR.glob("*kael*.md")):
+        fake_global = tmp_path / "global_personas"
+        fake_global.mkdir(parents=True, exist_ok=True)
+        (fake_global / "03_kael_backend.md").write_text(
+            "# Kael — Backend Specialist\n\n"
+            "```markdown\n"
+            "[ROLE: Especialista sênior em backend e APIs determinísticas]\n"
+            "Desenvolve APIs robustas sem mocks e com validação estrita.\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(subagent_runner, "GLOBAL_PERSONAS_DIR", fake_global)
+
     name, sys_prompt, p_file = resolve_persona_file("kael", temp_git_workspace)
     assert "kael" in name.lower()
     assert len(sys_prompt) > 20
@@ -181,50 +196,44 @@ async def test_subagent_runner_ast_guard_intercepts_sqli(temp_git_workspace: Pat
     assert any(v["rule_id"] == "sql_injection" for v in resp.ast_violations)
 
 
-def test_three_levels_persona_resolution():
+def test_three_levels_persona_resolution(
+    temp_git_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
     """Valida resolução de personas do Roster formal (Nível 2) e detecção de ausência (Nível 3)."""
-    jev_root = Path("/home/maiteuxzanela/projeto JEV")
-    jez_root = Path("/mnt/94CCB337CCB3130A/JEZ collections")
+    from agent_quality_guard.orchestrator import subagent_runner
 
-    # Personas formais do JEV
-    for p_name in ["valerio", "kael", "maya", "tulio", "clara", "otavio"]:
-        name, prompt, path = resolve_persona_file(p_name, jev_root)
-        assert p_name in name.lower()
-        assert len(prompt) > 20
-        assert path.exists()
+    # Catálogo global isolado e determinístico, sem depender de caminhos privados.
+    global_root = tmp_path / "global_personas"
+    global_root.mkdir(parents=True, exist_ok=True)
+    for p_name in ["kael", "maya", "tulio"]:
+        (global_root / f"{p_name}_specialist.md").write_text(
+            f"# {p_name.title()} — Specialist\n\n"
+            "```markdown\n"
+            f"[ROLE: Especialista sênior {p_name}]\n"
+            "Executa a frente técnica com validação determinística.\n"
+            "```\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(subagent_runner, "GLOBAL_PERSONAS_DIR", global_root)
 
-    # Personas formais do JEZ
-    for p_name in ["alex", "lumi", "ariel", "sam", "cris", "morgan", "noa", "robin"]:
-        name, prompt, path = resolve_persona_file(p_name, jez_root)
-        assert p_name in name.lower()
-        assert len(prompt) > 20
-        assert path.exists()
-
-    # Personas formais do Panela de Sobra (PanelaBuild)
-    panela_root = Path("/home/maiteuxzanela/PanelaBuild")
-    for p_name in ["zelia", "erica", "ana", "bia", "carla", "diana", "iara", "cris", "helena"]:
-        name, prompt, path = resolve_persona_file(p_name, panela_root)
-        assert p_name in name.lower()
-        assert len(prompt) > 20
-        assert path.exists()
-
-    # Personas formais do Faturamento
-    faturamento_root = Path("/mnt/94CCB337CCB3130A/Faturamento")
-    for p_name in ["cecilia", "beatriz", "camila", "daniela", "fernanda", "gabriela", "isabela", "juliana", "leticia"]:
-        name, prompt, path = resolve_persona_file(p_name, faturamento_root)
+    # Personas formais do roster global (Nível 2)
+    for p_name in ["kael", "maya", "tulio"]:
+        name, prompt, path = resolve_persona_file(p_name, temp_git_workspace)
         assert p_name in name.lower()
         assert len(prompt) > 20
         assert path.exists()
 
     # Persona inexistente aciona Nível 3 (proposição de nova persona)
     with pytest.raises(FileNotFoundError):
-        resolve_persona_file("especialista_inexistente_xyz", jev_root)
+        resolve_persona_file("especialista_inexistente_xyz", temp_git_workspace)
 
 
 def test_classify_execution_level():
     """Valida a categorização precisa dos Três Níveis de Execução."""
     # Nível 1: Reflexivo, dúvidas conceituais, doc, git
-    assert classify_execution_level("Explicar a arquitetura tri-camada do JEV") == 1
+    assert classify_execution_level("Explicar a arquitetura tri-camada do Search Guard") == 1
     assert classify_execution_level("Como funciona o cache do Firestore?") == 1
     assert classify_execution_level("Atualizar notas de versao", target_files=["CHANGELOG.md"]) == 1
     assert classify_execution_level("Inspecionar status do git") == 1

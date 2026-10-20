@@ -34,7 +34,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
-from src.core.schemas import (
+from agent_quality_guard.core.schemas import (
     DEFECT_DESCRIPTIONS,
     DEFECT_MEMBERS,
     DiagnosisResult,
@@ -46,14 +46,14 @@ from src.core.schemas import (
     PytestChunkResult,
     ASTViolation,
 )
-from src.memory.ast_diff_extractor import extract_workspace_ast_symbols
-from src.memory.needle_defect_screener import (
+from agent_quality_guard.memory.ast_diff_extractor import extract_workspace_ast_symbols
+from agent_quality_guard.memory.needle_defect_screener import (
     screen_workspace_symbols,
 )
-from src.memory.qmd_search import QmdHybridSearchEngine
-from src.memory.needle_ast_guard import NeedleASTGuard
-from src.orchestrator.pytest_chunk_runner import PytestChunkRunner
-from src.orchestrator.multi_stack_runner import MultiStackRunner
+from agent_quality_guard.memory.qmd_search import QmdHybridSearchEngine
+from agent_quality_guard.memory.needle_ast_guard import NeedleASTGuard
+from agent_quality_guard.orchestrator.pytest_chunk_runner import PytestChunkRunner
+from agent_quality_guard.orchestrator.multi_stack_runner import MultiStackRunner
 
 logger = logging.getLogger("jev.mcp")
 
@@ -139,7 +139,7 @@ qmd_search = app.tool(
 # `needle_verify_delivery`), ambas determinísticas e sem ML/GPU.
 
 
-from src.core.score_gate import (
+from agent_quality_guard.core.score_gate import (
     MAX_ATTEMPTS as _SCORE_GATE_MAX_ATTEMPTS,
     CAVEAT_BAND as _CAVEAT_BAND,
     get_workspace_git_signature as _score_gate_git_signature,
@@ -533,7 +533,7 @@ def _run_layer2_meta_rules(target_path: Path, audit_mode: str) -> Dict[str, Any]
     """
     empty: Dict[str, Any] = {"available": False, "blocking": [], "warnings": [], "total_files": 0}
     try:
-        from src.memory.tree_sitter_guard import TreeSitterGuard  # noqa: PLC0415
+        from agent_quality_guard.memory.tree_sitter_guard import TreeSitterGuard  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         logger.debug("Camada 2: TreeSitterGuard indisponível (fail-open): %s", exc)
         return empty
@@ -764,7 +764,7 @@ async def _quality_guard_core(
 
     try:
         import importlib
-        import src.orchestrator.pytest_chunk_runner as pcr_mod
+        import agent_quality_guard.orchestrator.pytest_chunk_runner as pcr_mod
         pcr_mod = importlib.reload(pcr_mod)
         runner_cls = getattr(pcr_mod, "PytestChunkRunner", PytestChunkRunner)
     except Exception as reload_err:
@@ -1009,7 +1009,7 @@ needle_verify_delivery = app.tool(
 )(_quality_guard_core)
 
 
-if __name__ == "__main__":
+def main() -> None:
     import ctypes
 
     # ── Proteção contra processos órfãos (Linux PR_SET_PDEATHSIG) ───────────
@@ -1037,3 +1037,7 @@ if __name__ == "__main__":
     # de GPU e sem socket IPC. O boot fica restrito ao registro das tools
     # determinísticas (cirurgic_search/agent_quality_guard e aliases).
     app.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

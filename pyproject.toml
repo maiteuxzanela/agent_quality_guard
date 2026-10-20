@@ -8,9 +8,9 @@ version = "0.1.0"
 description = "Deterministic code quality gate and MCP server for autonomous AI coding agents"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [
-    { name = "Agent Quality Guard Contributors" }
+    { name = "Maiteux Zanela" }
 ]
 dependencies = [
     "pydantic>=2.6.0",
@@ -18,10 +18,13 @@ dependencies = [
     "pyyaml>=6.0",
     "mcp>=1.0.0",
     "tree-sitter>=0.22.0",
+    "tree-sitter-language-pack>=0.21.0",
+    "httpx>=0.24.0",
 ]
 
 [project.scripts]
-agent-quality-guard-mcp = "src.mcp_server:main"
+agent-quality-guard-mcp = "agent_quality_guard.mcp_server:main"
+agent-quality-guard = "agent_quality_guard.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -31,7 +34,61 @@ dev = [
     "mypy>=1.9.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_quality_guard*"]
+exclude = ["tests*", "bin*", "configs*"]
+
+[tool.setuptools.package-data]
+"agent_quality_guard.memory" = ["*.js", "vendor/*.js"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "__pycache__",
+    "agent_quality_guard/memory/vendor",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E402",
+    "E501",
+    "E741",
+    "F401",
+    "F841",
+    "F811",
+    "F541",
+    "W291",
+    "W293",
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+follow_imports = "silent"
+check_untyped_defs = false
+disallow_untyped_defs = false
+disable_error_code = [
+    "attr-defined",
+    "union-attr",
+    "assignment",
+    "arg-type",
+    "type-var",
+    "misc",
+]
+exclude = [
+    "tests",
+    "agent_quality_guard/memory/vendor",
+]

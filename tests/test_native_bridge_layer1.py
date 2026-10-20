@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from src.orchestrator.multi_stack_runner import MultiStackRunner, NativeToolRun
+from agent_quality_guard.orchestrator.multi_stack_runner import MultiStackRunner, NativeToolRun
 
 JEV_ROOT = Path(__file__).resolve().parents[1]
 JEV_VENV = JEV_ROOT / ".venv"
@@ -413,7 +413,7 @@ def test_execute_native_tool_skips_when_budget_exhausted(tmp_path: Path):
 def test_execute_native_tool_missing_binary_is_error_not_crash(tmp_path: Path):
     runs: list[NativeToolRun] = []
     output = MultiStackRunner._execute_native_tool(
-        "ghost", ["binario-inexistente-jev-xyz"], tmp_path, os.environ.copy(), time.monotonic() + 1.0, runs
+        "ghost", ["binario-inexistente-xyz"], tmp_path, os.environ.copy(), time.monotonic() + 1.0, runs
     )
     assert output is None
     assert runs[-1].status == "error"
@@ -422,9 +422,9 @@ def test_execute_native_tool_missing_binary_is_error_not_crash(tmp_path: Path):
 def test_execute_native_tool_returns_output_for_real_command(tmp_path: Path):
     runs: list[NativeToolRun] = []
     output = MultiStackRunner._execute_native_tool(
-        "echoer", ["sh", "-c", "echo ola-jev"], tmp_path, os.environ.copy(), time.monotonic() + 2.0, runs
+        "echoer", ["sh", "-c", "echo ola-searchguard"], tmp_path, os.environ.copy(), time.monotonic() + 2.0, runs
     )
-    assert output is not None and "ola-jev" in output
+    assert output is not None and "ola-searchguard" in output
     assert runs[-1].status == "executed" and runs[-1].returncode == 0
 
 
@@ -470,7 +470,7 @@ def test_merge_native_bridge_no_executed_tool_keeps_engine():
 
 
 def test_dedup_native_violations_by_rule_file_line_message():
-    from src.orchestrator.multi_stack_runner import MultiStackViolation
+    from agent_quality_guard.orchestrator.multi_stack_runner import MultiStackViolation
 
     dup = MultiStackViolation("R", "c", "a.py", 1, "s", "m")
     other = MultiStackViolation("R", "c", "a.py", 1, "s", "m2")
@@ -489,7 +489,7 @@ def test_run_native_bridge_guarded_never_raises(tmp_path: Path):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def test_layer1_helper_is_fail_open_and_fast(tmp_path: Path, monkeypatch):
-    from src.mcp_server import _run_layer1_native_bridge
+    from agent_quality_guard.mcp_server import _run_layer1_native_bridge
 
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "0.5")
     started = time.monotonic()
@@ -514,7 +514,7 @@ def _build_js_workspace_with_config(tmp_path: Path) -> Path:
 def test_layer1_helper_feeds_quality_guard_toolchain(tmp_path: Path, monkeypatch):
     if not _which("eslint"):
         pytest.skip("eslint ausente no ambiente")
-    from src.mcp_server import _run_layer1_native_bridge
+    from agent_quality_guard.mcp_server import _run_layer1_native_bridge
 
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "2.0")
     workspace = _build_js_workspace_with_config(tmp_path)

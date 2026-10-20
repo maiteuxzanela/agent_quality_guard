@@ -20,8 +20,8 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from src.core.schemas import Needle3Query
-from src.memory.local_needle import LocalNeedleEngine
+from agent_quality_guard.core.schemas import Needle3Query
+from agent_quality_guard.memory.local_needle import LocalNeedleEngine
 
 
 async def cmd_needle(args):

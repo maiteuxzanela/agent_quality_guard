@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.core.schemas import Needle3Query
-from src.memory.local_needle import MAX_CANDIDATE_FILES, LocalNeedleEngine
-from src.memory.needle_client import Needle3Client
+from agent_quality_guard.core.schemas import Needle3Query
+from agent_quality_guard.memory.local_needle import MAX_CANDIDATE_FILES, LocalNeedleEngine
+from agent_quality_guard.memory.needle_client import Needle3Client
 
 
 class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
@@ -17,7 +17,7 @@ class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
         engine = LocalNeedleEngine()
         query = Needle3Query(
             query="NoulRequest hypothesis threshold",
-            scope=["src/core"],
+            scope=["agent_quality_guard/core"],
             max_tokens=800,
         )
         response = await engine.search(query)
@@ -36,7 +36,7 @@ class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
         client = Needle3Client(mode="local")
         query = Needle3Query(
             query="LocalNeedleEngine",
-            scope=["src/memory"],
+            scope=["agent_quality_guard/memory"],
             max_tokens=600,
         )
         response = await client.search(query)
@@ -54,7 +54,7 @@ class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
         for budget in (400, 800, 1200):
             query = Needle3Query(
                 query="LocalNeedleEngine search token budget",
-                scope=["src/memory"],
+                scope=["agent_quality_guard/memory"],
                 max_tokens=budget,
             )
             response = await engine.search(query)
@@ -104,7 +104,7 @@ class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
         engine = LocalNeedleEngine()
         query = Needle3Query(
             query="LocalNeedleEngine search token budget",
-            scope=["src/memory"],
+            scope=["agent_quality_guard/memory"],
             max_tokens=400,
         )
         main_thread = threading.get_ident()
@@ -170,7 +170,7 @@ class TestLocalNeedle(unittest.IsolatedAsyncioTestCase):
     async def test_scope_narrow_workspace_not_truncated(self):
         """Com scope restrito em árvore pequena, não pode reportar truncamento."""
         engine = LocalNeedleEngine()
-        engine._find_candidate_files(["src/memory"])
+        engine._find_candidate_files(["agent_quality_guard/memory"])
         self.assertFalse(engine.candidates_truncated)
         self.assertLess(engine.candidates_found, MAX_CANDIDATE_FILES)
 

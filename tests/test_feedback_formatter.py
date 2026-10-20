@@ -1,6 +1,6 @@
 """Testes reais e sem mocks para o formatador de feedback estruturado de auto-correção."""
 
-from src.core.feedback_formatter import (
+from agent_quality_guard.core.feedback_formatter import (
     DEFECT_ACTION_PRESCRIPTIONS,
     MANDATORY_ACTION_DIRECTIVE,
     format_ast_rejection_reason,
@@ -66,7 +66,7 @@ def test_format_score_rejection_reason_with_defects():
     assert "[Robin — Guardião da Qualidade] (Tentativa 2/5):" in reason
     assert "3.10 < 3.40" in reason
     assert "src/database.py (Bloco 1/2): Score 2.95 < 3.40" in reason
-    assert "Diagnóstico JEV: 'robustez_excecoes_recursos'" in reason
+    assert "Diagnóstico Search Guard: 'robustez_excecoes_recursos'" in reason
     assert "falha_de_tratamento_de_excecoes" in reason
     assert DEFECT_ACTION_PRESCRIPTIONS["robustez_excecoes_recursos"] in reason
     assert MANDATORY_ACTION_DIRECTIVE in reason
@@ -134,7 +134,7 @@ def test_format_ast_rejection_many_violations_truncation():
 
 
 def test_needle_verify_delivery_response_schema_message_serialization():
-    from src.core.schemas import NeedleVerifyDeliveryResponse
+    from agent_quality_guard.core.schemas import NeedleVerifyDeliveryResponse
 
     resp = NeedleVerifyDeliveryResponse(
         passed=True,
@@ -161,7 +161,7 @@ def test_ast_violation_payload_rejects_non_numeric_line_number():
     import pytest
     from pydantic import ValidationError
 
-    from src.core.schemas import ASTViolation
+    from agent_quality_guard.core.schemas import ASTViolation
 
     with pytest.raises(ValidationError):
         ASTViolation(

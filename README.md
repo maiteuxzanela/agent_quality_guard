@@ -119,7 +119,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Run the MCP Server via stdio
-python3 src/mcp_server.py
+python3 agent_quality_guard/mcp_server.py
 ```
 
 ### Configuring in OpenCode / OpenChamber (`opencode.json`)
@@ -129,7 +129,7 @@ python3 src/mcp_server.py
     "agent-quality-guard": {
       "type": "stdio",
       "command": "/path/to/agent_quality_guard/.venv/bin/python3",
-      "args": ["/path/to/agent_quality_guard/src/mcp_server.py"],
+      "args": ["/path/to/agent_quality_guard/agent_quality_guard/mcp_server.py"],
       "env": {
         "PYTHONPATH": "/path/to/agent_quality_guard"
       }
@@ -144,7 +144,7 @@ python3 src/mcp_server.py
   "mcpServers": {
     "agent-quality-guard": {
       "command": "/path/to/agent_quality_guard/.venv/bin/python3",
-      "args": ["/path/to/agent_quality_guard/src/mcp_server.py"]
+      "args": ["/path/to/agent_quality_guard/agent_quality_guard/mcp_server.py"]
     }
   }
 }

@@ -7,7 +7,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from src.core.score_gate import (
+from agent_quality_guard.core.score_gate import (
     CAVEAT_BAND,
     MAX_ATTEMPTS,
     SCORE_PREMISE_MAX_LEN,
@@ -19,7 +19,7 @@ from src.core.score_gate import (
     resolve_task_rubric,
     validate_score_premise,
 )
-from src.core.schemas import NoulRequest, ScoreRequest
+from agent_quality_guard.core.schemas import NoulRequest, ScoreRequest
 
 
 class TestCaveatBand(unittest.TestCase):
@@ -152,7 +152,7 @@ class TestHistoryLock(unittest.TestCase):
 
     def test_history_and_stages_persist_when_ram_is_evicted(self):
         """Valida que o estado em disco restaura tentativas e estágios mesmo se a memória do processo for esvaziada."""
-        from src.core.score_gate import _score_history, _stages_cache, stages_cache_get, stages_cache_set
+        from agent_quality_guard.core.score_gate import _score_history, _stages_cache, stages_cache_get, stages_cache_set
         ws = "/tmp/jev_persist_test_ws"
         history_set(ws, {"passed": False, "attempts": 3, "git_state": "hash123", "last_score": 3.10})
         stages_cache_set(ws, "stage_abc", {"score": 3.50, "passed": True})
@@ -189,7 +189,7 @@ class TestWorkspaceGitHeadInvalidation(unittest.TestCase):
     def test_git_head_resets_history_on_new_commit(self):
         import subprocess
         import tempfile
-        from src.core.score_gate import get_workspace_head, resolve_attempt_number
+        from agent_quality_guard.core.score_gate import get_workspace_head, resolve_attempt_number
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # 1. Workspace sem git -> get_workspace_head é None
