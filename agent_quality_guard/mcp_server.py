@@ -101,11 +101,16 @@ async def _cirurgic_search_core(
     scope: str = "",
     max_tokens: int = 1200,
     depth: int = 2,
+    timeout: Optional[float] = None,
 ) -> dict:
     """Executa busca híbrida de código via QMD (Ripgrep + Needle 3 + RRF).
 
     Núcleo único compartilhado por `cirurgic_search` (canônico) e `qmd_search`
     (alias legado), garantindo contratos idênticos de entrada e saída.
+
+    ``timeout`` (TICKET-SGA-04): cota global por requisição em segundos —
+    ``None`` usa o padrão de 15 s; valores ``<= 0`` desativam a cota. Parâmetro
+    opcional, portanto retrocompatível com chamadores antigos.
 
     Exemplo:
         >>> import asyncio
@@ -122,6 +127,7 @@ async def _cirurgic_search_core(
         scope=scope_list,
         max_tokens=max_tokens,
         depth=depth,
+        timeout=timeout,
     )
 
 

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..core.schemas import Needle3Query, Needle3Response, Needle3Snippet
+from .ast_cache import file_size_allowed, file_stat_key, get_file_index, set_file_index
 from .tree_sitter_guard import TreeSitterGuard
 
 logger = logging.getLogger("jev.needle.local")
@@ -768,6 +769,57 @@ class LocalNeedleEngine:
         flush(len(lines))
         return blocks
 
+    def _indexed_file_symbols(
+        self, file_path: Path
+    ) -> Tuple[List[Dict[str, Any]], List[Set[str]]]:
+        """SymbolIndex do arquivo: blocos AST + token sets com cache mtime/size.
+
+        TICKET-SGA-04 — Reaproveita entre buscas consecutivas o trabalho de
+        leitura, parse e tokenização de arquivos INALTERADOS: a chave do cache é
+        ``(caminho, st_mtime_ns, st_size)``, então qualquer edição invalida a
+        entrada de forma transparente (sem re-varredura completa do disco).
+
+        Retorna cópias estruturais defensivas dos blocos: o cache é global e
+        compartilhado entre buscas/threads, logo nenhum chamador pode alterar a
+        entrada armazenada. Arquivos acima de ``MAX_INDEX_FILE_BYTES`` retornam
+        ``([], [])`` com aviso único (guardrail de memória).
+        """
+        key = file_stat_key(file_path)
+        if key is None:
+            return [], []
+
+        cached = get_file_index(key)
+        if cached is not None:
+            cached_blocks, cached_token_sets = cached
+            return self._copy_index_entry(cached_blocks, cached_token_sets)
+
+        # Miss: extrai e tokeniza uma única vez, depois persiste o índice.
+        blocks = self._extract_blocks_for_file(file_path)
+        token_sets: List[Set[str]] = [
+            set(self.tokenize(f"{b['name']} {' '.join(b['relations'])} {b['content']}"))
+            for b in blocks
+        ]
+
+        # Estimativa de custo de memória (guardrail de orçamento do LRU):
+        # conteúdo dos blocos + caracteres dos tokens (objeto Python ~50 B/cabeça).
+        content_bytes = sum(len(str(b.get("content", ""))) for b in blocks)
+        token_chars = sum(len(tok) for ts in token_sets for tok in ts)
+        token_count = sum(len(ts) for ts in token_sets)
+        size_estimate = content_bytes + token_chars + 50 * token_count
+
+        set_file_index(key, (blocks, token_sets), size_bytes=size_estimate)
+        return self._copy_index_entry(blocks, token_sets)
+
+    @staticmethod
+    def _copy_index_entry(
+        blocks: List[Dict[str, Any]], token_sets: List[Set[str]]
+    ) -> Tuple[List[Dict[str, Any]], List[Set[str]]]:
+        """Cópia defensiva (shallow) — blocos e token sets são tratados como imutáveis."""
+        return (
+            [{**b, "relations": list(b["relations"])} for b in blocks],
+            list(token_sets),
+        )
+
     def _extract_blocks_for_file(self, file_path: Path) -> List[Dict[str, Any]]:
         """Despacha a extração com fallback gracioso por família (sem exceção).
 
@@ -780,6 +832,10 @@ class LocalNeedleEngine:
           chunks léxicos quando desligado (sem alternativa stdlib).
         - Fallback final: chunks léxicos de 50 linhas.
         """
+        # TICKET-SGA-04 — Guardrail de I/O: nunca parsear/indexar arquivo acima
+        # do teto individual (2 MB); aviso único já emitido por file_size_allowed.
+        if not file_size_allowed(file_path, purpose="extracao de AST"):
+            return []
         suffix = file_path.suffix.lower()
         # Python: sempre stdlib ast (ver _ts_extract_enabled() — bug no binding C).
         if suffix in PY_FALLBACK_EXTENSIONS:
@@ -890,14 +946,15 @@ class LocalNeedleEngine:
 
         files = self._find_candidate_files(query.scope)
 
+        # TICKET-SGA-04 — SymbolIndex cacheado por mtime/size: em workspace
+        # estável não há re-parse nem re-tokenização; só a varredura de
+        # candidatos e o scoring rodam de novo (buscas consecutivas ultrarrápidas).
         all_blocks: List[Dict[str, Any]] = []
-        for f in files:
-            all_blocks.extend(self._extract_blocks_for_file(f))
-
         block_token_sets: List[Set[str]] = []
-        for blk in all_blocks:
-            text = f"{blk['name']} {' '.join(blk['relations'])} {blk['content']}"
-            block_token_sets.append(set(self.tokenize(text)))
+        for f in files:
+            blocks, token_sets = self._indexed_file_symbols(f)
+            all_blocks.extend(blocks)
+            block_token_sets.extend(token_sets)
 
         # IDF intra-busca sobre o universo dos blocos candidatos:
         #   idf(t) = ln(1 + (N - df(t) + 0.5) / (df(t) + 0.5))

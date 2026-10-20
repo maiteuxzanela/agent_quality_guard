@@ -10,6 +10,7 @@ Refinamentos de Produção:
 """
 
 import asyncio
+import itertools
 import logging
 import math
 import os
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.schemas import Needle3Query, Needle3Snippet
+from .ast_cache import file_size_allowed
 from .local_needle import LocalNeedleEngine, substantive_terms
 
 logger = logging.getLogger("jev.qmd")
@@ -28,6 +30,13 @@ logger = logging.getLogger("jev.qmd")
 # Preview literal é fragmento de contexto, nunca dump de arquivo: precisa
 # caber no mesmo teto de caracteres do chunker adaptativo do Needle.
 MAX_LITERAL_PREVIEW_CHARS = 1800
+
+# TICKET-SGA-04 — Guardrails de I/O da busca híbrida:
+# * Timeout GLOBAL configurável por requisição (padrão 15 s). `timeout <= 0`
+#   desativa a cota — semântica alinhada a SpawnSubagentRequest.timeout.
+# * Subprocesso do ripgrep tem cota própria (5 s), recortada pelo timeout global.
+DEFAULT_SEARCH_TIMEOUT_S = 15.0
+DEFAULT_RIPGREP_TIMEOUT_S = 5.0
 
 # Arquivos de código executável são o alvo usual da busca cirúrgica; docs e
 # dados continuam indexados, mas não devem vencer o código que implementa o
@@ -225,9 +234,16 @@ class QmdHybridSearchEngine:
         start_l = max(1, first_line - 3)
         end_l = first_line + 5
         try:
-            if abs_path.is_file():
-                all_lines = abs_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                lines_preview = all_lines[start_l - 1 : min(end_l, len(all_lines))]
+            # TICKET-SGA-04 — Guardrails de I/O do preview:
+            # * arquivo acima de 2 MB nunca é lido (só os matches do grep);
+            # * leitura LIMITADA às linhas [start_l, end_l] via islice — o arquivo
+            #   inteiro nunca é materializado em memória.
+            if abs_path.is_file() and file_size_allowed(abs_path, purpose="preview literal"):
+                with abs_path.open("r", encoding="utf-8", errors="replace") as fh:
+                    lines_preview = [
+                        line.rstrip("\r\n")
+                        for line in itertools.islice(fh, start_l - 1, end_l)
+                    ]
         except Exception as read_err:
             logger.debug("Falha ao ler preview de %s: %s", abs_path, read_err)
 
@@ -334,8 +350,13 @@ class QmdHybridSearchEngine:
         scope: Optional[List[str]] = None,
         max_results_per_file: int = DEFAULT_MAX_MATCHES_PER_FILE,
         max_files: int = 40,
+        timeout: float = DEFAULT_RIPGREP_TIMEOUT_S,
     ) -> Dict[str, Dict[str, Any]]:
         """Executa busca léxica via ripgrep e agrupa resultados por arquivo.
+
+        ``timeout`` (TICKET-SGA-04) limita o subprocesso em segundos; ao expirar,
+        a rota léxica degrada para vazio e a rota AST segue viva (fallback
+        assimétrico), nunca derrubando a requisição.
 
         Exemplo:
             >>> res = QmdHybridSearchEngine()._run_ripgrep("needle")
@@ -383,7 +404,7 @@ class QmdHybridSearchEngine:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=5.0,
+                timeout=timeout,
                 check=False,
             )
             for line in res.stdout.splitlines():
@@ -412,6 +433,11 @@ class QmdHybridSearchEngine:
                         "text": matched_text,
                     })
 
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Busca léxica atingiu timeout de %.2fs — degradando para a rota AST.",
+                timeout,
+            )
         except Exception as e:
             logger.debug(f"Erro ao executar busca léxica: {e}")
 
@@ -436,8 +462,14 @@ class QmdHybridSearchEngine:
         k: float = 60.0,
         weight_grep: float = 1.0,
         weight_needle: float = 1.2,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Executa a busca híbrida unificada com fusão RRF em CPU.
+
+        ``timeout`` (TICKET-SGA-04) é o guardrail GLOBAL por requisição em
+        segundos: ``None`` usa ``DEFAULT_SEARCH_TIMEOUT_S`` (15 s); valores
+        ``<= 0`` desativam a cota. Ao estourar, retorna ``status="timeout"``
+        com o mesmo formato da resposta de sucesso (retrocompatível).
 
         Exemplo:
             >>> import asyncio
@@ -447,8 +479,20 @@ class QmdHybridSearchEngine:
         """
         t0 = time.perf_counter()
 
+        effective_timeout = (
+            DEFAULT_SEARCH_TIMEOUT_S if timeout is None else float(timeout)
+        )
+        # Cota do subprocesso rg: nunca maior que a cota global da requisição.
+        rg_timeout = (
+            min(DEFAULT_RIPGREP_TIMEOUT_S, effective_timeout)
+            if effective_timeout > 0
+            else DEFAULT_RIPGREP_TIMEOUT_S
+        )
+
         # 1. Executa busca léxica via Ripgrep em thread
-        grep_future = asyncio.to_thread(self._run_ripgrep, query, scope)
+        grep_future = asyncio.to_thread(
+            self._run_ripgrep, query, scope, timeout=rg_timeout
+        )
 
         # 2. Executa busca semântica/AST via Needle 3
         needle_q = Needle3Query(
@@ -460,7 +504,37 @@ class QmdHybridSearchEngine:
         )
         needle_task = asyncio.create_task(self.needle_engine.search(needle_q))
 
-        grep_results, needle_resp = await asyncio.gather(grep_future, needle_task)
+        if effective_timeout > 0:
+            try:
+                grep_results, needle_resp = await asyncio.wait_for(
+                    asyncio.gather(grep_future, needle_task),
+                    timeout=effective_timeout,
+                )
+            except asyncio.TimeoutError:
+                elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+                logger.warning(
+                    "cirurgic_search: timeout global de %.2fs atingido "
+                    "(latência até aqui: %.1f ms) — refine `scope` ou aumente "
+                    "`timeout`.",
+                    effective_timeout,
+                    elapsed_ms,
+                )
+                return {
+                    "status": "timeout",
+                    "latency_ms": elapsed_ms,
+                    "total_tokens": 0,
+                    "token_savings_pct": 0.0,
+                    "snippets_count": 0,
+                    "files_found": 0,
+                    "snippets": [],
+                    "timeout_s": effective_timeout,
+                    "message": (
+                        f"Busca híbrida excedeu {effective_timeout}s. "
+                        "Restrinja `scope` ou aumente `timeout` (<=0 desativa)."
+                    ),
+                }
+        else:
+            grep_results, needle_resp = await asyncio.gather(grep_future, needle_task)
 
         # 3. Ranqueamento de Arquivos
         # Grep: ordem conjuntiva — arquivos que cobrem mais termos DISTINTOS da

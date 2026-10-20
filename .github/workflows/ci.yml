@@ -11,10 +11,18 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  JEV_USE_HERMES: "false"
+  NO_PROXY: localhost,127.0.0.1,::1
+
 jobs:
   lint-and-typecheck:
     name: Lint & Typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,15 +45,52 @@ jobs:
       - name: Run Mypy Typecheck
         run: mypy agent_quality_guard/
 
+      - name: Enforce version parity (pyproject / package.json / __init__)
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          import tomllib
+
+          root = pathlib.Path(".")
+          pyproject_version = tomllib.loads(
+              (root / "pyproject.toml").read_text(encoding="utf-8")
+          )["project"]["version"]
+          package_version = json.loads(
+              (root / "package.json").read_text(encoding="utf-8")
+          )["version"]
+          init_text = (root / "agent_quality_guard" / "__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_text, re.MULTILINE)
+          if not match:
+              sys.exit("ABORT: __version__ nao encontrada em agent_quality_guard/__init__.py")
+          init_version = match.group(1)
+
+          versions = {
+              "pyproject.toml": pyproject_version,
+              "package.json": package_version,
+              "agent_quality_guard/__init__.py": init_version,
+          }
+          print("Versoes detectadas:", json.dumps(versions, indent=2, sort_keys=True))
+          if len(set(versions.values())) != 1:
+              sys.exit(
+                  "ABORT: divergencia de versao entre artefatos de release: "
+                  + json.dumps(versions, indent=2, sort_keys=True)
+              )
+          print(f"OK: paridade de versao garantida ({pyproject_version})")
+          PY
+
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    env:
-      JEV_USE_HERMES: "false"
+    name: Test (py${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,13 +101,68 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install dependencies (with tree-sitter)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install ".[dev]"
 
       - name: Run Deterministic Test Suite
-        run: pytest tests/
-        env:
-          JEV_USE_HERMES: "false"
+        run: pytest tests/ -q
+
+  test-without-tree-sitter:
+    # Resiliencia/fallback: prova que o pacote opera sem a lib opcional de parsers.
+    # Os testes que exigem gramaticas tree-sitter reais sao excluidos de forma
+    # declarativa e deterministica; os demais (nucleo, Camada 1, CLI, schemas,
+    # vetores lexicais e fallbacks) precisam passar verdes.
+    name: Test resiliencia (sem tree-sitter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install core dependencies WITHOUT optional tree-sitter parsers
+        run: |
+          python -m pip install --upgrade pip
+          grep -v -E '^tree-sitter' requirements.txt > /tmp/requirements-no-ts.txt
+          pip install -r /tmp/requirements-no-ts.txt
+
+      - name: Assert tree-sitter is really absent
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import sys
+
+          for module in ("tree_sitter", "tree_sitter_language_pack"):
+              if importlib.util.find_spec(module) is not None:
+                  sys.exit(f"FAIL: {module} instalado inesperadamente no job de resiliencia")
+          print("OK: tree-sitter ausente — caminho de fallback sera exercitado")
+          PY
+
+      - name: Import smoke test (fail-open sem tree-sitter)
+        run: |
+          python - <<'PY'
+          from agent_quality_guard.memory import TreeSitterGuard
+
+          assert TreeSitterGuard is not None, "TreeSitterGuard deve importar mesmo sem tree-sitter (fail-open)"
+          print("OK: TreeSitterGuard importado com fail-open")
+          PY
+
+      - name: Run suite exercising fallback path (grammar-dependent tests excluded)
+        run: |
+          pytest tests/ -q \
+            --ignore=tests/test_tree_sitter_guard.py \
+            --ignore=tests/test_tree_sitter_multilang_needle.py \
+            --deselect=tests/test_multilang_needle.py::TestTreeSitterRouteGateOn \
+            --deselect=tests/test_guards_integration.py::TestGuardsIntegration::test_ast_violation_triggers_deterministic_block

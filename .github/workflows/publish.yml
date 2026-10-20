@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # id-token: write e obrigatorio para `npm publish --provenance` (OIDC Sigstore)
       id-token: write
     steps:
       - name: Checkout repository
@@ -26,8 +27,45 @@ jobs:
           pip install -r requirements.txt
           pip install ".[dev]"
 
+      - name: Enforce version parity (pyproject / package.json / __init__)
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          import tomllib
+
+          root = pathlib.Path(".")
+          pyproject_version = tomllib.loads(
+              (root / "pyproject.toml").read_text(encoding="utf-8")
+          )["project"]["version"]
+          package_version = json.loads(
+              (root / "package.json").read_text(encoding="utf-8")
+          )["version"]
+          init_text = (root / "agent_quality_guard" / "__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_text, re.MULTILINE)
+          if not match:
+              sys.exit("ABORT: __version__ nao encontrada em agent_quality_guard/__init__.py")
+          init_version = match.group(1)
+
+          versions = {
+              "pyproject.toml": pyproject_version,
+              "package.json": package_version,
+              "agent_quality_guard/__init__.py": init_version,
+          }
+          print("Versoes detectadas:", json.dumps(versions, indent=2, sort_keys=True))
+          if len(set(versions.values())) != 1:
+              sys.exit(
+                  "ABORT: divergencia de versao entre artefatos de release: "
+                  + json.dumps(versions, indent=2, sort_keys=True)
+              )
+          print(f"OK: paridade de versao garantida ({pyproject_version})")
+          PY
+
       - name: Run Deterministic Test Suite
-        run: pytest tests/
+        run: pytest tests/ -q
         env:
           JEV_USE_HERMES: "false"
 
@@ -37,7 +75,7 @@ jobs:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Publish to NPM
-        run: npm publish --access public
+      - name: Publish to NPM (with provenance)
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
