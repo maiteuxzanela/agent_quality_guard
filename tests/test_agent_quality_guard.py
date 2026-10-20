@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from src.mcp_server import (
+from agent_quality_guard.mcp_server import (
     _coerce_violations,
     _quality_guard_core,
     _run_layer1_native_bridge,
@@ -29,7 +29,7 @@ from src.mcp_server import (
     app,
     needle_verify_delivery,
 )
-from src.core.schemas import (
+from agent_quality_guard.core.schemas import (
     AgentQualityGuardRequest,
     AgentQualityGuardResponse,
     ASTViolation,
@@ -68,7 +68,7 @@ def test_canonical_and_alias_input_schemas_are_identical():
 
 
 def test_tool_catalog_contains_canonical_and_alias():
-    from src.core.tools import get_tool_definition
+    from agent_quality_guard.core.tools import get_tool_definition
 
     canonical = get_tool_definition("agent_quality_guard")
     alias = get_tool_definition("needle_verify_delivery")
@@ -352,7 +352,7 @@ def test_quality_guard_core_rejects_blocking_violation_from_layer2_or_guard():
         assert response["blocking_ast_violations"], "violação bloqueante ausente"
 
     # ── Ausência de qualquer dependência pesada de GPU/Laya no caminho crítico ──
-    module_path = Path(__file__).resolve().parents[1] / "src" / "mcp_server.py"
+    module_path = Path(__file__).resolve().parents[1] / "agent_quality_guard" / "mcp_server.py"
     source = module_path.read_text(encoding="utf-8")
     guard_block = source[source.index("def _quality_guard_core"):source.index("# Registro das tools")]
     for forbidden in ("evaluate_noul", "_get_engine_async", "torch", "cuda", "laya"):

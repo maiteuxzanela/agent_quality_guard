@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from src.memory.tree_sitter_guard import TreeSitterGuard, TreeSitterViolation
+from agent_quality_guard.memory.tree_sitter_guard import TreeSitterGuard, TreeSitterViolation
 
 
 def _rules(violations) -> list[str]:
@@ -518,7 +518,7 @@ def test_scan_duplicate_rule_same_line_is_deduplicated():
 
 
 def test_scan_file_missing_and_oversized(monkeypatch, tmp_path: Path):
-    import src.memory.tree_sitter_guard as guard_module
+    import agent_quality_guard.memory.tree_sitter_guard as guard_module
 
     assert TreeSitterGuard.scan_file(tmp_path / "nao_existe.py") == []
 
@@ -631,14 +631,14 @@ def test_multi_stack_runner_has_no_silent_catch():
     """
     source_path = (
         Path(__file__).resolve().parents[1]
-        / "src"
+        / "agent_quality_guard"
         / "orchestrator"
         / "multi_stack_runner.py"
     )
     assert source_path.is_file(), f"arquivo ausente: {source_path}"
     text = source_path.read_text(encoding="utf-8")
     violations = TreeSitterGuard.scan_content(
-        text, "src/orchestrator/multi_stack_runner.py"
+        text, "agent_quality_guard/orchestrator/multi_stack_runner.py"
     )
     silent = [v for v in violations if v.rule_id == "SILENT_CATCH"]
     assert silent == [], [(v.line_number, v.message) for v in silent]
@@ -683,7 +683,7 @@ def test_scan_is_subsecond_fast():
 
 
 def test_module_has_no_gpu_or_ml_inference_dependency():
-    source = Path(__file__).resolve().parents[1].joinpath("src", "memory", "tree_sitter_guard.py")
+    source = Path(__file__).resolve().parents[1].joinpath("agent_quality_guard", "memory", "tree_sitter_guard.py")
     text = source.read_text(encoding="utf-8").lower()
     for forbidden in ("torch", "cuda", "llama_cpp", "transformers", "noul", "laya"):
         assert forbidden not in text, f"Camada 2 não pode referenciar {forbidden} (sem GPU/ML)"

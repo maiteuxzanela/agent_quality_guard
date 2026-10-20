@@ -6,7 +6,7 @@ quality guard determinístico, com aliases). As primitivas Laya foram expurgadas
 
 import pytest
 
-from src.core.tools import TOOL_DEFINITIONS, get_tool_definition
+from agent_quality_guard.core.tools import TOOL_DEFINITIONS, get_tool_definition
 
 ACTIVE_TOOLS = {
     "cirurgic_search",

@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 import pytest
 
-from src.mcp_server import needle_verify_delivery
+from agent_quality_guard.mcp_server import needle_verify_delivery
 
 
 @pytest.mark.asyncio
@@ -224,7 +224,7 @@ def test_history_clear_is_scoped_and_state_dir_is_isolated():
     """
     import json
 
-    from src.core.score_gate import _get_state_path, history_clear, history_set
+    from agent_quality_guard.core.score_gate import _get_state_path, history_clear, history_set
 
     real_state_dir = Path(tempfile.gettempdir()) / "openjev_state"
     sentinel = real_state_dir / "score_state_deadbeef.json"
@@ -262,7 +262,7 @@ class DeterministicNoulEngine:
         self.is_ready = is_ready
 
     async def evaluate_noul(self, req):
-        from src.core.schemas import NoulResponse
+        from agent_quality_guard.core.schemas import NoulResponse
         passed = self.probability >= req.threshold
         return NoulResponse(
             passed=passed,
@@ -361,7 +361,7 @@ def test_agent_quality_guard_canonical_alias_and_registration():
 
     Ambos devem estar registradas no servidor MCP e resolver para a mesma função.
     """
-    from src.mcp_server import agent_quality_guard, app
+    from agent_quality_guard.mcp_server import agent_quality_guard, app
 
     assert agent_quality_guard is needle_verify_delivery
 
@@ -398,7 +398,7 @@ def test_needle_verify_delivery_request_rejects_attempt_above_five():
     """Caminho de erro real: attempt_number > 5 estoura no schema (circuit breaker)."""
     from pydantic import ValidationError
 
-    from src.core.schemas import NeedleVerifyDeliveryRequest
+    from agent_quality_guard.core.schemas import NeedleVerifyDeliveryRequest
 
     with pytest.raises(ValidationError):
         NeedleVerifyDeliveryRequest(attempt_number=6)

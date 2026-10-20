@@ -2,7 +2,7 @@
 
 import unittest
 from pathlib import Path
-from src.memory.needle_ast_guard import NeedleASTGuard, ASTViolation
+from agent_quality_guard.memory.needle_ast_guard import NeedleASTGuard, ASTViolation
 
 
 class TestNeedleASTGuard(unittest.TestCase):
@@ -110,7 +110,7 @@ class TestNeedleASTGuard(unittest.TestCase):
 
     def test_real_test_passes(self):
         code = (
-            "from src.calc import add\n"
+            "from agent_quality_guard.calc import add\n"
             "def test_real_add():\n"
             "    result = add(2, 3)\n"
             "    assert result == 5\n"
@@ -140,7 +140,7 @@ class TestNeedleASTGuard(unittest.TestCase):
 
     def test_screener_suppressions(self):
         """Valida supressões inteligentes do NeedleASTScreener (pyi, dunder, @property, @abstractmethod)."""
-        from src.memory.needle_defect_screener import NeedleASTScreener, AstSymbolSlice
+        from agent_quality_guard.memory.needle_defect_screener import NeedleASTScreener, AstSymbolSlice
 
         # Stub .pyi file
         stub_slice = AstSymbolSlice(
@@ -220,7 +220,7 @@ class TestNeedleASTGuardMCPIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_mcp_fails_fast_on_sqli_with_zero_inference(self):
         import subprocess
         import tempfile
-        from src.mcp_server import needle_verify_delivery
+        from agent_quality_guard.mcp_server import needle_verify_delivery
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Inicializa repo Git real

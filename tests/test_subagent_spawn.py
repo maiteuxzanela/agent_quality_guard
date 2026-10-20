@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from src.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
-from src.orchestrator.subagent_runner import (
+from agent_quality_guard.core.schemas import SpawnSubagentRequest, SpawnSubagentResponse
+from agent_quality_guard.orchestrator.subagent_runner import (
     SubagentRunner,
     classify_execution_level,
     extract_system_prompt_from_markdown,
@@ -71,8 +71,23 @@ def test_resolve_persona_and_prompt(temp_git_workspace: Path):
     assert sys_prompt2 == sys_prompt
 
 
-def test_resolve_global_persona_fallback(temp_git_workspace: Path):
+def test_resolve_global_persona_fallback(temp_git_workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Testa o fallback para personas do projeto JEV quando não estiverem no workspace alvo."""
+    from agent_quality_guard.orchestrator import subagent_runner
+
+    if not subagent_runner.GLOBAL_PERSONAS_DIR.exists() or not list(subagent_runner.GLOBAL_PERSONAS_DIR.glob("*kael*.md")):
+        fake_global = tmp_path / "global_personas"
+        fake_global.mkdir(parents=True, exist_ok=True)
+        (fake_global / "03_kael_backend.md").write_text(
+            "# Kael — Backend Specialist\n\n"
+            "```markdown\n"
+            "[ROLE: Especialista sênior em backend e APIs determinísticas]\n"
+            "Desenvolve APIs robustas sem mocks e com validação estrita.\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(subagent_runner, "GLOBAL_PERSONAS_DIR", fake_global)
+
     name, sys_prompt, p_file = resolve_persona_file("kael", temp_git_workspace)
     assert "kael" in name.lower()
     assert len(sys_prompt) > 20

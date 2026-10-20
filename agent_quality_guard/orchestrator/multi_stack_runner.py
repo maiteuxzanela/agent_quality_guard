@@ -281,8 +281,10 @@ class MultiStackRunner:
         if (workspace_path / "sync_kanban.py").exists() and (workspace_path / "test_docs_integrity.py").exists():
             return "PYTHON_FATURAMENTO"
 
-        # Se for projeto JEV
-        if (workspace_path / "src" / "mcp_server.py").exists():
+        # Se for projeto JEV / agent_quality_guard
+        if (workspace_path / "src" / "mcp_server.py").exists() or (
+            (workspace_path / "agent_quality_guard" / "mcp_server.py").exists()
+        ):
             return "PYTHON_JEV"
 
         # Stack Node/TypeScript/Bun moderna (ensemble-room-lowcost, openchamber_maiteux)
@@ -700,7 +702,7 @@ class MultiStackRunner:
     def _filter_delta_files(cls, workspace_path: Path, source_files: List[Path]) -> List[Path]:
         """Filtra lista de arquivos mantendo apenas os alterados no Git."""
         try:
-            from src.core.diff_inspector import get_workspace_diff_files, normalize_workspace_relpath
+            from agent_quality_guard.core.diff_inspector import get_workspace_diff_files, normalize_workspace_relpath
             diff_files = get_workspace_diff_files(str(workspace_path))
         except Exception as diff_err:
             logger.debug(f"Não foi possível obter diff de arquivos para auditoria delta: {diff_err}")

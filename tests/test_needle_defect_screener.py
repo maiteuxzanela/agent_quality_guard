@@ -13,8 +13,8 @@ from typing import List, Set
 
 import pytest
 
-from src.memory.ast_diff_extractor import AstSymbolSlice
-from src.memory.needle_defect_screener import (
+from agent_quality_guard.memory.ast_diff_extractor import AstSymbolSlice
+from agent_quality_guard.memory.needle_defect_screener import (
     DEFECT_NOUL_HYPOTHESES,
     DefectSuspicion,
     NeedleASTScreener,

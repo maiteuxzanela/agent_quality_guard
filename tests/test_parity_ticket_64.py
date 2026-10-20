@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from src.memory.local_needle import (
+from agent_quality_guard.memory.local_needle import (
     MAX_LEXICAL_CHUNK_CHARS,
     MAX_LEXICAL_CHUNK_LINES,
     STOPWORDS,
@@ -28,8 +28,8 @@ from src.memory.local_needle import (
     is_ignored_artifact,
     substantive_terms,
 )
-from src.core.schemas import Needle3Query
-from src.memory.qmd_search import (
+from agent_quality_guard.core.schemas import Needle3Query
+from agent_quality_guard.memory.qmd_search import (
     DEFAULT_MAX_MATCHES_PER_FILE,
     GREP_EXCLUDED_DIRS,
     IGNORED_GLOBS,

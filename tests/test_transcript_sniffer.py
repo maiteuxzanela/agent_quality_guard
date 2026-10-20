@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core.transcript_sniffer import (
+from agent_quality_guard.core.transcript_sniffer import (
     SCORE_PREMISE_MAX_LEN,
     build_factual_premise,
     extract_latest_user_request,

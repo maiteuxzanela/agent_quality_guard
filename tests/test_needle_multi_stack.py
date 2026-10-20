@@ -12,8 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.memory.needle_ast_guard import NeedleASTGuard, ASTViolation
-from src.orchestrator.multi_stack_runner import (
+from agent_quality_guard.memory.needle_ast_guard import NeedleASTGuard, ASTViolation
+from agent_quality_guard.orchestrator.multi_stack_runner import (
     MultiStackRunner,
     MultiStackViolation,
     RULE_SUGGESTIONS,
@@ -208,7 +208,7 @@ class TestNeedleMultiStack(unittest.TestCase):
 
     def test_ast_cache_functionality(self):
         """Verifica o cache thread-safe em memória de ASTs."""
-        from src.memory.ast_cache import get_cached_ast, clear_ast_cache, get_ast_cache_size
+        from agent_quality_guard.memory.ast_cache import get_cached_ast, clear_ast_cache, get_ast_cache_size
         clear_ast_cache()
         self.assertEqual(get_ast_cache_size(), 0)
 
@@ -230,7 +230,7 @@ class TestNeedleMultiStack(unittest.TestCase):
 
     def test_canonical_path_normalization(self):
         """Verifica normalização de caminhos no diff_inspector."""
-        from src.core.diff_inspector import normalize_workspace_relpath
+        from agent_quality_guard.core.diff_inspector import normalize_workspace_relpath
         ws = "/home/user/project"
         self.assertEqual(normalize_workspace_relpath("/home/user/project/src/a.py", ws), "src/a.py")
         self.assertEqual(normalize_workspace_relpath("./src/a.py", ws), "src/a.py")
@@ -239,7 +239,7 @@ class TestNeedleMultiStack(unittest.TestCase):
 
     def test_suite_budget_timeout(self):
         """Verifica orçamento de tempo limite em PytestChunkRunner."""
-        from src.orchestrator.pytest_chunk_runner import PytestChunkRunner
+        from agent_quality_guard.orchestrator.pytest_chunk_runner import PytestChunkRunner
         # Com orçamento já expirado (max_total_timeout=0), deve abortar de forma controlada
         res = PytestChunkRunner.run_all_chunks(workspace_path=".", max_total_timeout=0, audit_mode="delta")
         self.assertFalse(res["pytest_success"])

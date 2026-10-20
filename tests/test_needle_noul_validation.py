@@ -6,13 +6,13 @@ from typing import List
 
 import pytest
 
-from src.core.schemas import NeedleVerifyDeliveryResponse
-from src.memory.ast_diff_extractor import (
+from agent_quality_guard.core.schemas import NeedleVerifyDeliveryResponse
+from agent_quality_guard.memory.ast_diff_extractor import (
     AstSymbolSlice,
     extract_workspace_ast_symbols,
     get_git_modified_line_ranges,
 )
-from src.memory.needle_defect_screener import (
+from agent_quality_guard.memory.needle_defect_screener import (
     DEFECT_NOUL_HYPOTHESES,
     DefectSuspicion,
     screen_symbol_defects,
@@ -162,7 +162,7 @@ def test_screener_dunder_isento_de_analise():
 
 def test_defect_hypotheses_cobrem_as_10_categorias():
     """DEFECT_NOUL_HYPOTHESES cobre exatamente DEFECT_OPTIONS (10 categorias)."""
-    from src.core.schemas import DEFECT_OPTIONS
+    from agent_quality_guard.core.schemas import DEFECT_OPTIONS
     assert set(DEFECT_NOUL_HYPOTHESES) == set(DEFECT_OPTIONS)
     assert all(h.strip() for h in DEFECT_NOUL_HYPOTHESES.values())
 
@@ -209,7 +209,7 @@ class PaymentService:
         encoding="utf-8",
     )
 
-    from src.memory.ast_diff_extractor import extract_ast_symbols_from_file
+    from agent_quality_guard.memory.ast_diff_extractor import extract_ast_symbols_from_file
 
     # Simula alteração apenas nas linhas do método process_transaction (linhas 7-10)
     changed_lines = {7, 8, 9, 10}
@@ -392,7 +392,7 @@ def test_noul_request_rejects_out_of_range_threshold():
     """Caminho de erro real: threshold fora de [0, 1] é recusado pelo schema (fail-fast)."""
     from pydantic import ValidationError
 
-    from src.core.schemas import NoulRequest
+    from agent_quality_guard.core.schemas import NoulRequest
 
     with pytest.raises(ValidationError):
         NoulRequest(premise="Premissa", hypothesis="Hipótese", threshold=1.5)

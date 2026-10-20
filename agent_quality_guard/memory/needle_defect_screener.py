@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from src.memory.ast_diff_extractor import AstSymbolSlice
-from src.memory.ast_cache import get_cached_ast
+from agent_quality_guard.memory.ast_diff_extractor import AstSymbolSlice
+from agent_quality_guard.memory.ast_cache import get_cached_ast
 
 logger = logging.getLogger("openjev.defect_screener")
 
@@ -1011,7 +1011,7 @@ def screen_workspace_symbols(
     """Varre todos os símbolos extraídos e retorna mapa {symbol_key: lista_de_suspeitas}.
 
     Exemplo:
-        >>> from src.memory.ast_diff_extractor import extract_workspace_ast_symbols
+        >>> from agent_quality_guard.memory.ast_diff_extractor import extract_workspace_ast_symbols
         >>> mapa = screen_workspace_symbols(extract_workspace_ast_symbols("."))
         >>> isinstance(mapa, dict)
         True

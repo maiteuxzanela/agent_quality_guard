@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from src.memory.qmd_search import QmdHybridSearchEngine, find_rg_binary
-from src.mcp_server import qmd_search
+from agent_quality_guard.memory.qmd_search import QmdHybridSearchEngine, find_rg_binary
+from agent_quality_guard.mcp_server import qmd_search
 
 
 @pytest.fixture

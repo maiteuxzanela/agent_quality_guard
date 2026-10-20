@@ -32,7 +32,7 @@ from typing import Any, Dict, List
 import pytest
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-MCP_SERVER_PATH = PROJECT_DIR / "src" / "mcp_server.py"
+MCP_SERVER_PATH = PROJECT_DIR / "agent_quality_guard" / "mcp_server.py"
 
 CANONICAL_TOOLS = {
     "cirurgic_search",
@@ -47,6 +47,7 @@ FORBIDDEN_MODULE_PREFIXES = (
     "pynvml",
     "cupy",
     "src.decision",
+    "agent_quality_guard.decision",
 )
 
 
@@ -82,7 +83,7 @@ import time
 t0 = time.perf_counter()
 import mcp.server.mcpserver  # framework MCP (baseline, não é código do JEV)
 t1 = time.perf_counter()
-import src.mcp_server as mcp_server
+import agent_quality_guard.mcp_server as mcp_server
 t2 = time.perf_counter()
 
 import asyncio
@@ -133,7 +134,7 @@ def test_no_gpu_compute_process_after_import():
     """O processo que importa o MCP não aparece como cliente CUDA."""
     code = (
         "import sys, time\n"
-        "import src.mcp_server\n"
+        "import agent_quality_guard.mcp_server\n"
         "print('READY', flush=True)\n"
         "time.sleep(2.5)\n"
     )
@@ -192,7 +193,7 @@ def test_no_gpu_compute_process_after_import():
 # 2. Superfície de ferramentas: canônicas presentes, primitivas ML ausentes
 # ---------------------------------------------------------------------------
 def _list_tool_names() -> List[str]:
-    import src.mcp_server as mcp_server
+    import agent_quality_guard.mcp_server as mcp_server
 
     return [tool.name for tool in asyncio.run(mcp_server.app.list_tools())]
 
@@ -218,7 +219,7 @@ def test_tool_surface_is_exactly_the_deterministic_set():
 def test_retired_ml_tools_are_unknown(legacy_tool: str):
     from mcp.server.mcpserver.exceptions import ToolError
 
-    import src.mcp_server as mcp_server
+    import agent_quality_guard.mcp_server as mcp_server
 
     with pytest.raises(ToolError, match="Unknown tool"):
         asyncio.run(mcp_server.app.call_tool(legacy_tool, {}))
@@ -245,7 +246,7 @@ def test_source_has_no_ml_imports():
 
 
 def test_get_engine_tombstone_fails_fast():
-    import src.mcp_server as mcp_server
+    import agent_quality_guard.mcp_server as mcp_server
 
     with pytest.raises(RuntimeError, match="TICKET-HARNESS-47"):
         mcp_server.get_engine()
@@ -261,7 +262,7 @@ def _search_payload(result: Any) -> Dict[str, Any]:
 
 
 def test_cirurgic_search_is_functional_and_alias_has_same_contract(tmp_path: Path):
-    import src.mcp_server as mcp_server
+    import agent_quality_guard.mcp_server as mcp_server
 
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -297,7 +298,7 @@ def test_cirurgic_search_is_functional_and_alias_has_same_contract(tmp_path: Pat
 
 
 def test_agent_quality_guard_is_functional_without_laya(monkeypatch, tmp_path: Path):
-    import src.mcp_server as mcp_server
+    import agent_quality_guard.mcp_server as mcp_server
 
     # Estado do circuit breaker isolado por teste (anti-wipe do histórico real).
     monkeypatch.setenv("JEV_STATE_DIR", str(tmp_path / "state"))
@@ -352,7 +353,7 @@ def _collect_imports(tree: ast.AST) -> List[str]:
 
 
 def test_tool_catalog_mirrors_the_active_deterministic_surface():
-    from src.core.tools import TOOL_DEFINITIONS, get_tool_definition
+    from agent_quality_guard.core.tools import TOOL_DEFINITIONS, get_tool_definition
 
     names = [tool["function"]["name"] for tool in TOOL_DEFINITIONS]
     assert set(names) == CANONICAL_TOOLS
@@ -375,7 +376,7 @@ def test_tool_catalog_mirrors_the_active_deterministic_surface():
 
 
 def test_cli_exposes_only_needle_and_rejects_retired_subcommands():
-    from src.cli import build_parser
+    from agent_quality_guard.cli import build_parser
 
     parser = build_parser()
     parsed = parser.parse_args(["needle", "soma_total"])
@@ -390,7 +391,7 @@ def test_cli_exposes_only_needle_and_rejects_retired_subcommands():
 def test_cli_import_does_not_load_ml_modules():
     code = (
         "import sys\n"
-        "import src.cli\n"
+        "import agent_quality_guard.cli\n"
         "bad = sorted(\n"
         "    m for m in sys.modules\n"
         "    if m == 'torch' or m.startswith('torch.')\n"
@@ -407,9 +408,9 @@ def test_cli_import_does_not_load_ml_modules():
 @pytest.mark.parametrize(
     "path",
     [
-        PROJECT_DIR / "src" / "mcp_server.py",
-        PROJECT_DIR / "src" / "core" / "tools.py",
-        PROJECT_DIR / "src" / "cli.py",
+        PROJECT_DIR / "agent_quality_guard" / "mcp_server.py",
+        PROJECT_DIR / "agent_quality_guard" / "core" / "tools.py",
+        PROJECT_DIR / "agent_quality_guard" / "cli.py",
     ],
 )
 def test_active_tool_sources_have_no_ml_imports(path: Path):
@@ -420,8 +421,8 @@ def test_active_tool_sources_have_no_ml_imports(path: Path):
         if name == "torch"
         or name.startswith("torch.")
         or name.split(".")[0] in {"transformers", "laya", "pynvml", "cupy"}
-        or name == "src.decision"
-        or name.startswith("src.decision.")
+        or name in {"src.decision", "agent_quality_guard.decision"}
+        or name.startswith(("src.decision.", "agent_quality_guard.decision."))
     ]
     assert bad == [], f"Imports ML/Laya em {path.name}: {bad}"
 

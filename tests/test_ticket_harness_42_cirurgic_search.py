@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from src.mcp_server import app, cirurgic_search, qmd_search
+from agent_quality_guard.mcp_server import app, cirurgic_search, qmd_search
 
 SAMPLE_FILES = {
     "billing_service.py": (

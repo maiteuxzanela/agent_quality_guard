@@ -9,7 +9,7 @@ pedir desculpas em texto livre.
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.core.schemas import DEFECT_DESCRIPTIONS, DEFECT_MEMBERS
+from agent_quality_guard.core.schemas import DEFECT_DESCRIPTIONS, DEFECT_MEMBERS
 
 logger = logging.getLogger("feedback_formatter")
 

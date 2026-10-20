@@ -1,6 +1,6 @@
 """Testes reais e sem mocks para o formatador de feedback estruturado de auto-correção."""
 
-from src.core.feedback_formatter import (
+from agent_quality_guard.core.feedback_formatter import (
     DEFECT_ACTION_PRESCRIPTIONS,
     MANDATORY_ACTION_DIRECTIVE,
     format_ast_rejection_reason,
@@ -134,7 +134,7 @@ def test_format_ast_rejection_many_violations_truncation():
 
 
 def test_needle_verify_delivery_response_schema_message_serialization():
-    from src.core.schemas import NeedleVerifyDeliveryResponse
+    from agent_quality_guard.core.schemas import NeedleVerifyDeliveryResponse
 
     resp = NeedleVerifyDeliveryResponse(
         passed=True,
@@ -161,7 +161,7 @@ def test_ast_violation_payload_rejects_non_numeric_line_number():
     import pytest
     from pydantic import ValidationError
 
-    from src.core.schemas import ASTViolation
+    from agent_quality_guard.core.schemas import ASTViolation
 
     with pytest.raises(ValidationError):
         ASTViolation(

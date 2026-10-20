@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from src.core.schemas import Needle3Query
-from src.memory.local_needle import LocalNeedleEngine
+from agent_quality_guard.core.schemas import Needle3Query
+from agent_quality_guard.memory.local_needle import LocalNeedleEngine
 
 
 # --------------------------------------------------------------------------- #

@@ -12,7 +12,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-SRC_DIR = ROOT / "src"
+SRC_DIRS = [ROOT / "agent_quality_guard"]
+if (ROOT / "src").is_dir():
+    SRC_DIRS.append(ROOT / "src")
 TESTS_DIR = ROOT / "tests"
 
 STRING_LITERAL = re.compile(r"""("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
@@ -55,10 +57,12 @@ class TestNoMocksInSrc(unittest.TestCase):
 
     def test_src_zero_mocks(self):
         """Produção não pode conter nenhum mock/stub de framework."""
-        violations = _find_violations(SRC_DIR)
+        violations = []
+        for sdir in SRC_DIRS:
+            violations.extend(_find_violations(sdir))
         self.assertEqual(
             violations, [],
-            "Mock detectado em src/ (§5.2 proíbe mocks em produção):\n"
+            "Mock detectado em produção (§5.2 proíbe mocks em produção):\n"
             + "\n".join(violations),
         )
 
