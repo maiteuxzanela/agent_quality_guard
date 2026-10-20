@@ -211,7 +211,7 @@ class SubagentRunner:
                 execution_report = hermes_out or ""
 
         # Captura os arquivos modificados no workspace após a tarefa
-        diff_files = get_workspace_diff_files(target_workspace)
+        diff_files = get_workspace_diff_files(str(target_workspace))
         files_modified = [
             df.path for df in diff_files if df.status in ("modified", "added", "untracked")
         ]
@@ -224,7 +224,7 @@ class SubagentRunner:
 
         if request.auto_validate:
             # Varre o workspace via AST do Needle 3
-            ast_violations_list = NeedleASTGuard.scan_workspace(target_workspace)
+            ast_violations_list = NeedleASTGuard.scan_workspace(str(target_workspace))
             if ast_violations_list:
                 ast_blocked = True
                 ast_violations = [v.to_dict() for v in ast_violations_list]
@@ -331,30 +331,46 @@ class SubagentRunner:
         except Exception as e:
             lines.append(f"- **nvidia-smi:** Erro ao consultar: {e}")
 
-        # 2. PyTorch & Profiling
-        try:
-            from ..decision.hardware import get_hardware_profile
-            prof = get_hardware_profile()
-            lines.append(f"- **Compute Capability:** {prof.compute_capability[0]}.{prof.compute_capability[1]} (Pascal GP107)")
-            lines.append(f"- **Suporte a bfloat16:** {'NATIVO' if prof.supports_bfloat16 else 'NÃO SUPORTADO (Bloqueio Ativo — Coerção para float16/float32)'}")
-            lines.append(f"- **Precisão Recomendada:** `{prof.recommended_dtype}`")
-            lines.append(f"- **Dispositivo Recomendado:** `{prof.recommended_device}`")
-        except Exception as e:
-            lines.append(f"- **Perfil de Hardware:** Erro ao carregar: {e}")
-
+        # 2. PyTorch & Profiling — fonte única de verdade do hardware (sem camada src/decision)
         try:
             import torch
+
             if torch.cuda.is_available():
+                props = torch.cuda.get_device_properties(0)
+                major = int(props.major)
+                minor = int(props.minor)
                 lines.append(f"- **PyTorch CUDA:** Ativo (CUDA {torch.version.cuda})")
                 lines.append(f"- **Dispositivo PyTorch:** {torch.cuda.get_device_name(0)}")
+                lines.append(f"- **Compute Capability:** {major}.{minor}")
+                # bfloat16 só possui suporte nativo a partir de Ampere (sm_80);
+                # Pascal GP107 (sm_61) é bloqueado e coagido para float16/float32.
+                supports_bfloat16 = major >= 8
+                lines.append(
+                    "- **Suporte a bfloat16:** "
+                    + (
+                        "NATIVO"
+                        if supports_bfloat16
+                        else "NÃO SUPORTADO (Bloqueio Ativo — Coerção para float16/float32)"
+                    )
+                )
+                lines.append("- **Precisão Recomendada:** `float16`")
+                lines.append("- **Dispositivo Recomendado:** `cuda`")
                 alloc = torch.cuda.memory_allocated(0) / (1024 * 1024)
                 reserv = torch.cuda.memory_reserved(0) / (1024 * 1024)
                 lines.append(f"- **Memória Alocada pelo PyTorch:** {alloc:.2f} MiB")
                 lines.append(f"- **Memória Reservada pelo PyTorch:** {reserv:.2f} MiB")
             else:
                 lines.append("- **PyTorch CUDA:** Indisponível no processo.")
+                lines.append("- **Precisão Recomendada:** `float32`")
+                lines.append("- **Dispositivo Recomendado:** `cpu`")
+        except ImportError:
+            lines.append("- **PyTorch:** Indisponível no processo (fallback CPU em float32).")
+            lines.append("- **Precisão Recomendada:** `float32`")
+            lines.append("- **Dispositivo Recomendado:** `cpu`")
         except Exception as e:
             lines.append(f"- **PyTorch:** Erro: {e}")
+            lines.append("- **Precisão Recomendada:** `float32`")
+            lines.append("- **Dispositivo Recomendado:** `cpu`")
 
         return "\n".join(lines)
 

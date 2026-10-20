@@ -286,7 +286,7 @@ class LocalNeedleEngine:
                             getattr(child, "end_lineno", None) or getattr(child, "lineno", start)
                             for child in ast.walk(node)
                         ]
-                        end = max(body_ends) if body_ends else start
+                        end = max([e for e in body_ends if isinstance(e, int)] or [start])
                     # Fatia inclusiva: lines é 0-based, end é 1-based (end_lineno).
                     block_code = "\n".join(lines[start - 1 : end])
 

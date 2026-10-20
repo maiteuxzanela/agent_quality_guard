@@ -90,7 +90,7 @@ def format_score_rejection_reason(
 
         raw_score = safe_res.get("score")
         has_score = raw_score is not None
-        score = float(raw_score) if has_score else 0.0
+        score = float(raw_score) if raw_score is not None else 0.0
 
         threshold = float(safe_res.get("threshold", 3.40))
         attempts = int(safe_res.get("attempts", 1))

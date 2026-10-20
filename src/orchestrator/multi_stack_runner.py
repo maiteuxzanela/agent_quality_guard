@@ -514,7 +514,7 @@ class MultiStackRunner:
 
         bun_lock = (workspace_path / "bun.lockb").exists() or (workspace_path / "bun.lock").exists()
         has_bunfig = (workspace_path / "bunfig.toml").exists()
-        bun_script = bool(test_script) and test_script.strip().startswith("bun")
+        bun_script = test_script is not None and test_script.strip().startswith("bun")
         is_bun = bool(bun_bin) and (bun_lock or has_bunfig or bun_script)
 
         tests_dir = workspace_path / "tests"
@@ -1033,7 +1033,7 @@ class MultiStackRunner:
             True
         """
         if stack in cls._JS_STACKS:
-            extensions = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+            extensions: Tuple[str, ...] = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
         elif stack in cls._PYTHON_STACKS:
             extensions = (".py",)
         else:
@@ -1736,8 +1736,10 @@ class MultiStackRunner:
                 continue
             category_raw = str(diagnostic.get("category") or "lint/unknown")
             severity = str(diagnostic.get("severity") or "warning").lower()
-            location = diagnostic.get("location") if isinstance(diagnostic.get("location"), dict) else {}
-            path_info = location.get("path") if isinstance(location.get("path"), dict) else {}
+            location_raw = diagnostic.get("location")
+            location: Dict[str, Any] = location_raw if isinstance(location_raw, dict) else {}
+            path_raw = location.get("path")
+            path_info: Dict[str, Any] = path_raw if isinstance(path_raw, dict) else {}
             raw_path = str(path_info.get("file") or path_info.get("path") or "")
             span = location.get("span") if isinstance(location.get("span"), list) else []
             line = 1
@@ -1849,7 +1851,8 @@ class MultiStackRunner:
             if not isinstance(item, dict):
                 continue
             code = str(item.get("code") or "UNKNOWN")
-            location = item.get("location") if isinstance(item.get("location"), dict) else {}
+            location_raw = item.get("location")
+            location: Dict[str, Any] = location_raw if isinstance(location_raw, dict) else {}
             line = int(location.get("row") or 1)
             category = "lint_error" if cls._is_ruff_blocking(code) else "lint_warning"
             violations.append(cls._make_native_violation(

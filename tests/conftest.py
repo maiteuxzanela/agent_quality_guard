@@ -20,3 +20,11 @@ _TEST_STATE_DIR = Path(tempfile.mkdtemp(prefix="jev_test_state_"))
 os.environ["JEV_STATE_DIR"] = str(_TEST_STATE_DIR)
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+# Isolamento do executor externo: com `JEV_USE_HERMES` unset (default "true"),
+# `SubagentRunner.spawn()` invoca o binário real do Hermes (agente LLM) dentro
+# do workspace do teste. Isso tornava a suíte lenta (~6-7 min) e não-determinística,
+# pois o Hermes podia reescrever o arquivo violador antes da varredura AST.
+# Os testes que exercitam o Hermes chamam `_execute_via_hermes()` diretamente
+# com binários de prova, portanto não dependem deste branch automático.
+os.environ["JEV_USE_HERMES"] = "false"
