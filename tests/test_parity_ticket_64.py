@@ -267,23 +267,38 @@ async def test_code_type_boost_applied_in_rrf(tmp_path: Path):
 
 
 def test_is_ignored_artifact_denylist():
-    """Bundles, source maps e panel/*.js nunca entram na busca cirúrgica."""
+    """Bundles e source maps universais nunca entram na busca cirúrgica."""
     assert is_ignored_artifact(Path("app.min.js"), "app.min.js") is True
     assert is_ignored_artifact(Path("src/app.bundle.js"), "src/app.bundle.js") is True
     assert is_ignored_artifact(Path("x.min.mjs"), "x.min.mjs") is True
     assert is_ignored_artifact(Path("x.js.map"), "x.js.map") is True
-    assert is_ignored_artifact(Path("panel/app.js"), "panel/app.js") is True
-    assert is_ignored_artifact(Path("src/panel/app.js"), "src/panel/app.js") is True
+
+    # TICKET-SGA-05: regras particulares de ambiente local (ex.: `panel/*.js`)
+    # saíram do hardcoding do motor — agora vêm via `exclude_patterns`/`.cirurgicignore`.
+    assert is_ignored_artifact(Path("panel/app.js"), "panel/app.js") is False
+    assert is_ignored_artifact(Path("src/panel/app.js"), "src/panel/app.js") is False
+    assert is_ignored_artifact(
+        Path("panel/app.js"), "panel/app.js", ["panel/*.js"]
+    ) is True
 
     assert is_ignored_artifact(Path("app.js"), "app.js") is False
     assert is_ignored_artifact(Path("panel/app.ts"), "panel/app.ts") is False
     assert is_ignored_artifact(Path("panelx/app.js"), "panelx/app.js") is False
 
-    assert "!**/panel/*.js" in IGNORED_GLOBS
     assert "!**/*.min.js" in IGNORED_GLOBS
     assert "!**/*.bundle.js" in IGNORED_GLOBS
     assert "!**/*.min.mjs" in IGNORED_GLOBS
-    assert "dist" in GREP_EXCLUDED_DIRS
+    # Exclusões universais padrão obrigatórias (TICKET-SGA-05) seguem presentes
+    # nas duas rotas; regras locais (.agent-teams/screenshots/panel) foram removidas.
+    for universal_dir in (
+        ".git", "node_modules", "dist", "__pycache__", ".venv",
+        ".pytest_cache", ".mypy_cache",
+    ):
+        assert universal_dir in GREP_EXCLUDED_DIRS
+        assert f"!**/{universal_dir}/**" in IGNORED_GLOBS
+    assert "screenshots" not in GREP_EXCLUDED_DIRS
+    assert ".agent-teams" not in GREP_EXCLUDED_DIRS
+    assert not any("panel" in glob for glob in IGNORED_GLOBS)
 
 
 @pytest.mark.asyncio
@@ -302,6 +317,12 @@ async def test_bundles_and_excluded_dirs_never_returned(tmp_path: Path):
     _write(tmp_path / "dist" / "copy.py", f"def {marker}(): ...\n")
     _write(tmp_path / "screenshots" / "shot.py", f"def {marker}(): ...\n")
     _write(tmp_path / "node_modules" / "x" / "index.js", f"var {marker}=1;\n")
+    # TICKET-SGA-05: exclusões particulares de ambiente agora vêm do
+    # `.cirurgicignore` na raiz do workspace (comentário + em branco tolerados).
+    _write(
+        tmp_path / ".cirurgicignore",
+        "# bundles de UI gerados localmente\n\npanel\nscreenshots/\n",
+    )
 
     engine = QmdHybridSearchEngine(workspace_root=str(tmp_path))
     res = await engine.search(marker, max_tokens=2000)

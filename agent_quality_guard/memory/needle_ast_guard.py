@@ -476,7 +476,7 @@ class NeedleASTGuard:
 
         # 2.3 Variável rastreada previamente como f-string sem parâmetros separados
         is_tracked_var = isinstance(first_arg, ast.Name) and first_arg.id in sql_interpolated_vars
-        if is_tracked_var and len(node.args) < 2 and not node.keywords:
+        if is_tracked_var and isinstance(first_arg, ast.Name) and len(node.args) < 2 and not node.keywords:
             return ASTViolation(
                 file_path=file_path,
                 line_number=node.lineno,
@@ -614,11 +614,17 @@ class NeedleASTGuard:
                     isinstance(target, ast.Name) and cls.SECRET_VAR_NAMES.match(target.id)
                     for target in node.targets
                 )
-                is_secret_literal = (
-                    isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                literal_value = (
+                    node.value.value
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                    else None
                 )
 
-                if is_secret_var and is_secret_literal and cls._is_hardcoded_secret_literal(node.value.value):
+                if (
+                    is_secret_var
+                    and literal_value is not None
+                    and cls._is_hardcoded_secret_literal(literal_value)
+                ):
                     violations.append(
                         ASTViolation(
                             file_path=file_path,
@@ -632,12 +638,9 @@ class NeedleASTGuard:
                     continue
 
                 # Caso 2: Padrões regex de tokens conhecidos em qualquer string constante
-                is_string_literal = (
-                    isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
-                )
                 matches_known_token = (
-                    is_string_literal
-                    and any(pat.search(node.value.value) for pat in cls.SECRET_PATTERNS)
+                    literal_value is not None
+                    and any(pat.search(literal_value) for pat in cls.SECRET_PATTERNS)
                 )
                 if matches_known_token:
                     violations.append(

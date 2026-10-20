@@ -129,7 +129,7 @@ def get_git_modified_line_ranges(workspace_dir: str) -> Dict[str, Set[int]]:
     return modified_lines_map
 
 
-def extract_file_imports(tree: ast.AST, lines: List[str]) -> str:
+def extract_file_imports(tree: ast.Module, lines: List[str]) -> str:
     """Extrai os imports do nível de módulo para dar contexto sintático aos símbolos."""
     import_lines: List[str] = []
     for node in tree.body:
@@ -280,6 +280,9 @@ def extract_ast_symbols_from_file(
             return []
     except Exception as e:
         logger.debug(f"Falha ao parsear AST de {rel_path}: {e}")
+        return []
+
+    if not isinstance(tree, ast.Module):
         return []
 
     imports_header = extract_file_imports(tree, lines)

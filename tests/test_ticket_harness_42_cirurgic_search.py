@@ -83,9 +83,14 @@ def test_both_tools_registered_with_identical_contracts():
     assert canonical.output_schema == legacy.output_schema
     assert canonical.input_schema["required"] == ["query"]
     assert canonical.input_schema["properties"]["max_tokens"]["default"] == 1200
-    assert canonical.input_schema["properties"]["depth"]["default"] == 2
+    # TICKET-SGA-05: `depth` virou opcional com padrão None = profundidade
+    # ILIMITADA (antes: default fixo 2). Clientes que enviam depth continuam
+    # 100% retrocompatíveis — apenas o default mudou para "sem corte".
+    assert canonical.input_schema["properties"]["depth"].get("default") is None
     assert canonical.input_schema["properties"]["workspace"]["default"] == ""
     assert canonical.input_schema["properties"]["scope"]["default"] == ""
+    # TICKET-SGA-05: `exclude_patterns` é superfície oficial das duas tools.
+    assert "exclude_patterns" in canonical.input_schema["properties"]
 
     # Descriptions differ only to document the migration path.
     assert "cirurgic-search-mcp" in canonical.description

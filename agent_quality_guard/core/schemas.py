@@ -7,6 +7,15 @@
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# TICKET-SGA-05 — Heurística de orçamento de snippets.
+# `CHARS_PER_TOKEN = 3.8` é uma APROXIMAÇÃO heurística de alta fidelidade para
+# cálculo orçamentário rápido de trechos (mistura de código/inglês), usada para
+# estimar `total_tokens`, o teto `max_tokens` e o `token_savings_pct`.
+# NÃO é — e não pretende ser — uma garantia criptográfica estrita de contagem
+# de tokens: a tokenização real varia por modelo/provedor. Constante única
+# (fonte canônica) importada por `memory/qmd_search.py` e `memory/local_needle.py`.
+CHARS_PER_TOKEN: float = 3.8
+
 
 # ==============================================================================
 # Exceções Tipadas Estritas (Fail-Fast Policy - Sem Mocks/Simulações)
@@ -799,7 +808,13 @@ class AgentQualityGuardRequest(NeedleVerifyDeliveryRequest):
 # ==============================================================================
 
 class Needle3Query(BaseModel):
-    """Requisição de busca cirúrgica para o Cactus Needle 3."""
+    """Requisição de busca cirúrgica para o Cactus Needle 3.
+
+    Contrato de profundidade (TICKET-SGA-05): ``max_depth`` limita a árvore de
+    diretórios da varredura e ``relational_depth`` limita o grafo de relações de
+    AST. Ambos são opcionais; ``max_depth=None`` (padrão) significa profundidade
+    ILIMITADA de diretórios — 100% retrocompatível com clientes que não os enviam.
+    """
     query: str = Field(
         ...,
         description="Termo ou pergunta técnica de busca."
@@ -839,14 +854,58 @@ class Needle3Query(BaseModel):
         default=1000,
         gt=0,
         le=4096,
-        description="Limite máximo estrito de tokens para o recorte retornado (canônico 1000; faixa AGENTS 500–1500)."
+        description=(
+            "Limite máximo estrito de tokens para o recorte retornado (canônico 1000; "
+            "faixa AGENTS 500–1500). O cálculo usa CHARS_PER_TOKEN = 3.8, aproximação "
+            "heurística de alta fidelidade para orçamento rápido de snippets — não é "
+            "garantia criptográfica estrita de contagem de tokens."
+        )
     )
     relational_depth: int = Field(
         default=2,
         ge=0,
         le=5,
-        description="Profundidade do grafo de relações (chamadores, implementações, imports, referências de tipo)."
+        description=(
+            "Profundidade do grafo de relações AST (chamadores, implementações, imports, "
+            "referências de tipo). Padrão canônico 2. O parâmetro `depth` da tool MCP "
+            "sobrepõe este valor quando enviado; `depth=None` mantém este padrão."
+        )
     )
+    max_depth: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Profundidade máxima da árvore de diretórios da varredura (níveis abaixo de "
+            "cada alvo de escopo). None (padrão) = profundidade ilimitada. Espelha o "
+            "parâmetro `depth` da tool MCP quando enviado."
+        )
+    )
+    exclude_patterns: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Globs opcionais de exclusão somados às exclusões universais padrão e ao "
+            "arquivo `.cirurgicignore` da raiz do workspace (se existir). Mesma semântica: "
+            "nome puro casa em qualquer nível; padrão com '/' é ancorado na raiz; '/' final "
+            "marca diretório; negação com '!' não é suportada."
+        )
+    )
+
+    @field_validator("exclude_patterns", mode="before")
+    @classmethod
+    def coerce_exclude_patterns_to_list(cls, v: Any) -> Optional[List[str]]:
+        """Permite string única, lista ou None para `exclude_patterns` (paridade com `scope`)."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v_clean = v.strip()
+            if not v_clean:
+                return None
+            parts = [p.strip() for p in v_clean.split(",") if p.strip()]
+            return parts if parts else None
+        if isinstance(v, (list, tuple, set)):
+            items = [str(item).strip() for item in v if str(item).strip()]
+            return items or None
+        return None
     preserve_relational_integrity: bool = Field(
         default=True,
         description="Se verdadeiro, garante que dependências relacionais do recorte sejam incluídas sem truncamento arbitrário."
@@ -867,7 +926,12 @@ class Needle3Snippet(BaseModel):
 
 
 class Needle3Response(BaseModel):
-    """Resposta agregada da busca cirúrgica do Needle 3."""
+    """Resposta agregada da busca cirúrgica do Needle 3.
+
+    Os totais de tokens são estimativas heurísticas baseadas em
+    ``CHARS_PER_TOKEN = 3.8`` (aproximação de alta fidelidade para orçamento
+    rápido de snippets, não garantia criptográfica estrita).
+    """
     snippets: List[Needle3Snippet] = Field(..., description="Lista de trechos cirúrgicos recuperados.")
     total_tokens: int = Field(..., ge=0, description="Total de tokens consumidos pelos trechos.")
     query_latency_ms: float = Field(..., ge=0.0, description="Latência da busca no Cactus Compute.")
@@ -892,8 +956,30 @@ class NeedleSearchHttpRequest(BaseModel):
     query: str = Field(..., description="Termo ou pergunta técnica de busca em linguagem natural.")
     workspace_path: Optional[str] = Field(default=".", description="Caminho do repositório a ser consultado.")
     scope: Optional[List[str]] = Field(default=None, description="Filtro opcional de diretórios/pacotes/arquivos.")
-    max_tokens: int = Field(default=1000, gt=0, le=4096, description="Limite máximo de tokens do recorte retornado.")
-    relational_depth: int = Field(default=2, ge=0, le=5, description="Profundidade do grafo relacional AST.")
+    max_tokens: int = Field(
+        default=1000,
+        gt=0,
+        le=4096,
+        description=(
+            "Limite máximo de tokens do recorte retornado (heurística CHARS_PER_TOKEN = 3.8, "
+            "aproximação de alta fidelidade — não é garantia criptográfica estrita)."
+        ),
+    )
+    relational_depth: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Profundidade do grafo relacional AST (padrão canônico 2).",
+    )
+    max_depth: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Profundidade máxima da árvore de diretórios da varredura (None = ilimitado).",
+    )
+    exclude_patterns: Optional[List[str]] = Field(
+        default=None,
+        description="Globs de exclusão somados às exclusões universais e ao `.cirurgicignore` da raiz.",
+    )
 
     @field_validator("scope", mode="before")
     @classmethod
@@ -905,6 +991,12 @@ class NeedleSearchHttpRequest(BaseModel):
             ['src/decision']
         """
         return Needle3Query.coerce_scope_to_list(v)
+
+    @field_validator("exclude_patterns", mode="before")
+    @classmethod
+    def coerce_exclude_patterns_to_list(cls, v: Any) -> Optional[List[str]]:
+        """Normaliza `exclude_patterns`, reaproveitando a regra do schema Needle3Query."""
+        return Needle3Query.coerce_exclude_patterns_to_list(v)
 
 
 class CirurgicSearchResponse(BaseModel):

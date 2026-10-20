@@ -81,14 +81,16 @@ class Needle3Client:
                     resp = await client.post(url, json=payload, headers=headers)
                     status_code = resp.status_code
                     resp_text = resp.text
-                    data = resp.json() if status_code == 200 else None
+                raw_data = resp.json() if status_code == 200 else None
+                data: Dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
             else:
                 def _do_post():
                     return requests.post(url, json=payload, headers=headers, timeout=self.timeout_seconds)
                 resp = await asyncio.to_thread(_do_post)
                 status_code = resp.status_code
                 resp_text = resp.text
-                data = resp.json() if status_code == 200 else None
+                raw_data = resp.json() if status_code == 200 else None
+                data = raw_data if isinstance(raw_data, dict) else {}
 
             if status_code in (401, 403):
                 raise Needle3NotAvailableError(

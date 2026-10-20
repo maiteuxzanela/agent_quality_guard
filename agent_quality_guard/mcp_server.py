@@ -83,15 +83,22 @@ _CIRURGIC_SEARCH_DESCRIPTION = (
     "Ferramenta primaria obrigatoria para explorar codigo, funcoes, regras de negocio "
     "e investigacao de bugs. Combina busca lexica exata com analise semantica/AST e "
     "ranqueamento Reciprocal Rank Fusion. Nome canonico atual; `qmd_search` permanece "
-    "disponivel como alias retrocompativel da MESMA implementacao."
+    "disponivel como alias retrocompativel da MESMA implementacao. "
+    "`depth` (opcional, padrao None = ilimitado) corta a profundidade da arvore de "
+    "diretorios da varredura e do grafo relacional AST quando aplicavel; "
+    "`exclude_patterns` soma exclusoes pontuais as universais padrao e ao arquivo "
+    "`.cirurgicignore` da raiz do workspace (se existir)."
 )
 
 _QMD_SEARCH_LEGACY_ALIAS_DESCRIPTION = (
-    "Alias legado de `cirurgic_search` (MESMA implementacao e assinatura), mantido para "
+    "DEPRECADO — use `cirurgic_search` (nome canonico). Alias legado de "
+    "`cirurgic_search` (MESMA implementacao e assinatura), mantido para "
     "compatibilidade retroativa total com clientes e caches que ainda chamam `qmd_search`. "
     "Busca hibrida cirurgica (Ripgrep + Needle 3 + RRF em CPU). Ferramenta primaria "
     "obrigatoria para explorar codigo, funcoes, regras de negocio e investigacao de bugs. "
-    "Combina busca lexica exata com analise semantica/AST e ranqueamento Reciprocal Rank Fusion."
+    "Combina busca lexica exata com analise semantica/AST e ranqueamento Reciprocal Rank Fusion. "
+    "Novos clientes devem migrar para `cirurgic_search`: o alias permanece registrado e em "
+    "paridade total, mas sem novas funcionalidades exclusivas."
 )
 
 
@@ -100,7 +107,8 @@ async def _cirurgic_search_core(
     workspace: str = "",
     scope: str = "",
     max_tokens: int = 1200,
-    depth: int = 2,
+    depth: Optional[int] = None,
+    exclude_patterns: Optional[List[str]] = None,
     timeout: Optional[float] = None,
 ) -> dict:
     """Executa busca híbrida de código via QMD (Ripgrep + Needle 3 + RRF).
@@ -117,6 +125,19 @@ async def _cirurgic_search_core(
     ``timeout`` (TICKET-SGA-04): cota global por requisição em segundos —
     ``None`` usa o padrão de 15 s; valores ``<= 0`` desativam a cota. Parâmetro
     opcional, portanto retrocompatível com chamadores antigos.
+
+    Contrato TICKET-SGA-05:
+    * ``depth: Optional[int] = None`` — profundidade MÁXIMA de busca: níveis da
+      árvore de diretórios abaixo de cada alvo de escopo e profundidade do grafo
+      relacional AST quando aplicável. ``None`` (padrão) = profundidade
+      ILIMITADA (comportamento idêntico ao histórico para quem omite o
+      parâmetro). Clientes MCP que já enviam ``depth`` são 100% retrocompatíveis.
+    * ``exclude_patterns: Optional[List[str]] = None`` — globs de exclusão
+      somados às exclusões universais padrão e ao ``.cirurgicignore`` da raiz
+      do workspace (se existir; linhas ``#``/em branco ignoradas). Mesma
+      semântica do arquivo: nome puro casa em qualquer nível, padrão com ``/``
+      é ancorado na raiz, ``/`` final marca diretório, negação ``!`` não é
+      suportada.
 
     Violações de sandbox/allowlist do workspace são capturadas (``ValueError``
     explícito do motor) e convertidas em ``status="error"`` estruturado — o
@@ -138,6 +159,7 @@ async def _cirurgic_search_core(
             scope=scope_list,
             max_tokens=max_tokens,
             depth=depth,
+            exclude_patterns=list(exclude_patterns) if exclude_patterns else None,
             timeout=timeout,
         )
     except ValueError as sandbox_err:

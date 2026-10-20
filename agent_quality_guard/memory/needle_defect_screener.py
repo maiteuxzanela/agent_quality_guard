@@ -607,10 +607,12 @@ class SymbolAstVisitor(ast.NodeVisitor):
 
         # A11: parâmetro str repassado diretamente a open() sem sanitização de caminho
         if self._is_str_param_open(node):
+            first_arg = node.args[0]
+            arg_name = first_arg.id if isinstance(first_arg, ast.Name) else "<param>"
             self._add_suspicion(
                 "seguranca",
                 getattr(node, "lineno", self.slice.start_line),
-                f"Parâmetro str '{node.args[0].id}' repassado diretamente a open() sem sanitização de caminho.",
+                f"Parâmetro str '{arg_name}' repassado diretamente a open() sem sanitização de caminho.",
             )
 
         # A13: print/breakpoint/pdb em produção fora do guardra de CLI

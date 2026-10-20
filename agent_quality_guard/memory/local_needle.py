@@ -14,10 +14,11 @@ import os
 import re
 import threading
 import time
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from ..core.schemas import Needle3Query, Needle3Response, Needle3Snippet
+from ..core.schemas import CHARS_PER_TOKEN, Needle3Query, Needle3Response, Needle3Snippet
 from .ast_cache import file_size_allowed, file_stat_key, get_file_index, set_file_index
 from .tree_sitter_guard import TreeSitterGuard
 
@@ -245,22 +246,189 @@ DOC_DATA_EXTENSIONS = frozenset({".rules", ".md", ".json", ".yaml", ".yml", ".to
 ALLOWED_EXTENSIONS = SOURCE_EXTENSIONS | DOC_DATA_EXTENSIONS
 
 # Denylist de bundles e artefatos derivados (duplicam semântica com conteúdo
-# minificado). ``panel/*.js`` são bundles de UI gerados.
+# minificado). Padrões universais de artefato gerado — sem regras particulares
+# de ambientes locais (TICKET-SGA-05: heurísticas locais como ``panel/*.js``
+# migraram para ``.cirurgicignore`` / parâmetro ``exclude_patterns``).
 IGNORED_ARTIFACT_SUFFIXES = (".min.js", ".min.mjs", ".bundle.js", ".map")
 
+# TICKET-SGA-05 — Exclusões universais padrão (seguras em qualquer repositório):
+# controle de versão, caches de gerenciadores de pacotes/qualidade e build
+# artifacts amplamente adotados. Regras particulares de um ambiente local NÃO
+# podem morar aqui: elas entram via `.cirurgicignore` (raiz do workspace) ou
+# pelo parâmetro opcional `exclude_patterns` das tools de busca. Fonte única
+# compartilhada com a rota léxica (`memory/qmd_search.py`).
+UNIVERSAL_EXCLUDED_DIRS = frozenset(
+    {
+        # Núcleo canônico exigido pelo TICKET-SGA-05:
+        ".git", "node_modules", "dist", "__pycache__", ".venv",
+        ".pytest_cache", ".mypy_cache",
+        # Caches/build artifacts universalmente adotados (mantidos da denylist
+        # anterior para não alterar o comportamento da suíte):
+        "venv", "build", "target", ".cache", ".parcel-cache", ".turbo",
+        ".ruff_cache", ".tox", "coverage", "vendor", "third_party",
+        ".expo", ".next", "out", "android",
+    }
+)
 
-def is_ignored_artifact(file_path: Path, rel_path: str) -> bool:
+# Nome canônico do arquivo de exclusão por-workspace (subset de .gitignore).
+CIRURGICIGNORE_FILENAME = ".cirurgicignore"
+
+
+def has_glob_chars(pattern: str) -> bool:
+    """True quando o padrão contém curingas (`*`, `?` ou `[`)."""
+    return any(ch in pattern for ch in "*?[")
+
+
+def normalize_ignore_pattern(line: str) -> Optional[str]:
+    """Normaliza uma linha de `.cirurgicignore`/`exclude_patterns`.
+
+    Regras (TICKET-SGA-05): `#` no início é comentário, linhas em branco são
+    ignoradas, espaços nas bordas e prefixos `./` ou `/` são removidos, e
+    `/` final marca diretório. Negação com `!` NÃO é suportada.
+
+    Exemplo:
+        >>> normalize_ignore_pattern("  ./screenshots/  ")
+        'screenshots/'
+    """
+    raw = line.strip()
+    if not raw or raw.startswith("#"):
+        return None
+    if raw.startswith("!"):
+        logger.debug("cirurgicignore: negação '!' não suportada, linha ignorada: %s", raw)
+        return None
+    while raw.startswith("./"):
+        raw = raw[2:]
+    raw = raw.lstrip("/")
+    if not raw:
+        return None
+    return raw
+
+
+def load_cirurgicignore(workspace_root: Path) -> List[str]:
+    """Carrega padrões de exclusão de ``.cirurgicignore`` na raiz do workspace.
+
+    Lê apenas se o arquivo existir; linhas em branco e comentários `#` são
+    descartados. A ausência do arquivo é o caso canônico (retorna lista vazia).
+    """
+    ignore_file = Path(workspace_root) / CIRURGICIGNORE_FILENAME
+    try:
+        text = ignore_file.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return []
+    except OSError as read_err:
+        logger.debug("cirurgicignore: ilegível (%s) — seguindo sem extras", read_err)
+        return []
+    patterns: List[str] = []
+    for line in text.splitlines():
+        normalized = normalize_ignore_pattern(line)
+        if normalized and normalized not in patterns:
+            patterns.append(normalized)
+    return patterns
+
+
+def merge_exclude_patterns(
+    explicit: Optional[Sequence[str]],
+    workspace_root: Path,
+) -> List[str]:
+    """Mescla ``exclude_patterns`` explícitos com o ``.cirurgicignore`` do workspace.
+
+    A ordem é estável (explícitos primeiro, depois o arquivo) e duplicatas são
+    removidas — o resultado é a fonte única de exclusões adicionais aplicada às
+    rotas léxica (ripgrep/grep) e AST (walk do Needle).
+    """
+    merged: List[str] = []
+    for source in (explicit, load_cirurgicignore(workspace_root)):
+        if not source:
+            continue
+        for item in source:
+            normalized = normalize_ignore_pattern(str(item))
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+    return merged
+
+
+def path_is_excluded(rel_path: str, patterns: Sequence[str]) -> bool:
+    """Avalia se um caminho relativo casa com algum padrão de exclusão.
+
+    Semântica (documentada, estável):
+    * nome puro (``screenshots``) casa em qualquer nível, como arquivo ou dir;
+    * padrão com ``/`` (``panel/*.js``) é ancorado na raiz do workspace;
+    * ``/`` final (``legacy/``) marca diretório (casa com o dir e seus filhos);
+    * negação com ``!`` não é suportada (linhas já descartadas no carregamento).
+
+    Exemplo:
+        >>> path_is_excluded("pkg/screenshots/shot.py", ["screenshots"])
+        True
+        >>> path_is_excluded("x/panel/app.js", ["panel/*.js"])
+        False
+    """
+    if not patterns:
+        return False
+    parts = [p for p in str(rel_path).replace("\\", "/").split("/") if p and p != "."]
+    if not parts:
+        return False
+    for depth in range(1, len(parts) + 1):
+        prefix_parts = parts[:depth]
+        prefix = "/".join(prefix_parts)
+        last = prefix_parts[-1]
+        for pattern in patterns:
+            core = pattern.rstrip("/")
+            if not core:
+                continue
+            if "/" in core:
+                # Ancorado na raiz: casa com o próprio prefixo (o subtree é
+                # coberto pela iteração sobre todos os prefixos).
+                if prefix == core or fnmatch(prefix, core):
+                    return True
+            elif has_glob_chars(core):
+                if fnmatch(last, core):
+                    return True
+            elif last == core:
+                return True
+    return False
+
+
+def exclude_patterns_to_rg_globs(patterns: Sequence[str]) -> List[str]:
+    """Converte padrões em negations de glob do ripgrep (otimização de latência).
+
+    Apenas nomes puros (sem ``/``) são empurrados para o ripgrep: nesse caso a
+    semântica de matching coincide exatamente com :func:`path_is_excluded`
+    (``**/nome`` casa em qualquer nível). Padrões ancorados com ``/`` ficam sob
+    o filtro determinístico em Python, que preserva a ancoragem na raiz — o
+    ripgrep com caminhos absolutos não garante o mesmo comportamento.
+    """
+    globs: List[str] = []
+    for pattern in patterns:
+        core = pattern.rstrip("/")
+        if not core or "/" in core:
+            continue
+        globs.append(f"!**/{core}")
+        globs.append(f"!**/{core}/**")
+    return globs
+
+
+def is_ignored_artifact(
+    file_path: Path,
+    rel_path: str,
+    exclude_patterns: Optional[Sequence[str]] = None,
+) -> bool:
     """Descarta bundles/artefatos derivados de forma lexical e determinística.
+
+    Sufixos universais (``.min.js``, ``.bundle.js``, ``.map``) sempre contam.
+    ``exclude_patterns`` (já mesclados com o ``.cirurgicignore``) é aplicado em
+    seguida — é por aí que regras particulares de ambiente (ex.: ``panel/*.js``)
+    entram, sem hardcoding no motor.
 
     Exemplo:
         >>> is_ignored_artifact(Path("app.min.js"), "app.min.js")
+        True
+        >>> is_ignored_artifact(Path("panel/app.js"), "panel/app.js", ["panel/*.js"])
         True
     """
     name = file_path.name.lower()
     if name.endswith(IGNORED_ARTIFACT_SUFFIXES):
         return True
-    parts = [part.lower() for part in Path(rel_path).parts]
-    return "panel" in parts[:-1] and name.endswith(".js")
+    return path_is_excluded(rel_path, exclude_patterns or ())
 
 # Classificação de nós Tree-Sitter -> tipo relacional do Needle 3.
 _TS_KIND_BY_NODE_TYPE: Dict[str, str] = {
@@ -395,8 +563,12 @@ class LocalNeedleEngine:
         return tokens
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimativa conservadora de tokens (aprox. 1 token a cada 3.8 caracteres)."""
-        return max(1, math.ceil(len(text) / 3.8))
+        """Estimativa de tokens via ``CHARS_PER_TOKEN`` (heurística de alta fidelidade).
+
+        ``CHARS_PER_TOKEN = 3.8`` é aproximação orçamentária rápida para
+        snippets, não garantia criptográfica estrita de contagem de tokens.
+        """
+        return max(1, math.ceil(len(text) / CHARS_PER_TOKEN))
 
     def _extract_ast_blocks(self, file_path: Path) -> List[Dict[str, Any]]:
         """Extrai blocos de código com metadados relacionais de AST (Python)."""
@@ -418,7 +590,7 @@ class LocalNeedleEngine:
                             getattr(child, "end_lineno", None) or getattr(child, "lineno", start)
                             for child in ast.walk(node)
                         ]
-                        end = max(body_ends) if body_ends else start
+                        end = max([e for e in body_ends if isinstance(e, int)] or [start])
                     # Fatia inclusiva: lines é 0-based, end é 1-based (end_lineno).
                     block_code = "\n".join(lines[start - 1 : end])
 
@@ -979,13 +1151,24 @@ class LocalNeedleEngine:
             return self._extract_js_blocks(file_path)
         return self._lexical_blocks(file_path)
 
-    def _find_candidate_files(self, scope: Optional[List[str]] = None) -> List[Path]:
+    def _find_candidate_files(
+        self,
+        scope: Optional[List[str]] = None,
+        exclude_patterns: Optional[Sequence[str]] = None,
+        max_depth: Optional[int] = None,
+    ) -> List[Path]:
         """Localiza arquivos relevantes no escopo do projeto (teto duplo de fila).
 
         Código-fonte e docs/dados são coletados em filas separadas: a fila
         primária (código) consome até ``MAX_CANDIDATE_FILES`` antes que
         qualquer documento/JSON entre no corte. Artefatos derivados
-        (bundles, source maps, ``panel/*.js``) são descartados.
+        universais (bundles, source maps) são descartados.
+
+        Exclusões adicionais (TICKET-SGA-05): ``exclude_patterns`` (explícitos
+        do chamador) somados ao ``.cirurgicignore`` da raiz do workspace — é
+        por aí que regras particulares de ambiente entram, sem hardcoding.
+        ``max_depth`` (None = ilimitado) corta a árvore de diretórios em
+        ``max_depth`` níveis abaixo de cada alvo de escopo.
         """
         primary: List[Path] = []
         secondary: List[Path] = []
@@ -1007,14 +1190,8 @@ class LocalNeedleEngine:
         else:
             target_dirs = [self.workspace_root]
 
-        ignored_dirs = {
-            ".git", ".venv", "venv", "__pycache__", "node_modules",
-            ".pytest_cache", ".expo", "coverage", "android",
-            "dist", "build", ".next", "out", "target", ".cache",
-            ".mypy_cache", ".ruff_cache", ".tox", ".turbo",
-            "vendor", "third_party", ".parcel-cache", ".agent-teams",
-            "screenshots",
-        }
+        ignored_dirs = UNIVERSAL_EXCLUDED_DIRS
+        extra_patterns = merge_exclude_patterns(exclude_patterns, self.workspace_root)
 
         def relative(candidate: Path) -> str:
             try:
@@ -1024,7 +1201,7 @@ class LocalNeedleEngine:
 
         def collect(candidate: Path) -> bool:
             """Enfileira o candidato; retorna False quando o teto primário fecha."""
-            if is_ignored_artifact(candidate, relative(candidate)):
+            if is_ignored_artifact(candidate, relative(candidate), extra_patterns):
                 return True
             bucket = primary if candidate.suffix.lower() in SOURCE_EXTENSIONS else secondary
             if len(bucket) < MAX_CANDIDATE_FILES:
@@ -1037,10 +1214,26 @@ class LocalNeedleEngine:
             if not tdir.exists():
                 continue
             if tdir.is_file():
+                # Alvo explícito de arquivo: incluído independentemente de
+                # profundidade (paridade com o `--max-depth` do ripgrep).
                 collect(tdir)
                 continue
             for root, dirs, files in os.walk(tdir):
-                dirs[:] = sorted(d for d in dirs if d not in ignored_dirs)
+                try:
+                    level = len(Path(root).relative_to(tdir).parts)
+                except ValueError:
+                    level = 0
+                # Arquivos deste nível ficam em `level + 1` abaixo do alvo.
+                within_depth = max_depth is None or (level + 1) <= max_depth
+                if not within_depth:
+                    dirs[:] = []
+                    continue
+                dirs[:] = sorted(
+                    d
+                    for d in dirs
+                    if d not in ignored_dirs
+                    and not path_is_excluded(relative(Path(root) / d), extra_patterns)
+                )
                 for f in sorted(files):
                     if not f.endswith(tuple(ALLOWED_EXTENSIONS)):
                         continue
@@ -1102,7 +1295,11 @@ class LocalNeedleEngine:
         substantive = [t for t in raw_query_tokens if t not in STOPWORDS]
         query_tokens = set(substantive or raw_query_tokens)
 
-        files = self._find_candidate_files(query.scope)
+        files = self._find_candidate_files(
+            query.scope,
+            exclude_patterns=query.exclude_patterns,
+            max_depth=query.max_depth,
+        )
 
         # TICKET-SGA-04 — SymbolIndex cacheado por mtime/size: em workspace
         # estável não há re-parse nem re-tokenização; só a varredura de
@@ -1182,11 +1379,11 @@ class LocalNeedleEngine:
 
             if est_tokens > remaining:
                 if not selected_snippets and remaining >= 40:
-                    max_chars = max(40, int(remaining * 3.8))
+                    max_chars = max(40, int(remaining * CHARS_PER_TOKEN))
                     content = content[:max_chars]
                     est_tokens = self._estimate_tokens(content)
                     if est_tokens > remaining:
-                        content = content[: max(40, int(remaining * 3.8))]
+                        content = content[: max(40, int(remaining * CHARS_PER_TOKEN))]
                         est_tokens = self._estimate_tokens(content)
                 else:
                     break

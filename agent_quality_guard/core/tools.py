@@ -42,15 +42,31 @@ _SEARCH_PARAMETERS: Dict[str, Any] = {
             "default": 1200,
             "description": (
                 "Teto máximo de tokens para o contexto retornado "
-                "(canônico 1200; evita sobrecarregar a LLM)."
+                "(canônico 1200; evita sobrecarregar a LLM). Estimativa "
+                "heurística CHARS_PER_TOKEN = 3.8, não garantia criptográfica "
+                "estrita de contagem."
             ),
         },
         "depth": {
-            "type": "integer",
-            "default": 2,
+            "type": ["integer", "null"],
+            "default": None,
             "description": (
-                "Profundidade de dependências no grafo de símbolos "
-                "(1 = apenas o símbolo, 2 = chamadores diretos, etc.)."
+                "Profundidade máxima de busca: níveis da árvore de diretórios "
+                "abaixo de cada alvo de escopo e profundidade do grafo relacional "
+                "AST quando aplicável. Padrão None = profundidade ilimitada. "
+                "Retrocompatível: clientes que já enviam depth seguem funcionando."
+            ),
+        },
+        "exclude_patterns": {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+            "default": None,
+            "description": (
+                "Globs opcionais de exclusão somados às exclusões universais "
+                "padrão e ao arquivo `.cirurgicignore` da raiz do workspace (se "
+                "existir). Nome puro casa em qualquer nível; padrão com '/' é "
+                "ancorado na raiz; '/' final marca diretório; negação '!' não é "
+                "suportada."
             ),
         },
         "timeout": {
@@ -147,6 +163,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "function": {
             "name": "qmd_search",
             "description": (
+                "DEPRECADO — use `cirurgic_search` (nome canônico). "
                 "Alias legado de cirurgic_search (MESMA implementação e assinatura), "
                 "mantido para compatibilidade retroativa total com clientes antigos. "
                 + _SEARCH_DESCRIPTION
