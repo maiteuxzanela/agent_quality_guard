@@ -53,6 +53,15 @@ _SEARCH_PARAMETERS: Dict[str, Any] = {
                 "(1 = apenas o símbolo, 2 = chamadores diretos, etc.)."
             ),
         },
+        "timeout": {
+            "type": "number",
+            "default": 15.0,
+            "description": (
+                "Timeout GLOBAL por requisição da busca híbrida, em segundos "
+                "(padrão 15; <= 0 desativa a cota). Ao estourar, a resposta "
+                "vem com status='timeout' e snippets vazios."
+            ),
+        },
     },
     "required": ["query"],
 }
