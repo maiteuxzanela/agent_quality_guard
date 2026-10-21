@@ -24,3 +24,4 @@ personas/
 scripts/
 *_audit_results.json
 *_audit_report.md
+!docs/archive/*_audit_report.md

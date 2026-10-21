@@ -278,13 +278,20 @@ def test_legacy_docs_are_archived_and_root_stays_clean():
     """Documentação histórica vive em ``docs/archive/``, não na raiz de docs."""
     archive = ROOT / "docs" / "archive"
     assert archive.is_dir(), "docs/archive/ ausente"
-    archived = {p.name for p in archive.iterdir() if p.is_file()}
-    assert {
+    archived_paths = {p.name.lower(): p for p in archive.iterdir() if p.is_file()}
+    archived = set(archived_paths)
+    required = {
         "adr_circuit_breaker_and_anti_gaming.md",
         "auditoria_needle_verify_delivery.md",
-        "projeto_jev_audit_report.md",
         "relatorio_arquitetura_validacao_jev.md",
-    } <= {name.lower() for name in archived}
+    }
+    missing = sorted(required - archived)
+    assert not missing, f"arquivos obrigatórios ausentes em docs/archive/: {missing}"
+    # Cada obrigatório precisa existir como arquivo regular não-vazio.
+    empty = sorted(
+        name for name in required if archived_paths[name].stat().st_size == 0
+    )
+    assert not empty, f"arquivos obrigatórios vazios em docs/archive/: {empty}"
     root_legacy = [
         p.name
         for p in (ROOT / "docs").iterdir()
@@ -325,6 +332,90 @@ def test_docs_archive_is_git_trackable_not_ignored():
         f"git check-ignore devolveu {proc.returncode} para docs/archive/: "
         "o arquivo está gitignored e NÃO será rastreado pelo git"
     )
+
+
+def test_audit_report_archive_docs_are_git_trackable_not_ignored():
+    """TICKET-CI-03 — ``docs/archive/projeto_jev_audit_report.md`` é rastreável.
+
+    O padrão generalista ``*_audit_report.md`` do ``.gitignore`` engolia o
+    relatório histórico arquivado; a correção é a negação explícita
+    ``!docs/archive/*_audit_report.md``. Três camadas determinísticas, sem
+    mocks, porque cada uma cobre um modo de falha distinto:
+
+    1. Exceção ``!`` cobrindo ``docs/archive/`` presente no ``.gitignore`` ativo.
+    2. ``git check-ignore --no-index`` (avalia SÓ as regras de padrão, sem
+       consultar o índice) devolve 1 = NÃO ignorado. É a camada sensível à
+       remoção da negação: com o arquivo staging, o ``check-ignore`` plain
+       devolve 1 mesmo sem a negação (o índice mascara a regra), então só o
+       ``--no-index`` prova que o padrão deixa de engolir o arquivo.
+    3. ``git check-ignore`` plain devolve 1 (rastreável no repositório real,
+       exigência do ticket) e ``git ls-files --cached`` mostra o arquivo no
+       índice — é o índice, e não o ``.gitignore``, que decide o rastreamento
+       depois do staging.
+    """
+    gitignore = ROOT / ".gitignore"
+    assert gitignore.is_file(), ".gitignore ausente"
+    active_patterns = [
+        ln.strip()
+        for ln in gitignore.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+
+    # 1. Exceção explícita cobrindo docs/archive/.
+    archive_negations = [
+        p for p in active_patterns if p.startswith("!") and p[1:].startswith("docs/archive/")
+    ]
+    assert archive_negations, (
+        "sem negação !docs/archive/ ativa no .gitignore: o padrão *_audit_report.md "
+        "volta a engolir o relatório histórico arquivado"
+    )
+
+    archive = ROOT / "docs" / "archive"
+    archive_doc = archive / "projeto_jev_audit_report.md"
+    assert archive_doc.is_file(), f"relatório arquivado ausente: {archive_doc}"
+
+    targets = sorted(p for p in archive.glob("*_audit_report.md") if p.is_file())
+    assert archive_doc in targets, (
+        "projeto_jev_audit_report.md não listado entre os *_audit_report.md do archive"
+    )
+
+    # 2/3. Regras de padrão (sensível à negação) + rastreio real no índice.
+    for doc in targets:
+        rel = str(doc.relative_to(ROOT))
+
+        proc_rules = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-q", rel],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert proc_rules.returncode == 1, (
+            f"git check-ignore --no-index devolveu {proc_rules.returncode} para {rel}: "
+            "as regras do .gitignore ignoram o arquivo (negação ausente/ineficaz)"
+        )
+
+        proc_plain = subprocess.run(
+            ["git", "check-ignore", "-q", rel],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert proc_plain.returncode == 1, (
+            f"git check-ignore devolveu {proc_plain.returncode} para {rel}: "
+            "o arquivo está gitignored e NÃO será rastreado pelo git"
+        )
+
+        tracked = subprocess.run(
+            ["git", "ls-files", "--cached", "--", rel],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert tracked.returncode == 0, f"git ls-files falhou para {rel}: {tracked.stderr}"
+        assert tracked.stdout.strip() == rel, (
+            f"{rel} fora do índice do git (git ls-files --cached vazio): "
+            "o arquivo não é rastreado — rode git add docs/archive/"
+        )
 
 
 # ---------------------------------------------------------------------------
