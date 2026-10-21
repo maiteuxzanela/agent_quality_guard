@@ -67,6 +67,15 @@ jobs:
           print(f"OK: paridade de versao garantida ({pyproject_version})")
           PY
 
+      - name: Install ripgrep
+        # A suíte deterministica exercita a rota lexica real (`rg`) de qmd_search.
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y ripgrep
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install ripgrep
+          fi
+
       - name: Run Deterministic Test Suite
         run: python -m pytest tests/ -q
         env:

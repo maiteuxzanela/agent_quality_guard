@@ -450,6 +450,34 @@ def test_publish_runs_suite_through_python_m_pytest():
     assert suite.strip() == "python -m pytest tests/ -q"
 
 
+def test_publish_job_installs_ripgrep_before_deterministic_suite():
+    """TICKET-PUB-01: o job ``publish`` precisa do binário ``rg`` real.
+
+    A suíte determinística exercita a rota léxica real (``rg``) de
+    cirurgic_search/qmd_search; sem ripgrep o job falharia em runtime.
+    Cobre existência única do step, branch ``RUNNER_OS`` Linux/macOS,
+    ausência de step-level ``if:`` e ordem estrita
+    ``Install ripgrep`` < ``Run Deterministic Test Suite``.
+    """
+    workflow = _load_workflow(PUBLISH_PATH)
+    job = _job(workflow, "publish")
+    names = [s.get("name", "") for s in _steps(job)]
+
+    assert names.count("Install ripgrep") == 1, names
+
+    step = _step_by_name(job, "Install ripgrep")
+    # Sem step-level `if:` — o branch é feito no shell via RUNNER_OS.
+    assert "if" not in step, step
+    script = step["run"]
+    assert "RUNNER_OS" in script
+    assert "Linux" in script and "apt-get install -y ripgrep" in script
+    assert "macOS" in script and "brew install ripgrep" in script
+
+    assert names.index("Install ripgrep") < names.index(
+        "Run Deterministic Test Suite"
+    ), names
+
+
 def test_publish_enforces_version_parity_before_publishing():
     workflow = _load_workflow(PUBLISH_PATH)
     job = _job(workflow, "publish")
