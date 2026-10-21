@@ -14,3 +14,6 @@ pytest>=8.0.0
 pytest-asyncio>=0.23.0
 ruff>=0.3.0
 mypy>=1.9.0
+
+# Python < 3.11: fallback do stdlib tomllib (scripts de paridade de versao)
+tomli>=1.1.0; python_version < "3.11"

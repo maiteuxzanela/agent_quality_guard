@@ -35,7 +35,10 @@ jobs:
           import re
           import sys
 
-          import tomllib
+          try:
+              import tomllib
+          except ModuleNotFoundError:  # Python < 3.11
+              import tomli as tomllib
 
           root = pathlib.Path(".")
           pyproject_version = tomllib.loads(
@@ -65,7 +68,7 @@ jobs:
           PY
 
       - name: Run Deterministic Test Suite
-        run: pytest tests/ -q
+        run: python -m pytest tests/ -q
         env:
           JEV_USE_HERMES: "false"
 

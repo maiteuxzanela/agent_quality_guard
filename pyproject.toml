@@ -20,6 +20,7 @@ dependencies = [
     "tree-sitter>=0.22.0",
     "tree-sitter-language-pack>=0.21.0",
     "httpx>=0.24.0",
+    "tomli>=1.1.0; python_version < \"3.11\"",
 ]
 
 [project.urls]
@@ -37,6 +38,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.3.0",
     "mypy>=1.9.0",
+    "tomli>=1.1.0; python_version < \"3.11\"",
 ]
 
 [tool.setuptools.packages.find]

@@ -6,14 +6,16 @@ um diretório temporário com os artefatos reais copiados, e os nodeids de
 ``--deselect`` do job de resiliência são resolvidos pelo pytest real.
 
 Cobre:
-1. ``.github/workflows/ci.yml``: gatilhos, permissões, matriz Python 3.10–3.13 ×
-   Ubuntu/macOS, job sem tree-sitter (filtro real de requirements, assert de
-   ausência, smoke fail-open e exclusões declarativas válidas).
+1. ``.github/workflows/ci.yml``: gatilhos, permissões, matriz Python 3.10–3.12 ×
+   Ubuntu/macOS, ripgrep no macOS, job sem tree-sitter (filtro real de
+   requirements, instalação ``--no-deps -e``, assert de ausência, smoke
+   fail-open e exclusões declarativas válidas).
 2. ``.github/workflows/publish.yml``: gatilho de release, ``id-token: write``,
    ``npm publish --provenance --access public`` e paridade ANTES do publish.
 3. Paridade ``pyproject.toml`` ↔ ``package.json`` ↔ ``__init__.py``: aceita o
    estado real do repositório e aborta (exit != 0) em qualquer divergência ou
-   ``__version__`` ausente.
+   ``__version__`` ausente — com fallback ``tomllib``/``tomli`` nos scripts
+   embutidos (Python 3.10).
 """
 
 from __future__ import annotations
@@ -24,8 +26,12 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib
 
 import pytest
 import yaml
@@ -173,16 +179,29 @@ def test_ci_triggers_permissions_and_env_are_strict():
     assert "127.0.0.1" in env["NO_PROXY"] and "::1" in env["NO_PROXY"]
 
 
-def test_ci_test_matrix_covers_python_310_to_313_on_two_oses():
+def test_ci_test_matrix_covers_python_310_to_312_on_two_oses():
     workflow = _load_workflow(CI_PATH)
     job = _job(workflow, "test")
     matrix = job["strategy"]["matrix"]
 
     assert matrix["os"] == ["ubuntu-latest", "macos-latest"]
-    assert matrix["python-version"] == ["3.10", "3.11", "3.12", "3.13"]
+    # 3.13 fica de fora: o PyPI ainda nao publica wheel de
+    # tree-sitter-language-pack cp313 (instalacao falharia no job com parsers).
+    assert matrix["python-version"] == ["3.10", "3.11", "3.12"]
     assert job["strategy"]["fail-fast"] is False
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job.get("timeout-minutes") == 30
+
+
+def test_ci_test_job_installs_ripgrep_on_macos_only():
+    workflow = _load_workflow(CI_PATH)
+    job = _job(workflow, "test")
+    step = _step_by_name(job, "Install ripgrep (macOS)")
+
+    assert step["if"] == "runner.os == 'macOS'", step
+    assert step["run"].strip() == "brew install ripgrep"
+    # So existe no job de testes (Linux ja traz rg; demais jobs nao o usam).
+    assert [s.get("name") for s in _steps(job)].count("Install ripgrep (macOS)") == 1
 
 
 def test_ci_lint_job_runs_real_gates_and_version_parity():
@@ -212,7 +231,7 @@ def test_ci_test_job_installs_requirements_and_runs_full_suite():
     assert 'pip install ".[dev]"' in install
 
     suite = _step_by_name(job, "Run Deterministic Test Suite")["run"]
-    assert suite.strip() == "pytest tests/ -q"
+    assert suite.strip() == "python -m pytest tests/ -q"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -262,6 +281,23 @@ def test_resilience_install_filter_removes_exactly_tree_sitter_lines(tmp_path: P
     assert "pip install -r /tmp/requirements-no-ts.txt" in install
 
 
+def test_resilience_job_installs_package_editable_without_deps():
+    workflow = _load_workflow(CI_PATH)
+    job = _job(workflow, "test-without-tree-sitter")
+    names = [s.get("name", "") for s in _steps(job)]
+
+    install_pkg = _step_by_name(job, "Install package (editable")["run"]
+    # --no-deps e obrigatorio: ``pip install -e .`` puxaria tree-sitter do
+    # [project].dependencies e mataria o cenario de fallback.
+    assert "pip install --no-deps -e ." in install_pkg, install_pkg
+    assert "tree-sitter" not in install_pkg, install_pkg
+
+    # Ordem: pacote instalado ANTES do assert de ausencia e do smoke import.
+    pkg_index = names.index("Install package (editable, without deps)")
+    assert pkg_index < names.index("Assert tree-sitter is really absent")
+    assert pkg_index < names.index("Import smoke test (fail-open sem tree-sitter)")
+
+
 def test_resilience_job_asserts_both_modules_are_really_absent():
     workflow = _load_workflow(CI_PATH)
     job = _job(workflow, "test-without-tree-sitter")
@@ -289,7 +325,8 @@ def test_resilience_pytest_exclusions_resolve_against_real_suite():
     job = _job(workflow, "test-without-tree-sitter")
     command = _step_by_name(job, "Run suite exercising fallback path")["run"]
 
-    assert "pytest tests/ -q" in command
+    assert "python -m pytest tests/ -q" in command
+    assert not re.search(r"(?<!m )pytest tests/ -q", command), command
     ignores = re.findall(r"--ignore=(\S+)", command)
     deselects = re.findall(r"--deselect=(\S+)", command)
     assert ignores == [
@@ -298,6 +335,9 @@ def test_resilience_pytest_exclusions_resolve_against_real_suite():
     ], ignores
     assert deselects == [
         "tests/test_multilang_needle.py::TestTreeSitterRouteGateOn",
+        # A auto-aprovação do gate em audit_mode="full" roda a meta-camada
+        # tree-sitter (e um pytest aninhado) — impossivel sem a lib opcional.
+        "tests/test_agent_quality_guard.py::test_quality_guard_full_audit_self_approves_repo_root",
     ], deselects
 
     for ignored in ignores:
@@ -353,6 +393,13 @@ def test_publish_step_uses_provenance_and_registry_token():
     assert setup_node[0]["with"]["registry-url"] == "https://registry.npmjs.org"
 
 
+def test_publish_runs_suite_through_python_m_pytest():
+    workflow = _load_workflow(PUBLISH_PATH)
+    job = _job(workflow, "publish")
+    suite = _step_by_name(job, "Run Deterministic Test Suite")["run"]
+    assert suite.strip() == "python -m pytest tests/ -q"
+
+
 def test_publish_enforces_version_parity_before_publishing():
     workflow = _load_workflow(PUBLISH_PATH)
     job = _job(workflow, "publish")
@@ -375,6 +422,36 @@ def test_parity_script_matches_between_ci_and_publish():
     assert ci_script == publish_script, (
         "scripts de paridade divergiram entre ci.yml e publish.yml"
     )
+
+
+def test_parity_scripts_fall_back_to_tomli_below_python311():
+    """Os heredocs precisam importar em Python 3.10 (sem ``tomllib``)."""
+    for path, workflow, job_id in (
+        (CI_PATH, _load_workflow(CI_PATH), "lint-and-typecheck"),
+        (PUBLISH_PATH, _load_workflow(PUBLISH_PATH), "publish"),
+    ):
+        script = _parity_script(path, workflow, job_id)
+        assert "try:" in script, path
+        assert "except ModuleNotFoundError" in script, path
+        assert "import tomli as tomllib" in script, path
+        # O fallback nao pode esconder o import direto do stdlib em 3.11+.
+        assert re.search(r"(?m)^\s*import tomllib\s*$", script), path
+
+
+def test_tomli_backport_declared_for_python_below_311():
+    """``tomli`` cobre o heredoc de paridade e a suíte em Python 3.10."""
+    marker = 'tomli>=1.1.0; python_version < "3.11"'
+
+    pyproject = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert marker in pyproject["project"]["dependencies"], "tomli ausente em [project].dependencies"
+    assert marker in pyproject["project"]["optional-dependencies"]["dev"], (
+        "tomli ausente em optional-dependencies.dev"
+    )
+
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert marker in requirements, "tomli ausente em requirements.txt"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
