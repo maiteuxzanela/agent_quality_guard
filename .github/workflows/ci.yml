@@ -106,9 +106,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
-      - name: Install ripgrep (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ripgrep
+      - name: Install ripgrep
+        # qmd_search/parity dependem do binário `rg`. Linux já traz ripgrep na
+        # imagem runner; macOS precisa do Homebrew. Step unificado e idempotente.
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install ripgrep
+          fi
 
       - name: Install dependencies (with tree-sitter)
         run: |
@@ -140,6 +146,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
+
+      - name: Install ripgrep
+        # Suíte de qmd_search + testes de paridade usam o binário `rg` real.
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install ripgrep
+          fi
 
       - name: Install core dependencies WITHOUT optional tree-sitter parsers
         run: |

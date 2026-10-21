@@ -56,7 +56,7 @@ ALLOWED_ROOTS_ENV = "CIRURGIC_ALLOWED_ROOTS"
 STRICT_SANDBOX_ENV = "CIRURGIC_SANDBOX_STRICT"
 SYSTEM_RESTRICTED_MESSAGE = "Acesso negado: diretório de sistema restrito"
 SYSTEM_RESTRICTED_ROOTS: frozenset[Path] = frozenset(
-    Path(p)
+    resolved
     for p in (
         "/",
         "/etc",
@@ -70,6 +70,11 @@ SYSTEM_RESTRICTED_ROOTS: frozenset[Path] = frozenset(
         "/lib",
         "/usr/bin",
         "/usr/sbin",
+    )
+    for candidate_path in (Path(p),)
+    for resolved in (
+        candidate_path,
+        (candidate_path.resolve() if candidate_path.exists() else candidate_path),
     )
 )
 
@@ -739,7 +744,12 @@ class LocalNeedleEngine:
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
             lines = content.splitlines()
-            rel_path = str(file_path.relative_to(self.workspace_root))
+            # macOS resolve /etc -> /private/etc; quando o arquivo estiver fora
+            # da raiz do workspace, degrada para o basename em vez de estourar.
+            try:
+                rel_path = str(file_path.resolve().relative_to(self.workspace_root.resolve()))
+            except ValueError:
+                rel_path = file_path.name
 
             # Detecta declarações de funções, componentes React, classes e hooks (incluindo indentados)
             pattern = re.compile(

@@ -435,6 +435,101 @@ class TestNodeTsBunStack(unittest.TestCase):
         self.assertEqual(MultiStackRunner._parse_node_test_counts("sem contadores", False), (0, 1))
         self.assertEqual(MultiStackRunner._parse_node_test_counts("sem contadores", True), (0, 0))
 
+    def test_parse_node_test_counts_unicode_tap_symbols(self):
+        """Reporter spec de Node 18+/22+ emite símbolos unicode (ℹ/✔/✖) no lugar de '#'.
+
+        O regex TAP deve casar os três grafias (``#``, ``ℹ`` e ``✔``/``✖``) com
+        IGNORECASE, sem confundir com o formato Bun (dígitos ANTES de 'pass').
+        """
+        # Reporter spec moderno: "ℹ pass 12" / "ℹ fail 1"
+        self.assertEqual(
+            MultiStackRunner._parse_node_test_counts("ℹ pass 12\nℹ fail 1\n", False),
+            (12, 1),
+        )
+        # Checkmarks de subteste: "✔ pass 3" / "✖ fail 2"
+        self.assertEqual(
+            MultiStackRunner._parse_node_test_counts("✔ pass 3\n✖ fail 2\n", False),
+            (3, 2),
+        )
+        # Case-insensitive: "ℹ PASS 4" / "✖ FAIL 1" (reporters podem variar caixa)
+        self.assertEqual(
+            MultiStackRunner._parse_node_test_counts("ℹ PASS 4\n✖ FAIL 1\n", False),
+            (4, 1),
+        )
+        # TAP canônico com diagnóstico YAML real de falha (não confunde com Bun)
+        tap_with_diag = (
+            "TAP version 13\n"
+            "not ok 1 - falha esperada\n"
+            "  ---\n"
+            "  duration_ms: 1.2\n"
+            "  ...\n"
+            "1..1\n"
+            "# tests 1\n"
+            "# pass 0\n"
+            "# fail 1\n"
+        )
+        self.assertEqual(
+            MultiStackRunner._parse_node_test_counts(tap_with_diag, False),
+            (0, 1),
+        )
+
+    def test_node_test_cascade_cmd_forces_tap_reporter(self):
+        """O caminho ``node --test`` deve passar ``--test-reporter=tap`` na linha real.
+
+        Seam legítimo tipo transport-recorder: um shim ``node`` REAL no PATH
+        grava os argv e repassa ao binário verdadeiro via ``exec`` — nenhum
+        mock, o subprocesso de teste roda de verdade e o argv observado prova
+        que o reporter TAP foi forçado (estável entre majors do Node).
+        """
+        real_node = shutil.which("node")
+        if not real_node:  # pragma: no cover - ambiente sem Node
+            self.skipTest("node ausente no ambiente")
+
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            ws = base / "ws"
+            tmp = base / "_needle_tmp"
+            shim_dir = base / "shim"
+            shim_dir.mkdir()
+            argv_log = base / "node_argv.log"
+
+            # Shim que registra argv e delega ao node real (recorder transparente).
+            shim = shim_dir / "node"
+            shim.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$@\" > {argv_log}\n"
+                f"exec {real_node} \"$@\"\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+
+            tmp.mkdir()
+            self._write(ws, "package.json", '{"name": "x", "type": "module"}')
+            self._write(
+                ws,
+                "tests/math.test.mjs",
+                "import test from 'node:test';\n"
+                "import assert from 'node:assert';\n"
+                "test('soma', () => { assert.strictEqual(2 + 3, 5); });\n",
+            )
+
+            old_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = f"{shim_dir}{os.pathsep}{old_path}"
+            try:
+                res = MultiStackRunner.run_tests(ws, "NODE_TS_BUN", tmp)
+            finally:
+                os.environ["PATH"] = old_path
+
+            self.assertTrue(res["passed"], res["summary"])
+            argv_lines = argv_log.read_text(encoding="utf-8").splitlines()
+            self.assertIn("--test", argv_lines)
+            self.assertIn("--test-reporter=tap", argv_lines)
+            # O arquivo de teste real entra na linha de comando (não stub interno).
+            self.assertTrue(
+                any(line.endswith("math.test.mjs") for line in argv_lines),
+                argv_lines,
+            )
+
     # ------------------------------------------------------------ scan_js_ast *.mjs
     def test_scan_js_ast_collects_mjs_production_files(self):
         """A varredura NODE_TS_BUN deve coletar arquivos de produção `.mjs` (gap fechado)."""

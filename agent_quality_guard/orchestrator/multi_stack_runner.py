@@ -531,7 +531,9 @@ class MultiStackRunner:
         elif is_bun:
             cmd = [str(bun_bin), "test"]
         elif mjs_tests:
-            cmd = [str(node_bin), "--test", *mjs_tests]
+            # --test-reporter=tap força saída TAP estável em qualquer versão do
+            # Node (o reporter padrão "spec" muda de formato entre majors).
+            cmd = [str(node_bin), "--test", "--test-reporter=tap", *mjs_tests]
 
         if cmd is None:
             return {
@@ -602,9 +604,10 @@ class MultiStackRunner:
             fail = int(m_bun_fail.group(1)) if m_bun_fail else 0
             return ok, fail
 
-        # node --test (TAP): "# pass 12" / "# fail 1"
-        m_tap_pass = re.search(r"#\s*pass\s+(\d+)", output)
-        m_tap_fail = re.search(r"#\s*fail\s+(\d+)", output)
+        # node --test (TAP): "# pass 12" / "# fail 1"; reporter spec emite
+        # "ℹ pass 12" e checkmarks "✔ pass"/"✖ fail" em versões mais novas.
+        m_tap_pass = re.search(r"(?:#|ℹ|✔)\s*pass\s+(\d+)", output, re.IGNORECASE)
+        m_tap_fail = re.search(r"(?:#|ℹ|✖)\s*fail\s+(\d+)", output, re.IGNORECASE)
         if m_tap_pass or m_tap_fail:
             ok = int(m_tap_pass.group(1)) if m_tap_pass else 0
             fail = int(m_tap_fail.group(1)) if m_tap_fail else 0

@@ -75,6 +75,40 @@ def test_system_restricted_roots_contract():
     assert expected <= set(SYSTEM_RESTRICTED_ROOTS)
 
 
+def test_system_restricted_roots_include_resolved_aliases():
+    """Toda raiz restrita existente também restringe seu alvo canônico resolvido.
+
+    No macOS, ``/etc`` é um symlink para ``/private/etc``: ``Path.resolve()``
+    produz o alias canônico, que precisa estar DENTRO da denylist para o
+    bloqueio valer tanto pelo nome quanto pelo alvo (mecanismo do TICKET-CI-02).
+    """
+    for raw in SYSTEM_PATHS:
+        candidate = Path(raw)
+        if candidate.exists():
+            resolved = candidate.resolve()
+            assert resolved in SYSTEM_RESTRICTED_ROOTS, (
+                f"{resolved} (resolve de {raw}) ausente da denylist: "
+                "alias canônico do SO escaparia do bloqueio"
+            )
+
+
+def test_engines_reject_resolved_system_alias():
+    """Construir motor com o alias RESOLVIDO de diretório de sistema falha igual.
+
+    Cobre o caso macOS ``/private/etc`` (resolve de ``/etc``): mesmo que o
+    chamador passe o caminho canônico em vez do nome legado, a construção do
+    ``LocalNeedleEngine``/``QmdHybridSearchEngine`` é barrada.
+    """
+    resolved_etc = Path("/etc").resolve()
+    with pytest.raises(SandboxViolationError) as excinfo:
+        LocalNeedleEngine(workspace_root=str(resolved_etc))
+    assert str(excinfo.value) == SYSTEM_RESTRICTED_MESSAGE
+
+    with pytest.raises(SandboxViolationError) as qmd_excinfo:
+        QmdHybridSearchEngine(workspace_root=str(resolved_etc))
+    assert str(qmd_excinfo.value) == SYSTEM_RESTRICTED_MESSAGE
+
+
 @pytest.mark.parametrize("restricted", SYSTEM_PATHS)
 def test_engines_reject_system_workspace(restricted):
     """Workspace em diretório de sistema falha na construção dos dois motores."""

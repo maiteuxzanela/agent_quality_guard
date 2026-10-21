@@ -20,6 +20,7 @@ Cobre:
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shutil
@@ -193,15 +194,64 @@ def test_ci_test_matrix_covers_python_310_to_312_on_two_oses():
     assert job.get("timeout-minutes") == 30
 
 
-def test_ci_test_job_installs_ripgrep_on_macos_only():
+def test_ci_jobs_install_ripgrep_on_both_oses():
     workflow = _load_workflow(CI_PATH)
-    job = _job(workflow, "test")
-    step = _step_by_name(job, "Install ripgrep (macOS)")
 
-    assert step["if"] == "runner.os == 'macOS'", step
-    assert step["run"].strip() == "brew install ripgrep"
-    # So existe no job de testes (Linux ja traz rg; demais jobs nao o usam).
-    assert [s.get("name") for s in _steps(job)].count("Install ripgrep (macOS)") == 1
+    # Step unificado: cobre Linux e macOS no MESMO bloco de shell.
+    test_job = _job(workflow, "test")
+    step = _step_by_name(test_job, "Install ripgrep")
+    assert "if" not in step, step
+    script = step["run"]
+    assert "RUNNER_OS" in script
+    assert "Linux" in script and "apt-get install -y -qq ripgrep" in script
+    assert "macOS" in script and "brew install ripgrep" in script
+    # So existe uma vez no job (sem step duplicado/legado).
+    assert [s.get("name") for s in _steps(test_job)].count("Install ripgrep") == 1
+
+    # qmd_search e os testes de paridade rodam no job de resiliencia e exigem
+    # `rg` real; o step precisa vir antes da instalacao das dependencias.
+    resilience_job = _job(workflow, "test-without-tree-sitter")
+    resilience_script = _step_by_name(resilience_job, "Install ripgrep")["run"]
+    assert "RUNNER_OS" in resilience_script
+    assert "macOS" in resilience_script and "brew install ripgrep" in resilience_script
+
+    names = [s.get("name", "") for s in _steps(resilience_job)]
+    assert names.index("Install ripgrep") < names.index(
+        "Install core dependencies WITHOUT optional tree-sitter parsers"
+    ), names
+
+
+def test_ci_layer2_jitter_calibration_is_conditional_on_ci_env():
+    """O teto de tempo da Camada 2 relaxa SÓ quando a variável ``CI`` está presente.
+
+    TICKET-CI-02: runners GitHub Actions são 2-5x mais lentos que a máquina
+    local; o contrato ``< 1s`` local precisa de teto ``< 3s`` no CI sem
+    enfraquecer a garantia de performance local. Prova determinística via AST
+    real do arquivo de teste: a constant folding da comparação usa
+    ``3.0 if os.environ.get("CI") else 1.0`` — remover o ramo CI (mutação
+    típica) quebra este contrato estático.
+    """
+    target = ROOT / "tests" / "test_agent_quality_guard.py"
+    source = target.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(target))
+    fn = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "test_layer2_meta_rules_classify_blocking_and_warning"
+        ),
+        None,
+    )
+    assert fn is not None, "teste da Camada 2 ausente de test_agent_quality_guard.py"
+    segment = ast.get_source_segment(source, fn)
+    assert segment is not None
+    assert 'os.environ.get("CI")' in segment, (
+        "calibração de jitter ausente: o teto de tempo não é condicionado à env CI"
+    )
+    assert "3.0" in segment and "1.0" in segment, (
+        "faixa de teto incompleta: esperado 3.0 (CI) e 1.0 (local)"
+    )
 
 
 def test_ci_lint_job_runs_real_gates_and_version_parity():

@@ -22,6 +22,5 @@ AGENTS.md
 .plan/
 personas/
 scripts/
-docs/
 *_audit_results.json
 *_audit_report.md

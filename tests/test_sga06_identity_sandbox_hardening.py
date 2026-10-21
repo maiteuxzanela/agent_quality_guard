@@ -23,6 +23,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -102,6 +103,61 @@ def test_symlink_escape_to_system_directory_is_rejected(project, tmp_path):
         engine._resolve_workspace(str(alias))
     assert str(excinfo.value) == SYSTEM_RESTRICTED_MESSAGE
     assert not Path(str(alias)).resolve().is_relative_to(project.resolve())
+
+
+def test_extract_js_blocks_inside_workspace_keeps_relative_path(project):
+    """Controle positivo: arquivo DENTRO do workspace mantém o caminho relativo."""
+    engine = LocalNeedleEngine(workspace_root=str(project))
+    js = project / "src" / "app.js"
+    js.parent.mkdir(parents=True, exist_ok=True)
+    js.write_text("function invoiceTotal(items) {\n  return items.length;\n}\n", encoding="utf-8")
+    blocks = engine._extract_js_blocks(js)
+    assert blocks, "extrator devolveu zero blocos para função real"
+    assert blocks[0]["file_path"] == "src/app.js"
+    assert blocks[0]["name"] == "invoiceTotal"
+
+
+def test_extract_js_blocks_outside_workspace_degrades_to_basename(project, tmp_path):
+    """Arquivo FORA do workspace não pode estourar ``relative_to`` (fallback basename).
+
+    No macOS o workspace vive sob ``/private/var`` enquanto o caminho não
+    resolvido é ``/var/...``: o ``relative_to`` cru lançaria ``ValueError`` e o
+    ``except`` externo engoliria o extrator inteiro (zero blocos). O caminho
+    simetricamente resolvido com fallback ao basename mantém a extração viva.
+    """
+    engine = LocalNeedleEngine(workspace_root=str(project))
+    outside = tmp_path / "outside_dir"
+    outside.mkdir()
+    js = outside / "lib.js"
+    js.write_text("function outsideHelper(x) {\n  return x + 1;\n}\n", encoding="utf-8")
+    blocks = engine._extract_js_blocks(js)
+    assert blocks, "extrator devolveu zero blocos para arquivo fora do workspace"
+    assert blocks[0]["file_path"] == "lib.js"  # basename, sem path traversal
+    assert blocks[0]["name"] == "outsideHelper"
+
+
+def test_extract_js_blocks_symlink_escape_degrades_to_basename(project, tmp_path):
+    """Symlink interno apontando para fora: resolve() escapa -> fallback basename.
+
+    Prova o ramo ``except ValueError`` do ``relative_to`` em filesystem real
+    (sem mocks): o bloco é extraído com o basename em vez de abortar em silêncio.
+    """
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    target = outside / "linked.js"
+    target.write_text("function linkedFn(y) {\n  return y * 2;\n}\n", encoding="utf-8")
+    alias = project / "alias.js"
+    try:
+        alias.symlink_to(target)
+    except (OSError, NotImplementedError):  # pragma: no cover - fs sem symlink
+        pytest.skip("filesystem sem suporte a symlinks")
+
+    engine = LocalNeedleEngine(workspace_root=str(project))
+    blocks = engine._extract_js_blocks(alias)
+    assert blocks, "symlink para fora do workspace engoliu o extrator"
+    # Fallback usa o basename do caminho RECEBIDO (alias), não o do alvo resolvido.
+    assert blocks[0]["file_path"] == "alias.js"
+    assert blocks[0]["name"] == "linkedFn"
 
 
 @pytest.mark.parametrize("flag", ["1", "true", "TRUE", "yes", "on"])
@@ -235,6 +291,40 @@ def test_legacy_docs_are_archived_and_root_stays_clean():
         if p.is_file() and re.search(r"jev|audit|circuit|state_machine", p.name, re.I)
     ]
     assert root_legacy == [], f"docs legados ainda na raiz de docs: {root_legacy}"
+
+
+def test_docs_archive_is_git_trackable_not_ignored():
+    """``docs/archive/`` não pode ser engolido pelo ``.gitignore`` (rastreio real).
+
+    TICKET-CI-02: a linha ``docs/`` no ``.gitignore`` mantinha os 9 arquivos
+    históricos fora do versionamento e derrubava
+    ``test_legacy_docs_are_archived_and_root_stays_clean`` nos runners. Prova
+    determinística: parsing do ``.gitignore`` real + ``git check-ignore`` no
+    subprocesso git do repositório (código de saída 1 = NÃO ignorado).
+    """
+    gitignore = ROOT / ".gitignore"
+    assert gitignore.is_file(), ".gitignore ausente"
+    active_patterns = {
+        ln.strip()
+        for ln in gitignore.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    }
+    assert "docs/" not in active_patterns
+    assert "docs" not in active_patterns
+    assert "docs/archive/" not in active_patterns
+
+    archive_doc = ROOT / "docs" / "archive" / "relatorio_arquitetura_validacao_jev.md"
+    assert archive_doc.is_file(), f"arquivo arquivado ausente: {archive_doc}"
+    proc = subprocess.run(
+        ["git", "check-ignore", "-q", str(archive_doc.relative_to(ROOT))],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1, (
+        f"git check-ignore devolveu {proc.returncode} para docs/archive/: "
+        "o arquivo está gitignored e NÃO será rastreado pelo git"
+    )
 
 
 # ---------------------------------------------------------------------------
