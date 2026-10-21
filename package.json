@@ -1,6 +1,6 @@
 {
   "name": "search-guard-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic AST Quality Gate, surgical code search & multi-stack verification MCP server (100% ML-free)",
   "type": "module",
   "bin": {

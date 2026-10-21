@@ -60,6 +60,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for backward compatibility; new integrations should call
   `agent_quality_guard` directly.
 
+## [0.1.1] - 2026-10-20
+
+Patch release consolidating the CI portability and repository-hygiene fixes
+shipped after `0.1.0`, with strict version parity (`0.1.1`) across
+`package.json`, `pyproject.toml` and `agent_quality_guard/__init__.py`.
+
+### Fixed
+- Cross-platform `ripgrep` provisioning in `.github/workflows/ci.yml`: the
+  `test` and `test-without-tree-sitter` jobs now install the `rg` binary on
+  both Linux (`sudo apt-get install -y ripgrep`) and macOS
+  (`brew install ripgrep`), removing the platform-dependent failure of the
+  lexical search lane and of the version-parity step (TICKET-CI-01,
+  TICKET-CI-02).
+- Python 3.10 support: `tomli>=1.1.0; python_version < "3.11"` is declared as
+  a dependency, and both the release-integrity tests and the `version parity`
+  heredoc scripts in `ci.yml`/`publish.yml` fall back to
+  `try: import tomllib / except ModuleNotFoundError: import tomli as tomllib`
+  (TICKET-CI-01).
+- `.gitignore` sanitation: `docs/` is no longer globally ignored so
+  `docs/archive/` is versioned, and the explicit negation
+  `!docs/archive/*_audit_report.md` re-includes the legacy audit report that
+  the generic `*_audit_report.md` pattern used to swallow — verified with
+  `git check-ignore docs/archive/projeto_jev_audit_report.md` returning no hit
+  (TICKET-CI-03).
+- TAP reporter pinned as `node --test --test-reporter=tap` plus a parser that
+  accepts both classic (`# pass`) and modern (`✔ pass`) Node output, so the
+  Node/Bun lane reports deterministically on Node v18–v22+ (TICKET-CI-02).
+
+### Changed
+- Version parity bumped to `0.1.1` in `package.json`, `pyproject.toml` and
+  `agent_quality_guard/__init__.py`; the canonical manifest assertion in
+  `tests/test_sga06_identity_sandbox_hardening.py` now expects `0.1.1`, and
+  `test_real_repository_versions_are_in_parity` keeps enforcing equality
+  across all three files.
+
 ## [0.1.0] - 2026-10-20
 
 First unified release of the deterministic code-quality and surgical-search
@@ -105,5 +140,6 @@ MCP server, consolidating the former `cirurgic-search-mcp` and
 - Torch/Transformers dependencies and the obsolete `openjev_score_and_diagnose`
   tool from the ecosystem.
 
-[Unreleased]: https://github.com/maiteuxzanela/search-guard-agent/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/maiteuxzanela/search-guard-agent/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/maiteuxzanela/search-guard-agent/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maiteuxzanela/search-guard-agent/releases/tag/v0.1.0
