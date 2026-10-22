@@ -40,12 +40,22 @@ production or remote repositories.
 ## ⚡ Key Highlights
 
 - **100% Deterministic:** Zero probabilistic inference, zero neural
-  hallucinations, zero GPU/VRAM requirement. Sub-second execution.
+  hallucinations, zero GPU/VRAM requirement.
+- **Explicit Verdict & Applicability Model:** Distinguishes real verification
+  (`VERIFIED_PASS`, `VERIFIED_FAIL`) from unverified states (`INCONCLUSIVE`,
+  `NOT_APPLICABLE`, `EMERGENCY_RELEASE`). Never reports `passed: true` without
+  executed evidence, and never fabricates test counts or hides unexecuted layers
+  behind silent `0` violations.
+- **Capability-Based Polyglot Detection:** Detects stacks and monorepo workspace
+  packages directly from project manifests (`pyproject.toml`, `package.json`,
+  `tsconfig.json`, `Cargo.toml`, `go.mod`, `pubspec.yaml`, lockfiles, and test
+  scripts) — with zero hardcoded repository names.
 - **Fail-Fast Anti-Mock:** Enforces real dependencies in production code and
   test suites. Detects synthetic fixtures and mock gaming.
-- **Native Toolchain Bridge:** Does not reinvent linters or compilers — it
-  orchestrates the native toolchain of the project (`tsc`, `eslint`, `biome`,
-  `ruff`, `mypy`, `clippy`, `go vet`).
+- **Native Toolchain Bridge (600s Budget):** Orchestrates the native toolchain
+  of the project (`tsc`, `eslint`, `biome`, `ruff`, `mypy`, `clippy`, `go vet`,
+  `flutter analyze`) with a generous 600-second execution timeout and explicit
+  per-layer execution/skip reporting.
 - **Universal Tree-Sitter AST Meta-Rules:** Language-agnostic syntactic
   inspection detecting SQL injection, command execution, hardcoded
   credentials, floating promises, and silent catch blocks.
@@ -67,34 +77,41 @@ production or remote repositories.
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   AGENT QUALITY GUARD PIPELINE                         │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 1. Layer 0: Real Deterministic Test Suites                             │
-│    • Pytest (isolated sequential chunks)                               │
-│    • Node.js / Bun test (`node:test`, `bun test`, `vitest`)            │
-│    • Flutter / Dart (`flutter test`)                                   │
-│    • Cargo / Go / C# native test runners                               │
+│ 1. Layer 0 (`layer0_tests`): Real Deterministic Test Suites            │
+│    • Python (`pytest` in isolated sequential chunks)                   │
+│    • Node.js / TypeScript / Bun (`node --test`, `bun test`, `vitest`,  │
+│      `jest`, plus package-level discovery for root-guarded monorepos)  │
+│    • React Native / Expo (`jest`), Flutter / Dart (`flutter test`)     │
+│    • Rust (`cargo test`), Go (`go test ./...`), C# (`dotnet test`)     │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 2. Layer 1: NeedleASTGuard — Anti-Mock & Security (Fail-Fast)          │
+│ 2. Layer 1 (`layer1_ast_guard`): NeedleASTGuard — Anti-Mock & Security │
 │    • PROD_MOCK: unittest.mock / jest.mock in production src             │
 │    • HARDCODED_SECRETS: high-entropy tokens, API keys, private keys    │
 │    • SQL_INJECTION / DANGEROUS_EVAL / COMMAND_INJECTION                 │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 3. Layer 2: Native Compiler & Linter Bridge                            │
+│ 3. Layer 2 (`layer2_screener`): NeedleDefectScreener — Hygiene         │
+│    • Structural telemetry on typing, swallowed exceptions & resources  │
+├────────────────────────────────────────────────────────────────────────┤
+│ 4. Layer 3 (`layer3_native_toolchain`): Native Compiler & Linter Bridge│
 │    • TypeScript / JavaScript: `tsc --noEmit`, `eslint`, `biome`        │
 │    • Python: `ruff check`, `mypy --no-incremental`                     │
-│    • Rust / Go: `cargo clippy`, `go vet`                               │
+│    • Rust / Go / Dart: `cargo clippy`, `go vet`, `flutter analyze`     │
+│    • 600-second timeout budget; missing binaries report explicit skip  │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 4. Layer 3: Universal Tree-Sitter AST Meta-Rules                       │
+│ 5. Layer 4 (`layer4_tree_sitter`): Universal Tree-Sitter Meta-Rules    │
 │    • FLOATING_PROMISES: orphan unawaited promises in async code         │
 │    • SILENT_CATCH: empty except/catch blocks without telemetry          │
 │    • Resource leaks, dangerous eval, command injection                  │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 5. Resilience Circuit Breaker                                          │
+│ 6. Resilience Circuit Breaker                                          │
 │    • State tracked across attempts (1 to 5)                            │
 │    • Attempt 5: Triggers deterministic EMERGENCY_RELEASE               │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-Any blocking violation short-circuits the remaining layers (`fail-fast`).
+Any blocking violation short-circuits the remaining layers (`fail-fast`), and
+every skipped or unexecuted layer is explicitly recorded in `layers_skipped`
+and `skip_reasons` rather than masked as zero violations.
 
 ---
 
@@ -179,23 +196,60 @@ card. Runs the full pipeline above.
 {
   "passed": true,
   "status": "APPROVED",
+  "verdict_state": "VERIFIED_PASS",
+  "evidence_executed": true,
   "attempt_number": 1,
   "pytest_success": true,
+  "pytest_chunks": [
+    {
+      "chunk_id": "chunk_multistack_node_ts_bun",
+      "passed": true,
+      "total_passed": 12,
+      "total_failed": 0,
+      "execution_time_seconds": 1.42,
+      "failure_details": []
+    }
+  ],
+  "layers_executed": [
+    "layer0_tests",
+    "layer3_native_toolchain",
+    "layer4_tree_sitter"
+  ],
+  "layers_skipped": [
+    "layer1_ast_guard",
+    "layer2_screener"
+  ],
+  "skip_reasons": {
+    "layer1_ast_guard": "AST Guard Python não aplicável à stack JS (varredura semântica JS executada na Camada 3)",
+    "layer2_screener": "Screener Python não aplicável à stack JS"
+  },
+  "layer_status": {
+    "layer0_tests": "executed",
+    "layer1_ast_guard": "not_applicable",
+    "layer2_screener": "not_applicable",
+    "layer3_native_toolchain": "executed",
+    "layer4_tree_sitter": "executed"
+  },
+  "inconclusive_reasons": [],
   "blocking_ast_violations": [],
   "structural_ast_warnings": [],
   "layer1_toolchain_diagnostics": [],
   "toolchain_status": [
-    { "tool": "tsc", "available": true, "status": "clean" },
-    { "tool": "eslint", "available": true, "status": "clean" }
+    { "name": "tsc", "available": true, "skipped": false, "reason": null, "duration_ms": 840.2 },
+    { "name": "js_linter", "available": true, "skipped": false, "reason": null, "duration_ms": 310.5 }
   ],
   "layer2_meta_rule_violations": [],
   "tool_name": "agent_quality_guard"
 }
 ```
 
-Statuses: `APPROVED`, `REJECTED`, or `EMERGENCY_RELEASE` (fifth attempt
-without a clean deterministic pass — the code is released with a documented
-caveat rather than deadlocking the agent).
+- **Statuses (`status`):** `APPROVED`, `REJECTED`, or `EMERGENCY_RELEASE`.
+- **Verdict states (`verdict_state`):**
+  - `VERIFIED_PASS` — real test suite and applicable static/AST layers executed and passed (`passed: true`, `evidence_executed: true`).
+  - `VERIFIED_FAIL` — deterministic failure in tests, AST guard, native toolchain, or Tree-Sitter meta-rules (`passed: false`).
+  - `INCONCLUSIVE` — required test runner or native toolchain binary is missing, timed out, or produced no verifiable execution evidence (`passed: false`, `evidence_executed: false`).
+  - `NOT_APPLICABLE` — target layer does not apply to the detected stack.
+  - `EMERGENCY_RELEASE` — fifth attempt reached without a clean pass; released with `approved_with_caveat: true` to prevent infinite agent loops.
 
 ### 4. `needle_verify_delivery` (legacy alias — deprecated)
 
