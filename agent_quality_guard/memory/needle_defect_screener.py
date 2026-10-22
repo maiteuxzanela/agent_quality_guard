@@ -1028,6 +1028,45 @@ def screen_workspace_symbols(
     return result
 
 
+def screen_workspace_report(
+    slices: List[AstSymbolSlice], workspace_root: Optional[str] = None
+) -> Dict[str, Any]:
+    """Varre símbolos e devolve suspeitas + cobertura explícita da Camada 2.
+
+    Contrato de honestidade (TICKET-SGA-09): zero símbolos extraídos NÃO é
+    "zero suspeitas verificadas" — a camada é marcada ``not_applicable`` com
+    motivo explícito em ``skip_reasons``.
+
+    Exemplo:
+        >>> rep = screen_workspace_report([])
+        >>> rep["layer_status"]
+        'not_applicable'
+    """
+    suspicions = screen_workspace_symbols(slices, workspace_root=workspace_root)
+    files = sorted({s.file_path for s in slices})
+    report: Dict[str, Any] = {
+        "suspicions": suspicions,
+        "layer_id": "layer2_screener",
+        "layer_status": "not_applicable",
+        "layers_executed": [],
+        "layers_skipped": ["layer2_screener"],
+        "skip_reasons": {},
+        "inconclusive_reasons": [],
+        "symbols_scanned": len(slices),
+        "files_scanned": len(files),
+        "total_files": len(files),
+    }
+    if not slices:
+        report["skip_reasons"]["layer2_screener"] = (
+            "nenhum símbolo Python extraído (nada para o Screener analisar)"
+        )
+        return report
+    report["layer_status"] = "executed"
+    report["layers_executed"] = ["layer2_screener"]
+    report["layers_skipped"] = []
+    return report
+
+
 def _module_source_for_a1(
     file_path: str, slices: List[AstSymbolSlice], workspace_root: Optional[str]
 ) -> str:

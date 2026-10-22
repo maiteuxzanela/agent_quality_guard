@@ -22,6 +22,7 @@ Cobre:
 
 from __future__ import annotations
 
+import subprocess
 import time
 from pathlib import Path
 
@@ -582,12 +583,68 @@ def test_scan_workspace_report_engine_fallback_when_no_grammar(monkeypatch, tmp_
     assert any(v["rule_id"] == "DANGEROUS_EVAL" for v in report["blocking"])
 
 
-def test_scan_workspace_report_missing_workspace_is_empty():
+def test_scan_workspace_report_missing_workspace_is_not_applicable():
+    """Workspace ausente NÃO pode se passar por '0 violações verificadas'."""
     report = TreeSitterGuard.scan_workspace_report("/caminho/que/nao/existe-xyz", audit_mode="full")
-    assert report == {
-        "blocking": [], "warnings": [], "total_files": 0,
-        "engine": "tree_sitter", "languages": [],
-    }
+    assert report["blocking"] == [] and report["warnings"] == []
+    assert report["total_files"] == 0
+    assert report["files_scanned"] == 0
+    assert report["layer_status"] == "not_applicable"
+    assert report["layers_executed"] == []
+    assert report["layers_skipped"] == ["layer4_tree_sitter"]
+    assert "workspace inexistente" in report["skip_reasons"]["layer4_tree_sitter"]
+
+
+def test_scan_workspace_report_exposes_executed_coverage(tmp_path: Path):
+    """Camada executada expõe layers_executed/layer_status coerentes (full e delta)."""
+    _build_workspace(tmp_path)
+    full = TreeSitterGuard.scan_workspace_report(str(tmp_path), audit_mode="full")
+    assert full["layer_status"] == "executed"
+    assert full["layers_executed"] == ["layer4_tree_sitter"]
+    assert full["layers_skipped"] == []
+    assert full["files_scanned"] == full["total_files"] == 3
+    assert full["skip_reasons"] == {}
+
+    delta = TreeSitterGuard.scan_workspace_report(str(tmp_path), audit_mode="delta")
+    # Sem Git o delta degrada para varredura completa, explicitamente declarada.
+    assert delta["delta_source"] == "all_files_no_git"
+    assert delta["layer_status"] == "executed"
+    assert delta["files_scanned"] == 3
+
+
+def test_scan_workspace_report_clean_git_delta_is_not_applicable(tmp_path: Path):
+    """Delta legítimo vazio (repo Git limpo) é not_applicable com motivo explícito."""
+    subprocess.run(["git", "init"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.local"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=str(tmp_path), check=True)
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True)
+
+    report = TreeSitterGuard.scan_workspace_report(str(tmp_path), audit_mode="delta")
+    assert report["blocking"] == [] and report["warnings"] == []
+    assert report["layer_status"] == "not_applicable"
+    assert report["layers_executed"] == []
+    assert report["layers_skipped"] == ["layer4_tree_sitter"]
+    assert report["delta_source"] == "git_diff"
+    assert "delta" in report["skip_reasons"]["layer4_tree_sitter"]
+
+
+def test_scan_workspace_report_grammar_fallback_is_inconclusive(monkeypatch, tmp_path: Path):
+    """Sem gramática real a camada é inconclusiva e declara as linguagens puladas."""
+    _force_missing_c_sharp(monkeypatch)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.cs").write_text(
+        "class A { void F(string x){ var y = eval(x); } }\n", encoding="utf-8"
+    )
+    report = TreeSitterGuard.scan_workspace_report(str(tmp_path), audit_mode="full")
+    assert report["engine"] == "tree_sitter_lexical_fallback"
+    assert report["layer_status"] == "inconclusive"
+    assert report["languages_skipped"] == ["c_sharp"]
+    assert report["inconclusive_reasons"]
+    assert "c_sharp" in report["skip_reasons"]["grammar_unavailable"]
+    # O fallback lexical continua detectando a violação real (não é "0 violações").
+    assert any(v["rule_id"] == "DANGEROUS_EVAL" for v in report["blocking"])
 
 
 def test_scan_workspace_list_matches_report(tmp_path: Path):

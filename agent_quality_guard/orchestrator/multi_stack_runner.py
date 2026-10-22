@@ -1,13 +1,24 @@
 """
 Multi-Stack Runner & Language Drivers for Needle 3 Verify Delivery.
-Permite ao needle_verify_delivery auditar projetos em diferentes stacks:
-- Python (JEV, Predictera, Faturamento)
-- React Native / Expo (PanelaAndroid)
-- Web Vanilla JS / Node / Firebase (JEZ collections)
+
+Detecção 100% ABERTA por CAPABILITY (TICKET-SGA-09): o runner não conhece nome
+de repositório, arquivo pessoal ou marca. Ele observa apenas manifestos e
+arquivos reais do workspace (``pyproject.toml``, ``setup.py``,
+``requirements.txt``, ``package.json``, ``bun.lockb``/``bun.lock``,
+``tsconfig.json``, ``Cargo.toml``, ``go.mod``, ``pubspec.yaml``, scripts e
+suítes de teste presentes).
+
+Contrato honesto de execução:
+- Nenhum caminho devolve ``passed=True`` sem evidência real executada.
+- Stack sem runner, binário ausente ou zero testes executados → ``INCONCLUSIVE``
+  (ou ``VERIFIED_FAIL`` quando o repositório exige testes e não possui nenhum).
+- Contadores vêm exclusivamente do parser da saída real do runner.
 
 Camadas de auditoria:
-- Camada 1: bridge nativa com compiladores/linters do projeto (tsc, eslint/biome/oxlint,
-  ruff/mypy, go vet, cargo clippy, dart analyze) — orçamento sub-segundo e fail-open.
+- Camada 3: bridge nativa com compiladores/linters do projeto (tsc,
+  eslint/biome/oxlint, ruff/mypy, go vet, cargo clippy, dart analyze) — timeout
+  padrão/máximo de 600s; ferramenta ausente/timeout é registrada em
+  ``layer_status``/``inconclusive_reasons``, nunca silenciada como "0 erros".
 - Varredura AST JS (node_js_ast) e fallback léxico com suporte a needle-ignore.
 """
 
@@ -108,12 +119,44 @@ RULE_SUGGESTIONS: Dict[str, str] = {
     ),
 }
 
-# Orçamento total da Camada 1 (sub-segundo por contrato). Sobrescrevível por env.
-_DEFAULT_NATIVE_BUDGET_SECONDS = 0.8
+# Orçamento total da bridge nativa (TICKET-SGA-09: 600s, determinação da
+# Fundadora). Sobrescrevível por ``JEV_NATIVE_BRIDGE_BUDGET_SECONDS``.
+_DEFAULT_NATIVE_BUDGET_SECONDS = 600.0
 _MIN_NATIVE_BUDGET_SECONDS = 0.1
-_MAX_NATIVE_BUDGET_SECONDS = 5.0
+_MAX_NATIVE_BUDGET_SECONDS = 600.0
 _NATIVE_OUTPUT_LIMIT = 512 * 1024
 _MAX_LINT_FILES = 150
+
+# Timeout (segundos) de cada subprocesso de teste. Nenhum runner roda sem teto.
+_TEST_COMMAND_TIMEOUT_SECONDS = 600.0
+
+# Estados explícitos de veredito (espelham core.schemas.VerdictState).
+VERDICT_VERIFIED_PASS = "VERIFIED_PASS"
+VERDICT_VERIFIED_FAIL = "VERIFIED_FAIL"
+VERDICT_NOT_APPLICABLE = "NOT_APPLICABLE"
+VERDICT_INCONCLUSIVE = "INCONCLUSIVE"
+VERDICT_EMERGENCY_RELEASE = "EMERGENCY_RELEASE"
+
+# Manifestos/arquivos de capability por linguagem (nenhum nome de projeto).
+_PYTHON_MANIFESTS: Tuple[str, ...] = (
+    "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "poetry.lock",
+    "requirements.txt", "pytest.ini", "tox.ini",
+)
+_NODE_MANIFESTS: Tuple[str, ...] = ("package.json",)
+_TS_MANIFESTS: Tuple[str, ...] = ("tsconfig.json",)
+_RUST_MANIFESTS: Tuple[str, ...] = ("Cargo.toml",)
+_GO_MANIFESTS: Tuple[str, ...] = ("go.mod",)
+_DART_MANIFESTS: Tuple[str, ...] = ("pubspec.yaml",)
+
+# Suítes de teste por extensão reconhecidas na descoberta poliglota.
+_JS_TEST_GLOBS: Tuple[str, ...] = (
+    "*.test.js", "*.test.mjs", "*.test.cjs", "*.test.ts", "*.test.tsx",
+    "*.spec.js", "*.spec.mjs", "*.spec.ts", "*.spec.tsx",
+)
+_NODE_WORKSPACE_GLOBS: Tuple[str, ...] = (
+    "*/package.json", "packages/*/package.json", "apps/*/package.json",
+    "libs/*/package.json", "services/*/package.json",
+)
 
 
 def _get_file_suppressed_rules_js(lines: List[str]) -> set[str]:
@@ -252,67 +295,130 @@ class MultiStackRunner:
     """Orquestra detecção de stack, execução de testes e varredura de AST para projetos multi-stack."""
 
     @staticmethod
+    def _has_any_manifest(workspace_path: Path, names: Tuple[str, ...]) -> bool:
+        """Indica se ao menos um manifesto nomeado existe na raiz do workspace.
+
+        Exemplo:
+            >>> MultiStackRunner._has_any_manifest(Path("."), ("manifesto-xyz.toml",))
+            False
+        """
+        return any((workspace_path / name).exists() for name in names)
+
+    @classmethod
+    def _has_python_capability(cls, workspace_path: Path) -> bool:
+        """Detecta Python por manifesto real ou fontes ``.py`` na raiz/pacote base.
+
+        Critério aberto: nenhum nome de repositório ou arquivo específico de
+        projeto; apenas a presença de manifestos canônicos ou código Python.
+
+        Exemplo:
+            >>> isinstance(MultiStackRunner._has_python_capability(Path(".")), bool)
+            True
+        """
+        if cls._has_any_manifest(workspace_path, _PYTHON_MANIFESTS):
+            return True
+        if any(workspace_path.glob("*.py")):
+            return True
+        for subdir in ("src", "lib"):
+            base = workspace_path / subdir
+            if base.is_dir() and any(base.glob("*.py")):
+                return True
+        return False
+
+    @staticmethod
+    def _read_package_json(workspace_path: Path) -> Dict[str, Any]:
+        """Lê o ``package.json`` da raiz de forma tolerante (vazio se ilegível).
+
+        Exemplo:
+            >>> MultiStackRunner._read_package_json(Path("."))["name"]
+            'search-guard-agent'
+        """
+        pkg = workspace_path / "package.json"
+        if not pkg.exists():
+            return {}
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, json.JSONDecodeError) as parse_err:
+            logger.debug("package.json ilegível em %s: %s", workspace_path, parse_err)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @classmethod
+    def _has_node_capability(cls, workspace_path: Path) -> bool:
+        """Detecta Node/JS pela presença do manifesto canônico ``package.json``.
+
+        Exemplo:
+            >>> isinstance(MultiStackRunner._has_node_capability(Path(".")), bool)
+            True
+        """
+        return cls._has_any_manifest(workspace_path, _NODE_MANIFESTS)
+
+    @classmethod
+    def _is_react_native_workspace(cls, workspace_path: Path) -> bool:
+        """Detecta React Native/Expo por dependência declarada (capability, sem fingerprint).
+
+        Exemplo:
+            >>> MultiStackRunner._is_react_native_workspace(Path("."))
+            False
+        """
+        data = cls._read_package_json(workspace_path)
+        if not data:
+            return False
+        dependency_names: set[str] = set()
+        for section in ("dependencies", "devDependencies", "peerDependencies"):
+            block = data.get(section)
+            if isinstance(block, dict):
+                dependency_names.update(str(name) for name in block)
+        return bool(dependency_names & {"react-native", "expo"})
+
+    @staticmethod
     def detect_stack(workspace_path: Path) -> str:
-        """Classifica a stack do workspace (React Native, Web JS, Python) pelos arquivos presentes.
+        """Classifica a stack por CAPABILITY aberta (zero nome de projeto/arquivo pessoal).
+
+        Precedência determinística entre capabilities simultâneas:
+        Python (manifesto/fontes) > React Native (dependência declarada) >
+        Node/TS/Bun com suíte > Node puro > Rust > Go > Dart > ``UNKNOWN``.
 
         Exemplo:
             >>> isinstance(MultiStackRunner.detect_stack(Path(".")), str)
             True
         """
-        # Se for PanelaBuild ou PanelaAndroid
-        if (workspace_path / "PanelaAndroid" / "package.json").exists() or (
-            (workspace_path / "package.json").exists() and (workspace_path / "app.json").exists()
-        ):
-            return "REACT_NATIVE_EXPO"
+        workspace_path = Path(workspace_path)
 
-        # Se for JEZ collections
-        if (workspace_path / "site" / "tests" / "smoke_test.js").exists() or (
-            (workspace_path / "site" / "app.js").exists() and (workspace_path / "site" / "atelie.html").exists()
-        ):
-            return "WEB_JS_FIREBASE"
-
-        # Se for Predictera
-        if (workspace_path / "predictera_predict_causal.py").exists() or (
-            (workspace_path / "laboratorio" / "dixon_coles_engine.py").exists()
-        ):
-            return "PYTHON_PREDICTERA"
-
-        # Se for Faturamento
-        if (workspace_path / "sync_kanban.py").exists() and (workspace_path / "test_docs_integrity.py").exists():
-            return "PYTHON_FATURAMENTO"
-
-        # Se for projeto JEV / agent_quality_guard
-        if (workspace_path / "src" / "mcp_server.py").exists() or (
-            (workspace_path / "agent_quality_guard" / "mcp_server.py").exists()
-        ):
-            return "PYTHON_JEV"
-
-        # Stack Node/TypeScript/Bun moderna (ensemble-room-lowcost, openchamber_maiteux)
-        if MultiStackRunner._is_node_ts_bun_workspace(workspace_path):
-            return "NODE_TS_BUN"
-
-        # Fallback por arquivos
-        if list(workspace_path.glob("*.py")):
+        if MultiStackRunner._has_python_capability(workspace_path):
             return "PYTHON_GENERIC"
-        if (workspace_path / "package.json").exists():
+
+        if MultiStackRunner._has_node_capability(workspace_path):
+            if MultiStackRunner._is_react_native_workspace(workspace_path):
+                return "REACT_NATIVE_EXPO"
+            if MultiStackRunner._is_node_ts_bun_workspace(workspace_path):
+                return "NODE_TS_BUN"
             return "NODE_JS_GENERIC"
+
+        if MultiStackRunner._has_any_manifest(workspace_path, _RUST_MANIFESTS):
+            return "RUST_CARGO"
+        if MultiStackRunner._has_any_manifest(workspace_path, _GO_MANIFESTS):
+            return "GO_MODULE"
+        if MultiStackRunner._has_any_manifest(workspace_path, _DART_MANIFESTS):
+            return "DART_FLUTTER"
 
         return "UNKNOWN"
 
     @staticmethod
     def _is_node_ts_bun_workspace(workspace_path: Path) -> bool:
-        """Detecta workspace Node/TypeScript moderno com suíte determinística (Bun ou Node+mjs).
+        """Detecta workspace Node/TypeScript moderno com suíte determinística (Bun ou Node).
 
-        Critérios (qualquer um satisfaz):
-        - ``bun.lockb``/``bun.lock`` presente (repo gerenciado por Bun), ou
-        - ``package.json`` E (testes ``.mjs``/``.test.ts``/``.test.js`` em ``tests/`` OU
-          ``scripts.test`` declarado OU pasta ``src/`` com arquivos ``.ts``).
+        Critérios (qualquer um satisfaz), todos abertos por capability:
+        - ``bun.lockb``/``bun.lock``/``bunfig.toml`` presente;
+        - ``package.json`` com ``scripts.test`` declarado;
+        - arquivos ``.ts`` em ``src/`` ou ``tsconfig.json`` presente;
+        - suíte de testes real (``tests/**/*.mjs``, ``*.test.*``/``*.spec.*``).
 
         Exemplo:
             >>> isinstance(MultiStackRunner._is_node_ts_bun_workspace(Path(".")), bool)
             True
         """
-        if (workspace_path / "bun.lockb").exists() or (workspace_path / "bun.lock").exists():
+        if any((workspace_path / name).exists() for name in ("bun.lockb", "bun.lock", "bunfig.toml")):
             return True
 
         pkg = workspace_path / "package.json"
@@ -323,8 +429,9 @@ class MultiStackRunner:
         if tests_dir.exists():
             if any(tests_dir.glob("*.mjs")):
                 return True
-            if any(tests_dir.rglob("*.test.ts")) or any(tests_dir.rglob("*.test.js")):
-                return True
+            for pattern in _JS_TEST_GLOBS:
+                if any(tests_dir.rglob(pattern)):
+                    return True
 
         try:
             pkg_data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
@@ -336,162 +443,377 @@ class MultiStackRunner:
         if isinstance(scripts, dict) and scripts.get("test"):
             return True
 
+        if (workspace_path / "tsconfig.json").exists():
+            return True
         src_dir = workspace_path / "src"
         if src_dir.exists() and any(src_dir.rglob("*.ts")):
             return True
 
         return False
 
+    @staticmethod
+    def _build_test_result(
+        *,
+        passed: bool,
+        total_passed: int,
+        total_failed: int,
+        summary: str,
+        failure_details: List[str],
+        start: float,
+        evidence: bool,
+        runner: Optional[str] = None,
+        verdict_state: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Normaliza o resultado de um runner com veredito explícito e honesto.
+
+        Invariante inegociável: ``passed=True`` exige ``evidence=True``. Sem
+        evidência real executada o resultado degrada para ``INCONCLUSIVE``.
+
+        Exemplo:
+            >>> r = MultiStackRunner._build_test_result(
+            ...     passed=True, total_passed=0, total_failed=0, summary="s",
+            ...     failure_details=[], start=0.0, evidence=False)
+            >>> (r["passed"], r["verdict_state"])
+            (False, 'INCONCLUSIVE')
+        """
+        if passed and not evidence:
+            passed = False
+            verdict_state = VERDICT_INCONCLUSIVE
+        if verdict_state is None:
+            if evidence and passed:
+                verdict_state = VERDICT_VERIFIED_PASS
+            elif evidence:
+                verdict_state = VERDICT_VERIFIED_FAIL
+            else:
+                verdict_state = VERDICT_INCONCLUSIVE
+        if verdict_state == VERDICT_VERIFIED_PASS and not evidence:
+            verdict_state = VERDICT_INCONCLUSIVE
+            passed = False
+        return {
+            "passed": bool(passed),
+            "total_passed": int(total_passed),
+            "total_failed": int(total_failed),
+            "summary": summary,
+            "failure_details": failure_details,
+            "duration": round(time.time() - start, 2),
+            "evidence": bool(evidence),
+            "verdict_state": verdict_state,
+            "runner": runner,
+            "reason": reason,
+        }
+
+    @staticmethod
+    def _output_has_test_evidence(output: str) -> bool:
+        """Indica se a saída contém sinais reais de execução de testes.
+
+        Exemplo:
+            >>> MultiStackRunner._output_has_test_evidence("SUÍTES: 2/2 passaram")
+            True
+        """
+        markers = (
+            "pass", "fail", "ok", "tests", "suítes", "suites", "ran ",
+            "test result", "assert",
+        )
+        lowered = output.lower()
+        return any(marker in lowered for marker in markers)
+
     @classmethod
     def run_tests(cls, workspace_path: Path, stack: str, tmp_dir: Path) -> Dict[str, Any]:
-        """Executa a suíte de testes nativa da stack detectada com TMPDIR isolado."""
+        """Executa a suíte real da stack detectada com TMPDIR isolado e teto de 600s.
+
+        Nenhum caminho devolve ``passed=True`` sem evidência: stack sem runner,
+        binário ausente, timeout ou zero testes executados viram
+        ``INCONCLUSIVE``/``VERIFIED_FAIL`` com motivo explícito.
+
+        Exemplo:
+            >>> res = MultiStackRunner.run_tests(Path("."), "UNKNOWN", Path("/tmp"))
+            >>> (res["passed"], res["verdict_state"])
+            (False, 'INCONCLUSIVE')
+        """
         start = time.time()
         env = os.environ.copy()
         env["TMPDIR"] = str(tmp_dir)
 
-        if stack == "REACT_NATIVE_EXPO":
-            target_dir = workspace_path / "PanelaAndroid" if (workspace_path / "PanelaAndroid" / "package.json").exists() else workspace_path
-            jest_bin = target_dir / "node_modules" / ".bin" / "jest"
-            if not jest_bin.exists():
-                return {
-                    "passed": False,
-                    "total_passed": 0,
-                    "total_failed": 1,
-                    "summary": f"Jest não encontrado em {jest_bin}",
-                    "failure_details": [f"Jest binary missing: {jest_bin}"],
-                    "duration": 0
-                }
-            cmd = [str(jest_bin), "--runInBand", "--forceExit", "--testTimeout=15000"]
-            proc = subprocess.run(cmd, cwd=str(target_dir), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            output = proc.stdout + "\n" + proc.stderr
-            passed = (proc.returncode == 0)
-
-            m = re.search(r"Tests:\s+(\d+)\s+passed,\s+(\d+)\s+total", output)
-            total_passed = int(m.group(1)) if m else (336 if passed else 0)
-            total_failed = 0 if passed else 1
-
-            return {
-                "passed": passed,
-                "total_passed": total_passed,
-                "total_failed": total_failed,
-                "summary": f"Jest React Native: {total_passed} testes aprovados em {round(time.time() - start, 2)}s",
-                "failure_details": [] if passed else [output[-500:]],
-                "duration": round(time.time() - start, 2)
-            }
-
-        elif stack == "WEB_JS_FIREBASE":
-            smoke_test = workspace_path / "site" / "tests" / "smoke_test.js"
-            if not smoke_test.exists():
-                return {
-                    "passed": False,
-                    "total_passed": 0,
-                    "total_failed": 1,
-                    "summary": "Arquivo smoke_test.js não encontrado",
-                    "failure_details": ["smoke_test.js not found"],
-                    "duration": 0
-                }
-            cmd = ["node", str(smoke_test)]
-            proc = subprocess.run(cmd, cwd=str(workspace_path), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            output = proc.stdout + "\n" + proc.stderr
-            passed = (proc.returncode == 0)
-
-            m_pass = re.search(r"Aprovados:\s+(\d+)", output)
-            m_fail = re.search(r"Falhas:\s+(\d+)", output)
-            tot_passed = int(m_pass.group(1)) if m_pass else (514 if passed else 0)
-            tot_failed = int(m_fail.group(1)) if m_fail else (0 if passed else 1)
-
-            return {
-                "passed": passed,
-                "total_passed": tot_passed,
-                "total_failed": tot_failed,
-                "summary": f"Node QA Smoke Tests: {tot_passed} aprovados, {tot_failed} falhas",
-                "failure_details": [] if passed else [output[-500:]],
-                "duration": round(time.time() - start, 2)
-            }
-
-        elif stack == "PYTHON_PREDICTERA":
-            cmd = [sys.executable, "-m", "unittest", "discover", "-s", "tests"]
-            proc = subprocess.run(cmd, cwd=str(workspace_path), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            output = proc.stdout + "\n" + proc.stderr
-            passed = (proc.returncode == 0)
-
-            m = re.search(r"Ran (\d+) tests", output)
-            tot_tests = int(m.group(1)) if m else 0
-            tot_passed = tot_tests if passed else 0
-            tot_failed = 0 if passed else (tot_tests - tot_passed or 1)
-
-            failure_lines = [l for l in output.splitlines() if "FAIL:" in l or "ERROR:" in l or "Error:" in l]
-            return {
-                "passed": passed,
-                "total_passed": tot_passed,
-                "total_failed": tot_failed,
-                "summary": f"Unittest Causal: {tot_passed}/{tot_tests} aprovados",
-                "failure_details": failure_lines[:10] if not passed else [],
-                "duration": round(time.time() - start, 2)
-            }
-
-        elif stack == "PYTHON_FATURAMENTO":
-            return MultiStackRunner._run_faturamento_suite(workspace_path, env, start)
-
-        elif stack == "NODE_TS_BUN":
-            return MultiStackRunner._run_node_ts_suite(workspace_path, env, start)
-
-        return {
-            "passed": True,
-            "total_passed": 0,
-            "total_failed": 0,
-            "summary": f"Stack {stack} não possui runner de testes configurado",
-            "failure_details": [],
-            "duration": 0
-        }
-
-    @staticmethod
-    def _run_faturamento_suite(workspace_path: Path, env: Dict[str, Any], start: float) -> Dict[str, Any]:
-        """Executa a suíte de integridade do projeto Faturamento e consolida o resultado."""
-        test_files = ["test_docs_integrity.py", "test_portabilidade_links.py", "test_unificacao_frontend.py"]
-        all_passed = True
-        tot_passed = 0
-        tot_failed = 0
-        details: List[str] = []
-        failure_details: List[str] = []
-        for tf in test_files:
-            p = workspace_path / tf
-            if not p.exists():
-                continue
-            proc = subprocess.run(
-                [sys.executable, str(p)],
-                cwd=str(workspace_path),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+        try:
+            if stack == "REACT_NATIVE_EXPO":
+                return cls._run_react_native_suite(workspace_path, env, start)
+            if stack in ("NODE_TS_BUN", "NODE_JS_GENERIC", "WEB_JS_FIREBASE"):
+                return cls._run_node_ts_suite(workspace_path, env, start)
+            if stack.startswith("PYTHON"):
+                return cls._run_python_pytest_suite(workspace_path, env, start)
+            if stack == "RUST_CARGO":
+                return cls._run_rust_suite(workspace_path, env, start)
+            if stack == "GO_MODULE":
+                return cls._run_go_suite(workspace_path, env, start)
+            if stack == "DART_FLUTTER":
+                return cls._run_dart_suite(workspace_path, env, start)
+        except subprocess.TimeoutExpired:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary=f"Stack {stack}: timeout de {_TEST_COMMAND_TIMEOUT_SECONDS:.0f}s excedido",
+                failure_details=[f"Timeout de {_TEST_COMMAND_TIMEOUT_SECONDS:.0f}s durante a suíte."],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                reason="timeout",
             )
-            ok = proc.returncode == 0
-            all_passed = all_passed and ok
-            tot_passed += 5 if ok else 0
-            tot_failed += 0 if ok else 1
-            details.append(f"{tf}: {'OK' if ok else 'FAILED'}")
-            if not ok:
-                failure_details.append(f"{tf} failed: {proc.stderr[:200]}")
-        return {
-            "passed": all_passed,
-            "total_passed": tot_passed,
-            "total_failed": tot_failed,
-            "summary": f"Faturamento Integrity: {', '.join(details)}",
-            "failure_details": failure_details,
-            "duration": round(time.time() - start, 2),
-        }
 
-    @staticmethod
-    def _run_node_ts_suite(workspace_path: Path, env: Dict[str, Any], start: float) -> Dict[str, Any]:
-        """Executa a suíte determinística real de um repositório Node/TypeScript/Bun (sem mocks).
+        return cls._build_test_result(
+            passed=False, total_passed=0, total_failed=0,
+            summary=f"Stack {stack} não possui runner de testes disponível",
+            failure_details=[
+                f"Nenhum runner determinístico mapeado para a stack '{stack}'. "
+                "A entrega não pode ser aprovada sem evidência real executada."
+            ],
+            start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+            reason="stack_sem_runner",
+        )
+
+    @classmethod
+    def _run_react_native_suite(
+        cls, workspace_path: Path, env: Dict[str, Any], start: float,
+    ) -> Dict[str, Any]:
+        """Executa o Jest do projeto React Native/Expo, se instalado.
+
+        Exemplo:
+            >>> res = MultiStackRunner._run_react_native_suite(Path("."), {}, time.time())
+            >>> res["passed"] is False
+            True
+        """
+        jest_bin = workspace_path / "node_modules" / ".bin" / "jest"
+        if not jest_bin.exists():
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary=f"Jest não encontrado em {jest_bin}",
+                failure_details=[f"Jest binary missing: {jest_bin}"],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner="jest", reason="jest_ausente",
+            )
+        cmd = [str(jest_bin), "--runInBand", "--forceExit", "--testTimeout=15000"]
+        proc = subprocess.run(
+            cmd, cwd=str(workspace_path), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=_TEST_COMMAND_TIMEOUT_SECONDS,
+        )
+        output = proc.stdout + "\n" + proc.stderr
+        passed = proc.returncode == 0
+        match = re.search(r"Tests:\s+(\d+)\s+passed", output)
+        total_passed = int(match.group(1)) if match else 0
+        failed_match = re.search(r"Tests:.*?(\d+)\s+failed", output)
+        total_failed = int(failed_match.group(1)) if failed_match else (0 if passed else 1)
+        evidence = bool(match or cls._output_has_test_evidence(output))
+        return cls._build_test_result(
+            passed=passed, total_passed=total_passed, total_failed=total_failed,
+            summary=f"Jest React Native: {total_passed} testes aprovados em {round(time.time() - start, 2)}s",
+            failure_details=[] if passed else [output[-500:]],
+            start=start, evidence=evidence, runner="jest",
+            verdict_state=None if evidence else VERDICT_INCONCLUSIVE,
+            reason=None if evidence else "saida_sem_contagem",
+        )
+
+    @classmethod
+    def _run_python_pytest_suite(
+        cls, workspace_path: Path, env: Dict[str, Any], start: float,
+    ) -> Dict[str, Any]:
+        """Executa pytest real sobre testes descobertos no workspace Python.
+
+        Exemplo:
+            >>> res = MultiStackRunner._run_python_pytest_suite(Path("/tmp"), {}, time.time())
+            >>> res["passed"] is False
+            True
+        """
+        python_bin = sys.executable
+        venv_python = workspace_path / ".venv" / "bin" / "python"
+        if venv_python.exists():
+            python_bin = str(venv_python)
+        test_files = cls._discover_python_tests(workspace_path)
+        if not test_files:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary="Nenhum teste Python real coletado no workspace",
+                failure_details=["Nenhum arquivo 'test_*.py'/'*_test.py' encontrado fora de diretórios excluídos."],
+                start=start, evidence=False, verdict_state=VERDICT_VERIFIED_FAIL,
+                runner="pytest", reason="testes_ausentes",
+            )
+        cmd = [python_bin, "-m", "pytest", *test_files, "-q", "--tb=short"]
+        proc = subprocess.run(
+            cmd, cwd=str(workspace_path), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=_TEST_COMMAND_TIMEOUT_SECONDS,
+        )
+        output = proc.stdout + "\n" + proc.stderr
+        passed = proc.returncode == 0
+        passed_match = re.search(r"(\d+)\s+passed", output)
+        failed_match = re.search(r"(\d+)\s+(?:failed|error)", output)
+        total_passed = int(passed_match.group(1)) if passed_match else 0
+        total_failed = int(failed_match.group(1)) if failed_match else (0 if passed else 1)
+        evidence = bool(passed_match or failed_match)
+        return cls._build_test_result(
+            passed=passed, total_passed=total_passed, total_failed=total_failed,
+            summary=f"pytest real: {total_passed} aprovados, {total_failed} falhas",
+            failure_details=[] if passed else [output[-500:]],
+            start=start, evidence=evidence, runner="pytest",
+            verdict_state=None if evidence else VERDICT_INCONCLUSIVE,
+            reason=None if evidence else "saida_sem_contagem",
+        )
+
+    @classmethod
+    def _discover_python_tests(cls, workspace_path: Path) -> List[str]:
+        """Descobre testes Python reais relativos ao workspace, podando diretórios de build.
+
+        Exemplo:
+            >>> isinstance(MultiStackRunner._discover_python_tests(Path(".")), list)
+            True
+        """
+        excluded = cls._NATIVE_EXCLUDED_DIRS
+        found: List[str] = []
+        for pattern in ("tests/**/test_*.py", "tests/**/*_test.py", "test_*.py", "*_test.py"):
+            for path in workspace_path.glob(pattern):
+                if not path.is_file():
+                    continue
+                rel_parts = path.relative_to(workspace_path).parts
+                if any(part in excluded for part in rel_parts):
+                    continue
+                found.append(str(path.relative_to(workspace_path)))
+        return sorted(set(found))
+
+    @classmethod
+    def _run_rust_suite(
+        cls, workspace_path: Path, env: Dict[str, Any], start: float,
+    ) -> Dict[str, Any]:
+        """Executa ``cargo test`` real e parseia o resumo de testes.
+
+        Exemplo:
+            >>> res = MultiStackRunner._run_rust_suite(Path("."), {}, time.time())
+            >>> "verdict_state" in res
+            True
+        """
+        cargo_bin = shutil.which("cargo")
+        if not cargo_bin:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary="Cargo.toml presente, binário cargo ausente",
+                failure_details=["cargo não instalado: impossível executar a suíte Rust."],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner="cargo", reason="cargo_ausente",
+            )
+        proc = subprocess.run(
+            [cargo_bin, "test", "--quiet"], cwd=str(workspace_path), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=_TEST_COMMAND_TIMEOUT_SECONDS,
+        )
+        output = proc.stdout + "\n" + proc.stderr
+        passed = proc.returncode == 0
+        passed_total = sum(int(m) for m in re.findall(r"(\d+)\s+passed", output))
+        failed_total = sum(int(m) for m in re.findall(r"(\d+)\s+failed", output))
+        evidence = bool(re.search(r"test result:|(\d+)\s+passed", output))
+        return cls._build_test_result(
+            passed=passed, total_passed=passed_total,
+            total_failed=failed_total if failed_total else (0 if passed else 1),
+            summary=f"cargo test: {passed_total} aprovados, {failed_total} falhas",
+            failure_details=[] if passed else [output[-500:]],
+            start=start, evidence=evidence, runner="cargo",
+            verdict_state=None if evidence else VERDICT_INCONCLUSIVE,
+            reason=None if evidence else "saida_sem_contagem",
+        )
+
+    @classmethod
+    def _run_go_suite(
+        cls, workspace_path: Path, env: Dict[str, Any], start: float,
+    ) -> Dict[str, Any]:
+        """Executa ``go test ./...`` real e parseia pacotes aprovados/falhados.
+
+        Exemplo:
+            >>> res = MultiStackRunner._run_go_suite(Path("."), {}, time.time())
+            >>> "verdict_state" in res
+            True
+        """
+        go_bin = shutil.which("go")
+        if not go_bin:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary="go.mod presente, binário go ausente",
+                failure_details=["go não instalado: impossível executar a suíte Go."],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner="go", reason="go_ausente",
+            )
+        proc = subprocess.run(
+            [go_bin, "test", "./..."], cwd=str(workspace_path), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=_TEST_COMMAND_TIMEOUT_SECONDS,
+        )
+        output = proc.stdout + "\n" + proc.stderr
+        passed = proc.returncode == 0
+        ok_packages = len(re.findall(r"^ok\s+", output, re.MULTILINE))
+        failed_packages = len(re.findall(r"^(?:FAIL|--- FAIL)", output, re.MULTILINE))
+        evidence = bool(ok_packages or failed_packages or "no test files" in output)
+        return cls._build_test_result(
+            passed=passed, total_passed=ok_packages,
+            total_failed=failed_packages if failed_packages else (0 if passed else 1),
+            summary=f"go test: {ok_packages} pacotes ok, {failed_packages} falhas",
+            failure_details=[] if passed else [output[-500:]],
+            start=start, evidence=evidence, runner="go",
+            verdict_state=None if evidence else VERDICT_INCONCLUSIVE,
+            reason=None if evidence else "saida_sem_contagem",
+        )
+
+    @classmethod
+    def _run_dart_suite(
+        cls, workspace_path: Path, env: Dict[str, Any], start: float,
+    ) -> Dict[str, Any]:
+        """Executa ``dart test``/``flutter test`` real quando o SDK está instalado.
+
+        Exemplo:
+            >>> res = MultiStackRunner._run_dart_suite(Path("."), {}, time.time())
+            >>> "verdict_state" in res
+            True
+        """
+        dart_bin = shutil.which("dart")
+        flutter_bin = shutil.which("flutter")
+        if not dart_bin and not flutter_bin:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary="pubspec.yaml presente, SDK Dart/Flutter ausente",
+                failure_details=["dart/flutter não instalados: impossível executar a suíte Dart."],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner="dart", reason="dart_ausente",
+            )
+        cmd = [str(flutter_bin), "test"] if flutter_bin else [str(dart_bin), "test"]
+        proc = subprocess.run(
+            cmd, cwd=str(workspace_path), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=_TEST_COMMAND_TIMEOUT_SECONDS,
+        )
+        output = proc.stdout + "\n" + proc.stderr
+        passed = proc.returncode == 0
+        passed_match = re.search(r"(\d+)\s+tests?\s+passed", output)
+        failed_match = re.search(r"(\d+)\s+tests?\s+failed", output)
+        total_passed = int(passed_match.group(1)) if passed_match else 0
+        total_failed = int(failed_match.group(1)) if failed_match else (0 if passed else 1)
+        evidence = bool(passed_match or failed_match or cls._output_has_test_evidence(output))
+        return cls._build_test_result(
+            passed=passed, total_passed=total_passed, total_failed=total_failed,
+            summary=f"Dart/Flutter test: {total_passed} aprovados, {total_failed} falhas",
+            failure_details=[] if passed else [output[-500:]],
+            start=start, evidence=evidence, runner=Path(cmd[0]).name,
+            verdict_state=None if evidence else VERDICT_INCONCLUSIVE,
+            reason=None if evidence else "saida_sem_contagem",
+        )
+
+    @classmethod
+    def _run_node_ts_suite(
+        cls, workspace_path: Path, env: Dict[str, Any], start: float,
+    ) -> Dict[str, Any]:
+        """Executa a suíte determinística real de um repositório Node/TS/Bun (sem mocks).
 
         Cascata de seleção do runner (primeiro match vence):
-        1. ``tests/run_all.mjs`` presente -> ``node tests/run_all.mjs``
-           (runners consolidados, ex.: ensemble-room-lowcost).
-        2. ``package.json`` com ``scripts.test`` -> ``bun run test`` (se Bun) ou ``npm test``.
-        3. Repositório gerenciado por Bun sem script -> ``bun test``.
-        4. Arquivos ``tests/*.mjs`` -> ``node --test <arquivos>``.
+        1. ``tests/run_all.mjs`` presente -> ``node tests/run_all.mjs``.
+        2. Monorepo com ``workspaces`` declarados ou guarda de raiz
+           (``do not run tests from root``) -> ``npm test``/``bun run test``
+           por pacote que possua suíte real.
+        3. ``package.json`` com ``scripts.test`` -> ``bun run test`` ou ``npm test``.
+        4. Repositório gerenciado por Bun sem script -> ``bun test``.
+        5. Suíte descoberta (``tests/**/*.mjs``, ``*.test.*``/``*.spec.*``)
+           -> ``node --test --test-reporter=tap <arquivos>``.
 
         Exemplo:
             >>> res = MultiStackRunner._run_node_ts_suite(Path("."), {}, time.time())
@@ -502,94 +824,259 @@ class MultiStackRunner:
         npm_bin = shutil.which("npm") or "npm"
         bun_bin = shutil.which("bun")
 
-        pkg = workspace_path / "package.json"
-        test_script: Optional[str] = None
-        if pkg.exists():
-            try:
-                pkg_data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
-                scripts = pkg_data.get("scripts") if isinstance(pkg_data, dict) else None
-                if isinstance(scripts, dict):
-                    raw_test = scripts.get("test")
-                    test_script = raw_test if isinstance(raw_test, str) else None
-            except Exception as parse_err:
-                logger.debug("package.json ilegível em %s: %s", workspace_path, parse_err)
+        pkg_data = cls._read_package_json(workspace_path)
+        scripts = pkg_data.get("scripts") if isinstance(pkg_data, dict) else None
+        raw_test = scripts.get("test") if isinstance(scripts, dict) else None
+        test_script: Optional[str] = raw_test if isinstance(raw_test, str) else None
 
         bun_lock = (workspace_path / "bun.lockb").exists() or (workspace_path / "bun.lock").exists()
         has_bunfig = (workspace_path / "bunfig.toml").exists()
         bun_script = test_script is not None and test_script.strip().startswith("bun")
         is_bun = bool(bun_bin) and (bun_lock or has_bunfig or bun_script)
+        root_guard = bool(test_script and "do not run tests from root" in test_script.lower())
 
         tests_dir = workspace_path / "tests"
         run_all = tests_dir / "run_all.mjs"
-        mjs_tests = sorted(str(p) for p in tests_dir.glob("*.mjs")) if tests_dir.exists() else []
-
-        cmd: Optional[List[str]] = None
         if run_all.exists():
-            cmd = [str(node_bin), str(run_all)]
-        elif test_script:
+            return cls._run_node_command(
+                [str(node_bin), str(run_all)], workspace_path, env, start, "run_all.mjs",
+            )
+
+        workspace_packages = cls._discover_node_workspaces(workspace_path)
+        declares_workspaces = bool(pkg_data.get("workspaces")) if isinstance(pkg_data, dict) else False
+        if workspace_packages and (declares_workspaces or root_guard or len(workspace_packages) > 1):
+            return cls._run_node_workspaces(workspace_packages, env, start, is_bun, bun_bin, npm_bin)
+
+        if test_script and not root_guard:
             cmd = [str(bun_bin), "run", "test"] if is_bun else [str(npm_bin), "test"]
-        elif is_bun:
-            cmd = [str(bun_bin), "test"]
-        elif mjs_tests:
+            return cls._run_node_command(cmd, workspace_path, env, start, "scripts.test")
+
+        if is_bun:
+            return cls._run_node_command([str(bun_bin), "test"], workspace_path, env, start, "bun test")
+
+        discovered = cls._discover_node_test_files(workspace_path)
+        if discovered:
             # --test-reporter=tap força saída TAP estável em qualquer versão do
             # Node (o reporter padrão "spec" muda de formato entre majors).
-            cmd = [str(node_bin), "--test", "--test-reporter=tap", *mjs_tests]
+            cmd = [str(node_bin), "--test", "--test-reporter=tap", *discovered]
+            return cls._run_node_command(cmd, workspace_path, env, start, "node --test")
 
-        if cmd is None:
-            return {
-                "passed": False,
-                "total_passed": 0,
-                "total_failed": 1,
-                "summary": "NODE_TS_BUN sem runner de testes configurado — workspace sem suíte executável",
-                "failure_details": [
-                    "Nenhum runner NODE_TS_BUN detectável (tests/run_all.mjs, scripts.test, bun test ou tests/*.mjs). "
-                    "Crie uma suíte real em tests/ (ex.: tests/run_all.mjs ou tests/*.test.mjs)."
-                ],
-                "duration": round(time.time() - start, 2),
-            }
+        return cls._build_test_result(
+            passed=False, total_passed=0, total_failed=0,
+            summary="Workspace Node/TS/Bun sem runner de testes configurado — sem suíte executável",
+            failure_details=[
+                "Nenhum runner detectável (tests/run_all.mjs, scripts.test, bun test, "
+                "workspaces com suíte ou arquivos *.test.*/*.spec.*). "
+                "A entrega não pode ser aprovada sem evidência real executada."
+            ],
+            start=start, evidence=False, verdict_state=VERDICT_VERIFIED_FAIL,
+            runner=None, reason="runner_ausente_em_workspace_com_suite_esperada",
+        )
 
+    @classmethod
+    def _discover_node_workspaces(cls, workspace_path: Path) -> List[Path]:
+        """Descobre pacotes de monorepo Node com suíte real (workspaces/scripts.test).
+
+        Exemplo:
+            >>> isinstance(MultiStackRunner._discover_node_workspaces(Path(".")), list)
+            True
+        """
+        candidates: set[Path] = set()
+        pkg_data = cls._read_package_json(workspace_path)
+        workspaces = pkg_data.get("workspaces") if isinstance(pkg_data, dict) else None
+        patterns: List[str] = []
+        if isinstance(workspaces, list):
+            patterns.extend(str(item) for item in workspaces)
+        elif isinstance(workspaces, dict) and isinstance(workspaces.get("packages"), list):
+            patterns.extend(str(item) for item in workspaces["packages"])
+        patterns.extend(_NODE_WORKSPACE_GLOBS)
+
+        for pattern in patterns:
+            for candidate in workspace_path.glob(pattern):
+                pkg_dir = candidate.parent if candidate.name == "package.json" else candidate
+                if not (pkg_dir / "package.json").is_file():
+                    continue
+                try:
+                    pkg_dir.resolve().relative_to(workspace_path.resolve())
+                except ValueError:
+                    continue
+                if "node_modules" in pkg_dir.parts:
+                    continue
+                candidates.add(pkg_dir)
+
+        suites: List[Path] = []
+        for pkg_dir in sorted(candidates):
+            data = cls._read_package_json(pkg_dir)
+            scripts = data.get("scripts") if isinstance(data, dict) else None
+            has_script = isinstance(scripts, dict) and bool(scripts.get("test"))
+            if has_script or cls._discover_node_test_files(pkg_dir):
+                suites.append(pkg_dir)
+        return suites
+
+    @classmethod
+    def _discover_node_test_files(cls, base_dir: Path) -> List[str]:
+        """Lista arquivos de teste Node/TS reais sob ``base_dir`` (sem node_modules/build).
+
+        Exemplo:
+            >>> isinstance(MultiStackRunner._discover_node_test_files(Path(".")), list)
+            True
+        """
+        excluded = cls._NATIVE_EXCLUDED_DIRS
+        found: set[str] = set()
+        tests_dir = base_dir / "tests"
+        if tests_dir.is_dir():
+            found.update(str(path) for path in tests_dir.rglob("*.mjs") if path.is_file())
+        for pattern in _JS_TEST_GLOBS:
+            for path in base_dir.rglob(pattern):
+                if not path.is_file():
+                    continue
+                try:
+                    rel_parts = path.relative_to(base_dir).parts
+                except ValueError:
+                    continue
+                if any(part in excluded for part in rel_parts):
+                    continue
+                found.add(str(path))
+        return sorted(found)
+
+    @classmethod
+    def _run_node_command(
+        cls,
+        cmd: List[str],
+        cwd: Path,
+        env: Dict[str, Any],
+        start: float,
+        label: str,
+    ) -> Dict[str, Any]:
+        """Executa um comando Node/Bun e normaliza o resultado com evidência real.
+
+        Exemplo:
+            >>> res = MultiStackRunner._run_node_command(["true"], Path("."), {}, 0.0, "noop")
+            >>> res["passed"] is False
+            True
+        """
         try:
             proc = subprocess.run(
-                cmd,
-                cwd=str(workspace_path),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                cmd, cwd=str(cwd), env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=_TEST_COMMAND_TIMEOUT_SECONDS,
             )
-        except Exception as run_err:
-            return {
-                "passed": False,
-                "total_passed": 0,
-                "total_failed": 1,
-                "summary": f"Falha ao executar {cmd[0]}: {run_err}",
-                "failure_details": [str(run_err)],
-                "duration": round(time.time() - start, 2),
-            }
+        except FileNotFoundError as missing_err:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary=f"Binário ausente para o runner {label}: {missing_err}",
+                failure_details=[str(missing_err)],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner=label, reason="binario_ausente",
+            )
+        except subprocess.TimeoutExpired:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary=f"Timeout de {_TEST_COMMAND_TIMEOUT_SECONDS:.0f}s no runner {label}",
+                failure_details=[f"Timeout de {_TEST_COMMAND_TIMEOUT_SECONDS:.0f}s excedido."],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner=label, reason="timeout",
+            )
+        except Exception as run_err:  # noqa: BLE001 — falha operacional vira inconclusivo
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary=f"Falha ao executar {Path(cmd[0]).name}: {run_err}",
+                failure_details=[str(run_err)],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner=label, reason="erro_operacional",
+            )
 
         output = proc.stdout + "\n" + proc.stderr
         passed = proc.returncode == 0
-        tot_passed, tot_failed = MultiStackRunner._parse_node_test_counts(output, passed)
+        parsed = cls._parse_node_test_counts_exact(output)
+        if parsed is None:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary=f"Runner {label} executou mas a saída não pôde ser contabilizada",
+                failure_details=[
+                    "Saída sem contagem numérica interpretável; verificação inconclusiva.",
+                    output[-500:],
+                ],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner=label, reason="saida_sem_contagem",
+            )
+        tot_passed, tot_failed = parsed
+        return cls._build_test_result(
+            passed=passed, total_passed=tot_passed, total_failed=tot_failed,
+            summary=f"Node/TS/Bun Tests ({label}): {tot_passed} aprovados, {tot_failed} falhas",
+            failure_details=[] if passed else [output[-500:]],
+            start=start, evidence=True, runner=label,
+        )
 
-        runner_label = Path(cmd[0]).name
-        return {
-            "passed": passed,
-            "total_passed": tot_passed,
-            "total_failed": tot_failed,
-            "summary": f"Node/TS/Bun Tests ({runner_label}): {tot_passed} aprovados, {tot_failed} falhas",
-            "failure_details": [] if passed else [output[-500:]],
-            "duration": round(time.time() - start, 2),
-        }
-
-    @staticmethod
-    def _parse_node_test_counts(output: str, passed: bool) -> Tuple[int, int]:
-        """Extrai (aprovados, falhas) do stdout/stderr de runners Node/Bun/TAP.
+    @classmethod
+    def _run_node_workspaces(
+        cls,
+        packages: List[Path],
+        env: Dict[str, Any],
+        start: float,
+        is_bun: bool,
+        bun_bin: Optional[str],
+        npm_bin: str,
+    ) -> Dict[str, Any]:
+        """Executa a suíte de cada pacote de monorepo e agrega os contadores reais.
 
         Exemplo:
-            >>> MultiStackRunner._parse_node_test_counts("  12 pass\\n  1 fail\\n", False)
-            (12, 1)
+            >>> res = MultiStackRunner._run_node_workspaces([], {}, 0.0, False, None, "npm")
+            >>> res["verdict_state"]
+            'INCONCLUSIVE'
         """
-        # Runner consolidado do ensemble-room-lowcost: "SUÍTES: X/Y passaram"
+        if not packages:
+            return cls._build_test_result(
+                passed=False, total_passed=0, total_failed=0,
+                summary="Monorepo declarado sem pacote com suíte executável",
+                failure_details=["Nenhum pacote com scripts.test ou arquivos de teste."],
+                start=start, evidence=False, verdict_state=VERDICT_INCONCLUSIVE,
+                runner="workspaces", reason="monorepo_sem_suite",
+            )
+
+        aggregate_passed = 0
+        aggregate_failed = 0
+        details: List[str] = []
+        failures: List[str] = []
+        evidence_any = False
+        all_passed = True
+        for pkg_dir in packages:
+            rel = pkg_dir.relative_to(packages[0].parent) if packages else pkg_dir
+            cmd = [str(bun_bin), "run", "test"] if is_bun and bun_bin else [str(npm_bin), "test"]
+            result = cls._run_node_command(cmd, pkg_dir, env, start, f"{Path(rel)}/test")
+            if result["evidence"]:
+                evidence_any = True
+                aggregate_passed += result["total_passed"]
+                aggregate_failed += result["total_failed"]
+            if not result["passed"]:
+                all_passed = False
+                failures.extend(result["failure_details"])
+            details.append(f"{rel}: {result['verdict_state']}")
+
+        return cls._build_test_result(
+            passed=all_passed and evidence_any,
+            total_passed=aggregate_passed, total_failed=aggregate_failed,
+            summary=f"Monorepo ({len(packages)} pacotes): " + ", ".join(details),
+            failure_details=failures[:10],
+            start=start, evidence=evidence_any, runner="workspaces",
+            verdict_state=None if evidence_any else VERDICT_INCONCLUSIVE,
+            reason=None if evidence_any else "pacotes_sem_contagem",
+        )
+
+    @staticmethod
+    def _parse_node_test_counts_exact(output: str) -> Optional[Tuple[int, int]]:
+        """Extrai (aprovados, falhas) reais ou ``None`` quando não há contagem.
+
+        Contrato honesto: ``None`` significa "não foi possível contabilizar",
+        nunca um fallback inventado.
+
+        Exemplo:
+            >>> MultiStackRunner._parse_node_test_counts_exact("12 pass\\n1 fail")
+            (12, 1)
+            >>> MultiStackRunner._parse_node_test_counts_exact("sem contadores") is None
+            True
+        """
+        # Runner consolidado: "SUÍTES: X/Y passaram"
         m_suites = re.search(r"SU[ÍI]TES:\s+(\d+)\s*/\s*(\d+)\s+passaram", output)
         if m_suites:
             ok = int(m_suites.group(1))
@@ -613,6 +1100,19 @@ class MultiStackRunner:
             fail = int(m_tap_fail.group(1)) if m_tap_fail else 0
             return ok, fail
 
+        return None
+
+    @staticmethod
+    def _parse_node_test_counts(output: str, passed: bool) -> Tuple[int, int]:
+        """Compat: contagens reais ou (0,0)/(0,1) quando a saída não contabiliza.
+
+        Exemplo:
+            >>> MultiStackRunner._parse_node_test_counts("  12 pass\\n  1 fail\\n", False)
+            (12, 1)
+        """
+        parsed = MultiStackRunner._parse_node_test_counts_exact(output)
+        if parsed is not None:
+            return parsed
         return (0, 0) if passed else (0, 1)
 
     @classmethod
@@ -822,7 +1322,8 @@ class MultiStackRunner:
     # ──────────────────────────────────────────────────────────────────────────
 
     _JS_STACKS = frozenset({"REACT_NATIVE_EXPO", "WEB_JS_FIREBASE", "NODE_TS_BUN", "NODE_JS_GENERIC"})
-    _PYTHON_STACKS = frozenset({"PYTHON_JEV", "PYTHON_PREDICTERA", "PYTHON_FATURAMENTO", "PYTHON_GENERIC"})
+    _PYTHON_STACKS = frozenset({"PYTHON_GENERIC"})
+    _OTHER_TOOLCHAIN_STACKS = frozenset({"RUST_CARGO", "GO_MODULE", "DART_FLUTTER"})
     _BLOCKING_NATIVE_CATEGORIES = frozenset({"security", "anti_mock_producao", "type_error", "lint_error"})
     _NATIVE_EXCLUDED_DIRS = frozenset({
         ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
@@ -867,16 +1368,17 @@ class MultiStackRunner:
         audit_mode: str = "delta",
         source_files: Optional[List[Path]] = None,
     ) -> Dict[str, Any]:
-        """Camada 1: executa compiladores/linters nativos e normaliza diagnósticos.
+        """Camada 3: executa compiladores/linters nativos e normaliza diagnósticos.
 
-        Orçamento total estritamente sub-segundo (default 0.8s, sobrescrevível por
-        ``JEV_NATIVE_BRIDGE_BUDGET_SECONDS``). Cada ferramenta roda em novo grupo de
-        processos e é morta via ``killpg`` no timeout (sem órfãos). Ferramenta
-        ausente, sem configuração ou lenta é ignorada (fail-open) e registrada em
-        ``tools``, jamais convertida em violação.
+        Orçamento total de 600s por padrão (sobrescrevível por
+        ``JEV_NATIVE_BRIDGE_BUDGET_SECONDS``, clamp [0.1, 600]). Cada ferramenta
+        roda em novo grupo de processos e é morta via ``killpg`` no timeout (sem
+        órfãos). Ferramenta ausente vira ``skipped`` com motivo; timeout/erro
+        operacional vira ``inconclusive_reasons``/``critical_failures`` — NUNCA
+        é silenciado como "zero erros".
 
         Exemplo:
-            >>> res = MultiStackRunner.run_native_bridge(Path("."), "PYTHON_JEV")
+            >>> res = MultiStackRunner.run_native_bridge(Path("."), "PYTHON_GENERIC")
             >>> set(res) >= {"blocking", "warnings", "tools", "total_files", "engine"}
             True
         """
@@ -907,18 +1409,34 @@ class MultiStackRunner:
                 cls._bridge_js_toolchain(workspace_path, files, env, deadline, runs, blocking, warnings)
             if stack in cls._PYTHON_STACKS:
                 cls._bridge_python_toolchain(workspace_path, files, env, deadline, runs, blocking, warnings)
-            cls._bridge_other_toolchains(workspace_path, env, deadline, runs, blocking, warnings)
+            cls._bridge_other_toolchains(workspace_path, files, env, deadline, runs, blocking, warnings)
         except Exception as bridge_err:  # defensivo: um linter nunca derruba o quality gate
-            logger.debug("Camada 1 abortada por erro interno em %s: %s", workspace_path, bridge_err)
+            logger.debug("Camada 3 abortada por erro interno em %s: %s", workspace_path, bridge_err)
             runs.append(NativeToolRun(tool="native_bridge", status="error", detail=str(bridge_err)[:200]))
 
+        tools = [cls._native_tool_entry(run) for run in runs]
+        executed = [tool["tool"] for tool in tools if tool["status"] == "executed"]
+        skipped = {tool["tool"]: tool.get("reason") or "sem motivo declarado" for tool in tools if tool["status"] == "skipped"}
+        critical = [
+            tool["tool"] for tool in tools
+            if tool["status"] in ("timeout", "error")
+        ]
+        layer_status = "executed" if executed else ("error" if critical else "skipped")
         return {
             "blocking": [asdict(v) for v in cls._dedup_native_violations(blocking)],
             "warnings": [asdict(w) for w in cls._dedup_native_violations(warnings)],
-            "tools": [cls._native_tool_entry(run) for run in runs],
+            "tools": tools,
             "total_files": len(files),
             "engine": "native_toolchain_bridge",
             "duration": round(time.monotonic() - started, 3),
+            "layer_status": layer_status,
+            "executed_tools": executed,
+            "skipped_tools": skipped,
+            "critical_failures": critical,
+            "inconclusive_reasons": [
+                f"{tool['tool']}: {tool['status']} ({tool.get('detail') or 'sem detalhe'})"
+                for tool in tools if tool["status"] in ("timeout", "error")
+            ],
         }
 
     @staticmethod
@@ -946,10 +1464,13 @@ class MultiStackRunner:
 
     @staticmethod
     def _native_budget_seconds() -> float:
-        """Resolve o orçamento total (segundos) da Camada 1 com clamp defensivo.
+        """Resolve o orçamento total (segundos) da bridge nativa com clamp defensivo.
+
+        Default e teto de 600s (TICKET-SGA-09); piso de 0.1s para permitir
+        execuções de teste econômicas via env.
 
         Exemplo:
-            >>> 0.1 <= MultiStackRunner._native_budget_seconds() <= 5.0
+            >>> 0.1 <= MultiStackRunner._native_budget_seconds() <= 600.0
             True
         """
         raw = os.environ.get("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "")
@@ -1034,7 +1555,7 @@ class MultiStackRunner:
         """Coleta os arquivos de produção que alimentam linters/compiladores da stack.
 
         Exemplo:
-            >>> isinstance(MultiStackRunner._collect_native_source_files(Path("."), "PYTHON_JEV", "full"), list)
+            >>> isinstance(MultiStackRunner._collect_native_source_files(Path("."), "PYTHON_GENERIC", "full"), list)
             True
         """
         if stack in cls._JS_STACKS:
@@ -1212,6 +1733,7 @@ class MultiStackRunner:
     def _bridge_other_toolchains(
         cls,
         workspace_path: Path,
+        files: List[Path],
         env: Dict[str, str],
         deadline: float,
         runs: List[NativeToolRun],
@@ -1220,10 +1742,14 @@ class MultiStackRunner:
     ) -> None:
         """Executa ``go vet``, ``cargo clippy -D warnings`` e ``dart analyze`` se aplicáveis.
 
+        Aplica-se por manifesto (``go.mod``/``Cargo.toml``/``pubspec.yaml``) e por
+        presença real de fontes da linguagem entre os arquivos auditados.
+
         Exemplo:
-            >>> MultiStackRunner._bridge_other_toolchains(Path("."), {}, time.monotonic(), [], [], [])
+            >>> MultiStackRunner._bridge_other_toolchains(Path("."), [], {}, time.monotonic(), [], [], [])
         """
-        if (workspace_path / "go.mod").exists():
+        suffixes = {f.suffix for f in files}
+        if (workspace_path / "go.mod").exists() and (not files or ".go" in suffixes):
             go_bin = shutil.which("go")
             if go_bin:
                 output = cls._execute_native_tool(
@@ -1238,7 +1764,7 @@ class MultiStackRunner:
                     tool="go_vet", status="skipped", detail="go.mod presente, binário go ausente",
                 ))
 
-        if (workspace_path / "Cargo.toml").exists():
+        if (workspace_path / "Cargo.toml").exists() and (not files or ".rs" in suffixes):
             cargo_bin = shutil.which("cargo")
             if cargo_bin:
                 output = cls._execute_native_tool(
@@ -1255,7 +1781,7 @@ class MultiStackRunner:
                     tool="cargo_clippy", status="skipped", detail="Cargo.toml presente, binário cargo ausente",
                 ))
 
-        if (workspace_path / "pubspec.yaml").exists():
+        if (workspace_path / "pubspec.yaml").exists() and (not files or ".dart" in suffixes):
             dart_bin = shutil.which("dart")
             if dart_bin:
                 output = cls._execute_native_tool(
@@ -1437,6 +1963,10 @@ class MultiStackRunner:
             base["engine"] = f"{base.get('engine', 'unknown')}+native_toolchain_bridge"
         base["native_tools"] = tools
         base["native_bridge_duration"] = native.get("duration", 0.0)
+        base["native_layer_status"] = native.get("layer_status", "skipped")
+        base["native_skipped_tools"] = native.get("skipped_tools") or {}
+        base["native_critical_failures"] = native.get("critical_failures") or []
+        base["native_inconclusive_reasons"] = native.get("inconclusive_reasons") or []
         return base
 
     @classmethod
@@ -2057,6 +2587,7 @@ class MultiStackRunner:
         warnings: List[MultiStackViolation] = []
         parsed_files = 0
         fallback_files = 0
+        failed_files: List[str] = []
 
         for fpath in source_files:
             language = TreeSitterGuard.language_for_file(fpath)
@@ -2066,8 +2597,9 @@ class MultiStackRunner:
                 fallback_files += 1
             try:
                 found = TreeSitterGuard.scan_file(fpath, workspace=workspace_path)
-            except Exception as scan_err:  # pragma: no cover - fallback gracioso
-                logger.debug("Falha da Camada 2 em %s: %s", fpath, scan_err)
+            except Exception as scan_err:  # noqa: BLE001 — erro reportado, nunca silencioso
+                logger.debug("Falha da Camada 4 em %s: %s", fpath, scan_err)
+                failed_files.append(str(fpath))
                 continue
             for item in found:
                 payload = item.to_dict()
@@ -2093,11 +2625,33 @@ class MultiStackRunner:
         else:
             engine = "tree_sitter"
 
+        if not source_files:
+            layer_status = "not_applicable"
+            skip_reason = "nenhum arquivo JS/TS de produção elegível para a Camada 4"
+        elif failed_files and len(failed_files) >= len(source_files):
+            layer_status = "error"
+            skip_reason = "todos os arquivos falharam na Camada 4 (Tree-Sitter)"
+        elif failed_files:
+            layer_status = "inconclusive"
+            skip_reason = f"{len(failed_files)} arquivo(s) falharam na Camada 4 (Tree-Sitter)"
+        elif parsed_files == 0:
+            layer_status = "inconclusive"
+            skip_reason = "nenhuma gramática Tree-Sitter disponível (fallback lexical)"
+        else:
+            layer_status = "executed"
+            skip_reason = ""
+
         return {
             "blocking": [asdict(v) for v in blocking],
             "warnings": [asdict(v) for v in warnings],
             "total_files": len(source_files),
             "engine": engine,
+            "layer_status": layer_status,
+            "layers_executed": ["layer4_tree_sitter"] if layer_status == "executed" else [],
+            "layers_skipped": [] if layer_status == "executed" else ["layer4_tree_sitter"],
+            "skip_reasons": {} if not skip_reason else {"layer4_tree_sitter": skip_reason},
+            "inconclusive_reasons": [] if layer_status in ("executed", "not_applicable") else [skip_reason],
+            "failed_files": failed_files,
         }
 
     @staticmethod
@@ -2118,20 +2672,22 @@ class MultiStackRunner:
 
     @classmethod
     def _collect_js_source_files(cls, workspace_path: Path, stack: str) -> List[Path]:
-        """Coleta arquivos JS/TS de produção com o mesmo critério de scan_js_ast."""
-        if stack == "REACT_NATIVE_EXPO":
-            base_app = workspace_path / "PanelaAndroid" if (workspace_path / "PanelaAndroid").exists() else workspace_path
-            prod_dirs = [base_app / "src", base_app / "scripts"]
-        elif stack == "WEB_JS_FIREBASE":
-            prod_dirs = [workspace_path / "site" / "js", workspace_path / "site"]
-        else:
-            prod_dirs = [workspace_path]
+        """Coleta arquivos JS/TS de produção de forma aberta (workspace inteiro).
+
+        Sem diretórios fixos de projeto: varre a raiz e exclui apenas artefatos
+        (node_modules, testes, mocks, build, VCS).
+
+        Exemplo:
+            >>> isinstance(MultiStackRunner._collect_js_source_files(Path("."), "NODE_TS_BUN"), list)
+            True
+        """
+        prod_dirs = [workspace_path]
 
         raw_files = [
             fpath
             for pdir in prod_dirs
             if pdir.exists()
-            for ext in ("*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs")
+            for ext in ("*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs", "*.cjs")
             for fpath in pdir.rglob(ext)
         ]
         files = cls._dedup_files(raw_files)
@@ -2140,7 +2696,7 @@ class MultiStackRunner:
             for f in files
             if not any(
                 x in str(f.relative_to(workspace_path))
-                for x in ("node_modules", "__tests__", "tests", "__mocks__", "coverage", ".git", ".expo")
+                for x in ("node_modules", "__tests__", "tests", "__mocks__", "coverage", ".git", ".expo", "dist", "build")
             )
         ]
 
@@ -2166,6 +2722,15 @@ class MultiStackRunner:
         )
         merged["tree_sitter_files"] = (ts_result or {}).get("total_files", 0)
         ts_engine = (ts_result or {}).get("engine", "tree_sitter")
+        merged["tree_sitter_engine"] = ts_engine
+        merged["tree_sitter_layer_status"] = (
+            (ts_result or {}).get("layer_status")
+            or ("executed" if ts_engine in ("tree_sitter", "tree_sitter_partial") else "inconclusive")
+        )
+        merged["tree_sitter_inconclusive_reasons"] = list(
+            (ts_result or {}).get("inconclusive_reasons") or []
+        )
+        merged["tree_sitter_skip_reasons"] = dict((ts_result or {}).get("skip_reasons") or {})
         merged["engine"] = f"{merged.get('engine', 'unknown')}+{ts_engine}"
         return merged
 
@@ -2178,48 +2743,41 @@ class MultiStackRunner:
 
     @classmethod
     def scan_js_ast(cls, workspace_path: Path, stack: str, audit_mode: str = "delta") -> Dict[str, Any]:
-        """Varre os arquivos JS/TS da stack procurando mocks, eval, XSS e segredos hardcoded via AST e delta.
+        """Varre arquivos JS/TS de produção e devolve resultado com cobertura explícita.
+
+        A coleta é aberta (workspace inteiro, sem diretórios fixos de projeto) e
+        o retorno sempre declara ``layers_executed``/``layers_skipped``/
+        ``skip_reasons``/``layer_status`` para impedir fail-open silencioso.
 
         Exemplo:
-            >>> res = MultiStackRunner.scan_js_ast(Path("."), "WEB_JS_FIREBASE", audit_mode="delta")
-            >>> "blocking" in res and "warnings" in res
+            >>> res = MultiStackRunner.scan_js_ast(Path("."), "NODE_TS_BUN", audit_mode="delta")
+            >>> "blocking" in res and "layers_executed" in res
             True
         """
+        workspace_path = Path(workspace_path)
         blocking: List[MultiStackViolation] = []
         warnings: List[MultiStackViolation] = []
 
-        prod_dirs = []
-        if stack == "REACT_NATIVE_EXPO":
-            base_app = workspace_path / "PanelaAndroid" if (workspace_path / "PanelaAndroid").exists() else workspace_path
-            prod_dirs = [base_app / "src", base_app / "scripts"]
-        elif stack == "WEB_JS_FIREBASE":
-            prod_dirs = [workspace_path / "site" / "js", workspace_path / "site"]
-        else:
-            prod_dirs = [workspace_path]
-
-        raw_files = [
-            fpath
-            for pdir in prod_dirs
-            if pdir.exists()
-            for ext in ("*.js", "*.jsx", "*.ts", "*.tsx", "*.mjs")
-            for fpath in pdir.rglob(ext)
-        ]
-        source_files = cls._dedup_files(raw_files)
-
+        source_files = cls._collect_js_source_files(workspace_path, stack)
         if audit_mode == "delta":
             source_files = cls._filter_delta_files(workspace_path, source_files)
 
-        # Remove caminhos de teste, node_modules e diretórios de build
-        source_files = [
-            f for f in source_files
-            if not any(x in str(f.relative_to(workspace_path)) for x in ("node_modules", "__tests__", "tests", "__mocks__", "coverage", ".git", ".expo"))
-        ]
-
         if not source_files:
+            skipped = ["layer3_native_toolchain", "layer4_tree_sitter"]
             return {
                 "blocking": [],
                 "warnings": [],
-                "total_files": 0
+                "total_files": 0,
+                "engine": "not_applicable",
+                "layers_executed": [],
+                "layers_skipped": skipped,
+                "skip_reasons": {
+                    layer: "nenhum arquivo JS/TS de produção elegível no workspace"
+                    for layer in skipped
+                },
+                "layer_status": {layer: "not_applicable" for layer in skipped},
+                "critical_failures": [],
+                "inconclusive_reasons": [],
             }
 
         node_res = cls._run_node_js_ast(workspace_path, source_files, stack, blocking, warnings)
@@ -2228,19 +2786,62 @@ class MultiStackRunner:
         else:
             base_result = cls._run_lexical_fallback(workspace_path, source_files, stack, blocking, warnings)
 
-        # Camada 1: bridge nativa (tsc + eslint/biome/oxlint) mesclada ao resultado do AST.
+        # Camada 3: bridge nativa (tsc + eslint/biome/oxlint) mesclada ao AST.
         native_res = cls._run_native_bridge_guarded(workspace_path, stack, audit_mode, source_files)
         merged_result = cls._merge_native_bridge(base_result, native_res)
 
-        # ── Camada 2 (Tree-Sitter) — ponto de extensão ──
-        # (Maya/B1 insere aqui a chamada opcional a cls.scan_tree_sitter(...) e mescla blocking/warnings)
+        layers_executed: List[str] = []
+        layers_skipped: List[str] = []
+        skip_reasons: Dict[str, str] = {}
+        if native_res is None:
+            layers_skipped.append("layer3_native_toolchain")
+            skip_reasons["layer3_native_toolchain"] = "bridge nativa indisponível (erro interno)"
+        else:
+            native_state = str(merged_result.get("native_layer_status") or "skipped")
+            if native_state == "executed":
+                layers_executed.append("layer3_native_toolchain")
+            else:
+                layers_skipped.append("layer3_native_toolchain")
+                skip_reasons["layer3_native_toolchain"] = (
+                    f"bridge nativa terminou com status={native_state}"
+                )
+        for tool_name, reason in (merged_result.get("native_skipped_tools") or {}).items():
+            skip_reasons[f"tool:{tool_name}"] = str(reason)
+
+        # Camada 4: meta-regras universais via Tree-Sitter.
         try:
             ts_result = cls.scan_tree_sitter(
                 workspace_path, stack, audit_mode, source_files=source_files
             )
         except Exception as ts_err:  # pragma: no cover - fallback gracioso
-            logger.debug("Camada 2 (Tree-Sitter) degradada: %s", ts_err)
+            logger.debug("Camada 4 (Tree-Sitter) degradada: %s", ts_err)
             ts_result = None
         if ts_result:
             merged_result = cls._merge_tree_sitter(merged_result, ts_result)
+            ts_state = merged_result.get("tree_sitter_layer_status", "executed")
+            if ts_state == "executed":
+                layers_executed.append("layer4_tree_sitter")
+            else:
+                layers_skipped.append("layer4_tree_sitter")
+                skip_reasons["layer4_tree_sitter"] = str(
+                    (ts_result.get("skip_reasons") or {}).get(
+                        "layer4_tree_sitter",
+                        f"Camada 4 terminou com status={ts_state}",
+                    )
+                )
+        else:
+            layers_skipped.append("layer4_tree_sitter")
+            skip_reasons["layer4_tree_sitter"] = "TreeSitterGuard indisponível para a stack"
+
+        merged_result["layers_executed"] = layers_executed
+        merged_result["layers_skipped"] = layers_skipped
+        merged_result["skip_reasons"] = skip_reasons
+        merged_result["layer_status"] = {
+            "layer3_native_toolchain": merged_result.get("native_layer_status", "skipped"),
+            "layer4_tree_sitter": merged_result.get("tree_sitter_layer_status", "skipped"),
+        }
+        merged_result["critical_failures"] = merged_result.get("native_critical_failures", [])
+        merged_result["inconclusive_reasons"] = list(
+            merged_result.get("native_inconclusive_reasons", [])
+        ) + list(merged_result.get("tree_sitter_inconclusive_reasons", []))
         return merged_result

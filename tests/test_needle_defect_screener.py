@@ -19,6 +19,7 @@ from agent_quality_guard.memory.needle_defect_screener import (
     DefectSuspicion,
     NeedleASTScreener,
     screen_symbol_defects,
+    screen_workspace_report,
 )
 
 
@@ -489,3 +490,26 @@ def test_screener_handles_syntax_error_and_raises():
     with pytest.raises(AttributeError):
         # Passar None para screen_symbol_defects deve disparar AttributeError esperado
         screen_symbol_defects(None)  # type: ignore
+
+
+def test_screen_workspace_report_zero_symbols_is_not_applicable():
+    """Zero símbolos NÃO é 'zero suspeitas verificadas' (contrato TICKET-SGA-09)."""
+    report = screen_workspace_report([])
+    assert report["suspicions"] == {}
+    assert report["layer_status"] == "not_applicable"
+    assert report["layers_executed"] == []
+    assert report["layers_skipped"] == ["layer2_screener"]
+    assert "nenhum símbolo" in report["skip_reasons"]["layer2_screener"]
+    assert report["symbols_scanned"] == 0
+
+
+def test_screen_workspace_report_executed_coverage():
+    """Com símbolos reais a camada declara execução e contagem factual."""
+    sl = _make_slice("def calc(a: int, b: int) -> int:\n    return a + b")
+    report = screen_workspace_report([sl], workspace_root=".")
+    assert report["layer_status"] == "executed"
+    assert report["layers_executed"] == ["layer2_screener"]
+    assert report["layers_skipped"] == []
+    assert report["symbols_scanned"] == 1
+    assert report["files_scanned"] == 1
+    assert isinstance(report["suspicions"], dict)

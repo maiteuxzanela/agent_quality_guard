@@ -304,17 +304,17 @@ class TestNodeTsBunStack(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(MultiStackRunner.detect_stack(Path(d)), "UNKNOWN")
 
-    def test_detect_stack_python_jev_precedes_node_ts_bun(self):
-        """Precedência: PYTHON_JEV vence a heurística NODE_TS_BUN quando ambos batem."""
+    def test_detect_stack_python_capability_precedes_node_ts_bun(self):
+        """Precedência: capability Python vence NODE_TS_BUN quando ambos batem (sem fingerprint)."""
         with tempfile.TemporaryDirectory() as d:
             ws = Path(d)
-            self._write(ws, "src/mcp_server.py", "x = 1\n")
+            self._write(ws, "pyproject.toml", "[project]\nname = \"x\"\n")
             self._write(
                 ws,
                 "package.json",
                 json.dumps({"name": "x", "scripts": {"test": "node tests/run_all.mjs"}}),
             )
-            self.assertEqual(MultiStackRunner.detect_stack(ws), "PYTHON_JEV")
+            self.assertEqual(MultiStackRunner.detect_stack(ws), "PYTHON_GENERIC")
 
     # --------------------------------------------------------------- run_tests real
     def test_run_tests_node_ts_bun_run_all_mjs_success(self):

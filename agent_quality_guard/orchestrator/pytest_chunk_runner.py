@@ -168,15 +168,27 @@ class PytestChunkRunner:
             >>> all(files for _, files in chunks)
             True
         """
-        tests_dir = Path(workspace_path) / "tests"
-        if not tests_dir.exists() or not tests_dir.is_dir():
-            return []
+        discovered: List[str] = []
 
-        all_test_files = sorted([
-            str(p.relative_to(workspace_path)) for p in tests_dir.glob("test_*.py")
-            if p.is_file() and p.name != "verify_all.py"
-        ])
+        # Descoberta poliglota/tolerante: testes Python reais podem viver na
+        # raiz, em tests/ ou em subpacotes (tests/unit, tests/integration).
+        patterns = (
+            "tests/**/test_*.py",
+            "tests/**/*_test.py",
+            "test_*.py",
+            "*_test.py",
+        )
+        excluded = {".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist", ".tox"}
+        for pattern in patterns:
+            for path in Path(workspace_path).glob(pattern):
+                if not path.is_file() or path.name == "verify_all.py":
+                    continue
+                rel_parts = path.relative_to(workspace_path).parts
+                if any(part in excluded for part in rel_parts):
+                    continue
+                discovered.append(str(path.relative_to(workspace_path)))
 
+        all_test_files = sorted(set(discovered))
         if not all_test_files:
             return []
 
@@ -263,6 +275,12 @@ class PytestChunkRunner:
                 "execution_time_seconds": duration,
                 "failure_details": failure_details,
                 "file_count": len(files),
+                "evidence": bool(passed_count or failed_count),
+                "verdict_state": (
+                    "VERIFIED_PASS" if passed and (passed_count or failed_count)
+                    else "VERIFIED_FAIL" if (passed_count or failed_count)
+                    else "INCONCLUSIVE"
+                ),
             }
         except subprocess.TimeoutExpired:
             duration = round(time.time() - start_time, 2)
@@ -274,18 +292,23 @@ class PytestChunkRunner:
                 "execution_time_seconds": duration,
                 "failure_details": [f"Timeout de {timeout_per_chunk}s excedido durante execução do chunk."],
                 "file_count": len(files),
+                "evidence": False,
+                "verdict_state": "INCONCLUSIVE",
             }
 
     @classmethod
     def run_all_chunks(
         cls,
         workspace_path: str = ".",
-        timeout_per_chunk: int = 120,
+        timeout_per_chunk: int = 600,
         fail_fast: bool = True,
         audit_mode: str = "delta",
         max_total_timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Executa a suíte particionada com chunk pesado isolado (solo) e leves em paralelo.
+
+        ``timeout_per_chunk`` padrão de 600s (TICKET-SGA-09). Sem evidência real
+        contabilizada, o chunk é inconclusivo — nunca aprovado com zero testes.
 
         Exemplo:
             >>> res = PytestChunkRunner.run_all_chunks(".", timeout_per_chunk=30)
@@ -304,14 +327,12 @@ class PytestChunkRunner:
                 "total_chunks": 0,
                 "chunks": [],
                 "message": (
-                    "🚨 [AÇÃO OBRIGATÓRIA DO AGENTE: TESTES AUSENTES]\n"
-                    "Nenhum arquivo de teste ('test_*.py') foi localizado no diretório 'tests/'.\n"
-                    "O que você DEVE fazer imediatamente:\n"
-                    "1. NÃO tente burlar ou forçar aprovação — criar pelo menos um teste real é mandatório.\n"
-                    "2. Crie um arquivo em 'tests/test_<modulo>.py' cobrindo os caminhos críticos e de erro da sua alteração.\n"
-                    "3. Execute os testes no ambiente real (.venv/bin/pytest) e apenas então re-submeta à validação."
+                    "Nenhum teste Python real ('test_*.py'/'*_test.py') foi localizado no workspace. "
+                    "Para stacks não-Python a descoberta é feita pelo runner da linguagem "
+                    "(Node/TS/Bun, Rust, Go, Dart), não por este runner."
                 ),
             }
+
 
         chunk_results: List[Dict[str, Any]] = []
         overall_success = True

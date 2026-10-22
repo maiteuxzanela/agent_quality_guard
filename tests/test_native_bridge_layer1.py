@@ -258,22 +258,22 @@ def _which(name: str) -> str | None:
 
 def test_native_budget_default_and_clamp(monkeypatch):
     monkeypatch.delenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", raising=False)
-    assert MultiStackRunner._native_budget_seconds() == 0.8
+    assert MultiStackRunner._native_budget_seconds() == 600.0
 
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "0.01")
     assert MultiStackRunner._native_budget_seconds() == 0.1
 
-    monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "99")
-    assert MultiStackRunner._native_budget_seconds() == 5.0
+    monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "9999")
+    assert MultiStackRunner._native_budget_seconds() == 600.0
 
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "valor-invalido")
-    assert MultiStackRunner._native_budget_seconds() == 0.8
+    assert MultiStackRunner._native_budget_seconds() == 600.0
 
 
 def test_run_native_bridge_empty_workspace_fail_open(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "0.5")
     started = time.monotonic()
-    result = MultiStackRunner.run_native_bridge(tmp_path, "PYTHON_JEV", audit_mode="full")
+    result = MultiStackRunner.run_native_bridge(tmp_path, "PYTHON_GENERIC", audit_mode="full")
     elapsed = time.monotonic() - started
 
     assert set(result) >= {"blocking", "warnings", "tools", "total_files", "engine", "duration"}
@@ -290,7 +290,7 @@ def test_run_native_bridge_budget_zero_skips_spawns(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "0.1")
 
     result = MultiStackRunner.run_native_bridge(
-        tmp_path, "PYTHON_JEV", audit_mode="full", source_files=[tmp_path / "src" / "a.py"]
+        tmp_path, "PYTHON_GENERIC", audit_mode="full", source_files=[tmp_path / "src" / "a.py"]
     )
     # ruff (rápido) pode executar; mypy precisa ser pulado por orçamento.
     statuses = {tool["tool"]: tool["status"] for tool in result["tools"]}
@@ -319,7 +319,7 @@ def test_run_native_bridge_end_to_end_ruff_and_mypy(tmp_path: Path, monkeypatch)
 
     result = MultiStackRunner.run_native_bridge(
         tmp_path,
-        "PYTHON_JEV",
+        "PYTHON_GENERIC",
         audit_mode="full",
         source_files=[tmp_path / "src" / "app.py", tmp_path / "src" / "types_bad.py"],
     )
@@ -493,7 +493,7 @@ def test_layer1_helper_is_fail_open_and_fast(tmp_path: Path, monkeypatch):
 
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "0.5")
     started = time.monotonic()
-    result = _run_layer1_native_bridge(tmp_path, "PYTHON_JEV", "full")
+    result = _run_layer1_native_bridge(tmp_path, "PYTHON_GENERIC", "full")
     elapsed = time.monotonic() - started
 
     assert set(result) >= {"available", "blocking", "warnings", "tools", "total_files"}

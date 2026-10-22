@@ -4,6 +4,7 @@
 3. Execução & Orquestração
 """
 
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -631,6 +632,22 @@ class ASTViolation(BaseModel):
     suggestion: Optional[str] = None
 
 
+class VerdictState(str, Enum):
+    """Estados explícitos de veredito do quality gate (TICKET-SGA-09).
+
+    A regra de ouro é: ``passed=True`` só existe em ``VERIFIED_PASS`` (evidência
+    real executada e aprovada) ou ``EMERGENCY_RELEASE`` (circuit breaker), nunca
+    por ausência de runner/camada. ``NOT_APPLICABLE`` e ``INCONCLUSIVE`` são
+    sempre ``passed=False``.
+    """
+
+    VERIFIED_PASS = "VERIFIED_PASS"
+    VERIFIED_FAIL = "VERIFIED_FAIL"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    INCONCLUSIVE = "INCONCLUSIVE"
+    EMERGENCY_RELEASE = "EMERGENCY_RELEASE"
+
+
 class NeedleVerifyDeliveryResponse(BaseModel):
     """Resposta unificada do quality gate needle_verify_delivery."""
     passed: bool
@@ -656,6 +673,42 @@ class NeedleVerifyDeliveryResponse(BaseModel):
             "true APENAS em EMERGENCY_RELEASE (Saída de Emergência da 5ª tentativa, "
             "AGENTS.md §2) — entrega liberada com ressalva."
         ),
+    )
+    # --- Veredito explícito e cobertura das camadas (TICKET-SGA-09) ---
+    verdict_state: str = Field(
+        default=VerdictState.INCONCLUSIVE.value,
+        description=(
+            "Estado explícito: VERIFIED_PASS | VERIFIED_FAIL | NOT_APPLICABLE | "
+            "INCONCLUSIVE | EMERGENCY_RELEASE. Default honesto é INCONCLUSIVE."
+        ),
+    )
+    evidence_executed: bool = Field(
+        default=False,
+        description=(
+            "true apenas quando alguma evidência real (teste/linter/AST) foi de fato "
+            "executada. Nenhum caminho produz passed=True com este campo false, "
+            "exceto EMERGENCY_RELEASE."
+        ),
+    )
+    layers_executed: List[str] = Field(
+        default_factory=list,
+        description="Camadas efetivamente executadas (ex.: layer0_tests, layer3_native_toolchain).",
+    )
+    layers_skipped: List[str] = Field(
+        default_factory=list,
+        description="Camadas não executadas (fail-fast, ausência de binário, não aplicável).",
+    )
+    skip_reasons: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Motivo explícito por camada/ferramenta não executada.",
+    )
+    layer_status: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Status por camada: executed | skipped | timeout | error | not_applicable | not_executed.",
+    )
+    inconclusive_reasons: List[str] = Field(
+        default_factory=list,
+        description="Motivos que impedem um veredito VERIFIED_PASS (timeout, ferramenta ausente, saída sem contagem).",
     )
     pedido_audit: Optional[str] = Field(
         default=None,
@@ -692,10 +745,11 @@ META_RULE_BLOCKING_CATEGORIES: List[str] = [
 
 
 class ToolchainToolStatus(BaseModel):
-    """Telemetria de disponibilidade/skip de uma ferramenta nativa (Camada 1).
+    """Telemetria de disponibilidade/skip de uma ferramenta nativa (Camada 3).
 
-    Fail-open: ferramenta ausente ou expirada em timeout NUNCA vira violação —
-    é registrada aqui para observabilidade e o pipeline segue determinístico.
+    Honestidade de cobertura: ferramenta ausente vira ``skipped`` com motivo;
+    timeout/erro operacional vira ``error``/``timeout`` e alimenta
+    ``inconclusive_reasons`` — nunca é silenciado como "zero erros".
     """
     name: str = Field(
         ...,

@@ -953,30 +953,75 @@ class TreeSitterGuard:
         audit_mode: str = "delta",
         scope: Optional[Union[str, Sequence[str]]] = None,
     ) -> Dict[str, Any]:
-        """Varre o workspace e devolve relatório agregado pronto para o runner.
+        """Varre o workspace e devolve relatório agregado com cobertura explícita.
+
+        Honestidade de cobertura (TICKET-SGA-09): a camada só é ``executed``
+        quando ao menos um arquivo foi realmente analisado. Workspace ausente,
+        delta Git vazio, zero arquivos elegíveis ou falha total de leitura
+        resultam em ``not_applicable``/``error`` com motivo explícito — nunca
+        em um "0 violações" implícito.
 
         Exemplo:
             >>> report = TreeSitterGuard.scan_workspace_report("/tmp", audit_mode="full")
-            >>> sorted(report.keys())[:2]
-            ['blocking', 'engine']
+            >>> report["layer_status"] in {"executed", "inconclusive", "not_applicable", "error"}
+            True
         """
         root = Path(workspace).resolve()
-        if not root.is_dir():
-            return {
-                "blocking": [],
-                "warnings": [],
-                "total_files": 0,
-                "engine": "tree_sitter",
-                "languages": [],
-            }
+        report: Dict[str, Any] = {
+            "blocking": [],
+            "warnings": [],
+            "total_files": 0,
+            "engine": "tree_sitter",
+            "languages": [],
+            "languages_skipped": [],
+            "layer_id": "layer4_tree_sitter",
+            "layer_status": "not_applicable",
+            "layers_executed": [],
+            "layers_skipped": ["layer4_tree_sitter"],
+            "skip_reasons": {},
+            "inconclusive_reasons": [],
+            "files_scanned": 0,
+            "files_skipped": 0,
+            "unreadable_files": [],
+            "oversized_files": [],
+            "audit_mode": audit_mode,
+            "delta_source": None,
+        }
 
-        files = cls._iter_source_files(root, scope=scope)
+        if not root.is_dir():
+            report["skip_reasons"]["layer4_tree_sitter"] = (
+                "workspace inexistente ou não é diretório"
+            )
+            return report
+
+        candidates = cls._iter_source_files(root, scope=scope)
         if audit_mode == "delta":
-            files = cls._filter_delta_files(root, files)
+            is_git = cls._is_git_workspace(root)
+            files = cls._filter_delta_files(root, candidates)
+            if not candidates:
+                report["delta_source"] = "none"
+            elif is_git:
+                report["delta_source"] = "git_diff"
+            else:
+                report["delta_source"] = "all_files_no_git"
+        else:
+            files = candidates
+
+        report["total_files"] = len(files)
+        if not files:
+            if audit_mode == "full":
+                reason = "nenhum arquivo-fonte elegível no workspace/escopo"
+            elif report["delta_source"] == "git_diff":
+                reason = "modo delta sem arquivos alterados (repositório Git limpo)"
+            else:
+                reason = "nenhum arquivo-fonte elegível no workspace/escopo"
+            report["skip_reasons"]["layer4_tree_sitter"] = reason
+            return report
 
         blocking: List[Dict[str, Any]] = []
         warnings: List[Dict[str, Any]] = []
         languages: Set[str] = set()
+        languages_skipped: Set[str] = set()
         parsed_files = 0
         fallback_files = 0
 
@@ -989,12 +1034,33 @@ class TreeSitterGuard:
                 parsed_files += 1
             else:
                 fallback_files += 1
-            for violation in cls.scan_file(path, workspace=root):
+                languages_skipped.add(language or path.suffix.lstrip(".") or "unknown")
+
+            rel_path = cls._relative_path(path, root)
+            try:
+                if path.stat().st_size > MAX_FILE_BYTES:
+                    report["files_skipped"] += 1
+                    report["oversized_files"].append(rel_path)
+                    continue
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:  # noqa: BLE001 — cobertura explícita, nunca silêncio
+                report["files_skipped"] += 1
+                report["unreadable_files"].append(rel_path)
+                logger.warning("Falha ao ler %s para análise tree-sitter: %s", path, exc)
+                continue
+
+            report["files_scanned"] += 1
+            for violation in cls.scan_content(content, rel_path, language=language):
                 payload = violation.to_dict()
                 if violation.severity == "blocking":
                     blocking.append(payload)
                 else:
                     warnings.append(payload)
+
+        report["blocking"] = blocking
+        report["warnings"] = warnings
+        report["languages"] = sorted(languages)
+        report["languages_skipped"] = sorted(languages_skipped)
 
         if parsed_files and fallback_files:
             engine = "tree_sitter_partial"
@@ -1002,14 +1068,47 @@ class TreeSitterGuard:
             engine = "tree_sitter_lexical_fallback"
         else:
             engine = "tree_sitter"
+        report["engine"] = engine
 
-        return {
-            "blocking": blocking,
-            "warnings": warnings,
-            "total_files": len(files),
-            "engine": engine,
-            "languages": sorted(languages),
-        }
+        if report["files_scanned"] == 0:
+            report["layer_status"] = "error"
+            report["inconclusive_reasons"].append(
+                "nenhum arquivo-fonte pôde ser analisado pela Camada 4 (Tree-Sitter)"
+            )
+            report["skip_reasons"]["layer4_tree_sitter"] = report["inconclusive_reasons"][0]
+            return report
+
+        if report["oversized_files"]:
+            report["inconclusive_reasons"].append(
+                f"{len(report['oversized_files'])} arquivo(s) excederam o limite de "
+                "tamanho e ficaram FORA da Camada 4"
+            )
+        if report["unreadable_files"]:
+            report["inconclusive_reasons"].append(
+                f"{len(report['unreadable_files'])} arquivo(s) não puderam ser lidos "
+                "e ficaram FORA da Camada 4"
+            )
+        if report["languages_skipped"]:
+            report["skip_reasons"]["grammar_unavailable"] = (
+                "gramática Tree-Sitter indisponível para: "
+                + ", ".join(report["languages_skipped"])
+                + " (fallback lexical aplicado)"
+            )
+
+        report["layers_executed"] = ["layer4_tree_sitter"]
+        report["layers_skipped"] = []
+        if report["inconclusive_reasons"]:
+            report["layer_status"] = "inconclusive"
+        elif parsed_files == 0:
+            # Nenhuma gramática real disponível: a camada rodou em modo lexical
+            # degradado — cobertura AST incompleta, portanto não é "executed".
+            report["layer_status"] = "inconclusive"
+            report["inconclusive_reasons"].append(
+                "nenhuma gramática Tree-Sitter disponível; apenas fallback lexical executado"
+            )
+        else:
+            report["layer_status"] = "executed"
+        return report
 
     # ── Python: regras estruturais ────────────────────────────────────────
 

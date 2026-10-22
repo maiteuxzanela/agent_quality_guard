@@ -267,6 +267,90 @@ class TestNeedleASTGuardMCPIntegration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resp["blocking_ast_violations"][0]["rule_id"], "sql_injection")
 
 
+class TestNeedleASTGuardCoverageContract(unittest.TestCase):
+    """Cobertura honesta da Camada 1 (TICKET-SGA-09): nada de '0 violações' ambíguo."""
+
+    def test_missing_workspace_is_not_applicable(self):
+        report = NeedleASTGuard.scan_workspace_report(
+            "/caminho/que/nao/existe-xyz", audit_mode="full"
+        )
+        self.assertEqual(report["violations"], [])
+        self.assertEqual(report["layer_status"], "not_applicable")
+        self.assertEqual(report["layers_executed"], [])
+        self.assertEqual(report["layers_skipped"], ["layer1_ast_guard"])
+        self.assertIn("workspace inexistente", report["skip_reasons"]["layer1_ast_guard"])
+
+    def test_full_scan_exposes_executed_coverage_and_violations(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src = Path(tmp_dir) / "src"
+            src.mkdir()
+            (src / "users.py").write_text(
+                "def find(uid, db):\n"
+                "    return db.execute(f\"SELECT * FROM users WHERE id = {uid}\")\n",
+                encoding="utf-8",
+            )
+            report = NeedleASTGuard.scan_workspace_report(tmp_dir, audit_mode="full")
+            self.assertEqual(report["layer_status"], "executed")
+            self.assertEqual(report["layers_executed"], ["layer1_ast_guard"])
+            self.assertEqual(report["layers_skipped"], [])
+            self.assertEqual(report["files_scanned"], 1)
+            self.assertGreaterEqual(len(report["violations"]), 1)
+            self.assertEqual(report["violations"][0].rule_id, "sql_injection")
+            # scan_workspace mantém retrocompatibilidade estrita (mesma lista).
+            self.assertEqual(
+                [v.to_dict() for v in NeedleASTGuard.scan_workspace(tmp_dir, audit_mode="full")],
+                [v.to_dict() for v in report["violations"]],
+            )
+
+    def test_clean_git_delta_is_not_applicable(self):
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            subprocess.run(["git", "init"], cwd=tmp_dir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "t@t.local"], cwd=tmp_dir, check=True)
+            subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_dir, check=True)
+            (Path(tmp_dir) / "app.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=tmp_dir, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_dir, check=True)
+
+            report = NeedleASTGuard.scan_workspace_report(tmp_dir, audit_mode="delta")
+            self.assertEqual(report["delta_source"], "git_diff")
+            self.assertEqual(report["layer_status"], "not_applicable")
+            self.assertEqual(report["layers_skipped"], ["layer1_ast_guard"])
+            self.assertIn("delta", report["skip_reasons"]["layer1_ast_guard"])
+
+    def test_delta_without_git_falls_back_to_full_scan(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            (Path(tmp_dir) / "app.py").write_text(
+                "import pickle\n\ndef load(data):\n    return pickle.loads(data)\n",
+                encoding="utf-8",
+            )
+            report = NeedleASTGuard.scan_workspace_report(tmp_dir, audit_mode="delta")
+            self.assertEqual(report["delta_source"], "all_files_no_git")
+            self.assertEqual(report["layer_status"], "executed")
+            self.assertEqual(report["files_scanned"], 1)
+            self.assertTrue(any(v.rule_id == "insecure_deserialization" for v in report["violations"]))
+
+    def test_unreadable_file_marks_layer_inconclusive(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            (Path(tmp_dir) / "ok.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+            # Diretório com sufixo .py: rglob casa, a leitura falha — sem mocks.
+            (Path(tmp_dir) / "quebrado.py").mkdir()
+            report = NeedleASTGuard.scan_workspace_report(tmp_dir, audit_mode="full")
+            self.assertEqual(report["layer_status"], "inconclusive")
+            self.assertEqual(report["files_scanned"], 1)
+            self.assertEqual(report["files_skipped"], 1)
+            self.assertIn("quebrado.py", report["unreadable_files"])
+            self.assertTrue(report["inconclusive_reasons"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

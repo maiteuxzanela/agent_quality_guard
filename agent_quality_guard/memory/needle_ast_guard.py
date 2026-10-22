@@ -14,9 +14,10 @@ import ast
 import logging
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from ..core.diff_inspector import get_workspace_diff_files, is_ignored_path, normalize_workspace_relpath
 from .ast_cache import get_cached_ast
@@ -815,61 +816,195 @@ class NeedleASTGuard:
         return violations
 
 
+    @staticmethod
+    def _is_git_workspace(root: Path) -> bool:
+        """True quando ``root`` está dentro de uma árvore de trabalho Git válida.
+
+        Necessário para distinguir "delta legítimo vazio" (repositório limpo)
+        de "workspace sem Git" (onde o delta degrada para varredura completa).
+
+        Exemplo:
+            >>> NeedleASTGuard._is_git_workspace(Path("/tmp/nao-repo-xyz")) is False
+            True
+        """
+        try:
+            proc = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=5,
+            )
+        except Exception as exc:
+            logger.debug("Git indisponível em %s: %s", root, exc)
+            return False
+        return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+    @classmethod
+    def _resolve_target_files(cls, root: Path, audit_mode: str) -> tuple[List[Path], Optional[str]]:
+        """Resolve os arquivos-alvo da varredura e a origem do recorte delta.
+
+        Retorna ``(arquivos, delta_source)``. ``delta_source`` é ``None`` em
+        modo full, ``"git_diff"`` quando o recorte veio do Git (inclusive delta
+        legítimo vazio) e ``"all_files_no_git"`` quando não há repositório Git
+        e o delta degrada para varredura completa.
+
+        Exemplo:
+            >>> files, source = NeedleASTGuard._resolve_target_files(Path("."), "full")
+            >>> source is None
+            True
+        """
+        candidates = [
+            p
+            for p in root.rglob("*.py")
+            if not is_ignored_path(str(p.relative_to(root)))
+        ]
+        if audit_mode == "full":
+            return candidates, None
+
+        diff_files = get_workspace_diff_files(str(root))
+        if diff_files:
+            targets: List[Path] = []
+            seen: Set[Path] = set()
+            for df in diff_files:
+                if df.is_binary:
+                    continue
+                rel_norm = normalize_workspace_relpath(df.path, str(root))
+                if not rel_norm.endswith(".py") or is_ignored_path(rel_norm):
+                    continue
+                full_p = root / rel_norm
+                if full_p.is_file() and full_p not in seen:
+                    seen.add(full_p)
+                    targets.append(full_p)
+            return targets, "git_diff"
+
+        if cls._is_git_workspace(root):
+            # Repositório Git sem alterações: delta vazio é legítimo.
+            return [], "git_diff"
+
+        # Sem Git: mesmo fallback da Camada 2 (varredura completa explícita).
+        return candidates, "all_files_no_git"
+
+    @classmethod
+    def scan_workspace_report(
+        cls, workspace_dir: str, audit_mode: str = "delta"
+    ) -> Dict[str, Any]:
+        """Varre o workspace e devolve violações + cobertura explícita da camada.
+
+        Contrato de honestidade (TICKET-SGA-09): uma lista vazia de violações
+        NUNCA é ambígua. Quando a camada não pôde executar (workspace ausente,
+        delta vazio legítimo, zero arquivos elegíveis, falha total de leitura),
+        ``layer_status`` é ``not_applicable``/``error`` com motivo em
+        ``skip_reasons``/``inconclusive_reasons`` — jamais "0 violações".
+
+        Exemplo:
+            >>> rep = NeedleASTGuard.scan_workspace_report(".", audit_mode="full")
+            >>> rep["layer_status"] in {"executed", "inconclusive", "error", "not_applicable"}
+            True
+        """
+        root = Path(workspace_dir).resolve()
+        report: Dict[str, Any] = {
+            "violations": [],
+            "layer_id": "layer1_ast_guard",
+            "layer_status": "not_applicable",
+            "layers_executed": [],
+            "layers_skipped": ["layer1_ast_guard"],
+            "skip_reasons": {},
+            "inconclusive_reasons": [],
+            "files_scanned": 0,
+            "files_skipped": 0,
+            "files_unparsed": [],
+            "unreadable_files": [],
+            "total_files": 0,
+            "audit_mode": audit_mode,
+            "delta_source": None,
+        }
+
+        if not root.is_dir():
+            report["skip_reasons"]["layer1_ast_guard"] = (
+                "workspace inexistente ou não é diretório"
+            )
+            return report
+
+        targets, delta_source = cls._resolve_target_files(root, audit_mode)
+        report["delta_source"] = delta_source
+        report["total_files"] = len(targets)
+
+        if not targets:
+            if audit_mode == "full":
+                reason = "nenhum arquivo Python elegível no workspace"
+            elif delta_source == "git_diff":
+                reason = "modo delta sem arquivos Python alterados (repositório Git limpo)"
+            else:
+                reason = "nenhum arquivo Python elegível no workspace"
+            report["skip_reasons"]["layer1_ast_guard"] = reason
+            return report
+
+        violations: List[ASTViolation] = []
+        for full_p in targets:
+            rel_path = str(full_p.relative_to(root))
+            try:
+                content = full_p.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:  # noqa: BLE001 — cobertura explícita, nunca silêncio
+                report["files_skipped"] += 1
+                report["unreadable_files"].append(rel_path)
+                logger.warning(
+                    "Erro ao ler arquivo para varredura AST (%s): %s", rel_path, exc
+                )
+                continue
+
+            if get_cached_ast(content, filename=rel_path) is None:
+                report["files_skipped"] += 1
+                report["files_unparsed"].append(rel_path)
+                continue
+
+            report["files_scanned"] += 1
+            violations.extend(cls.scan_content(content, rel_path))
+
+        report["violations"] = violations
+        if report["files_unparsed"]:
+            report["inconclusive_reasons"].append(
+                f"{len(report['files_unparsed'])} arquivo(s) Python não puderam ser "
+                "parseados e ficaram FORA da varredura AST"
+            )
+        if report["unreadable_files"]:
+            report["inconclusive_reasons"].append(
+                f"{len(report['unreadable_files'])} arquivo(s) Python não puderam ser "
+                "lidos e ficaram FORA da varredura AST"
+            )
+
+        if report["files_scanned"] == 0:
+            report["layer_status"] = "error"
+            if not report["inconclusive_reasons"]:
+                report["inconclusive_reasons"].append(
+                    "nenhum arquivo Python pôde ser analisado na varredura AST"
+                )
+            report["skip_reasons"]["layer1_ast_guard"] = report["inconclusive_reasons"][0]
+            return report
+
+        if report["inconclusive_reasons"]:
+            report["layer_status"] = "inconclusive"
+        else:
+            report["layer_status"] = "executed"
+        report["layers_executed"] = ["layer1_ast_guard"]
+        report["layers_skipped"] = []
+        return report
+
     @classmethod
     def scan_workspace(cls, workspace_dir: str, audit_mode: str = "delta") -> List[ASTViolation]:
         """Varre os arquivos do workspace via AST (modo delta por diff do Git ou full para varredura completa).
+
+        Retorna apenas a lista de violações por retrocompatibilidade. A cobertura
+        honesta (camada executada/pulada e motivos) está em
+        :meth:`scan_workspace_report` — ``[]`` sozinho não significa "zero
+        violações verificadas".
 
         Exemplo:
             >>> NeedleASTGuard.scan_workspace(".", audit_mode="delta")
             []
         """
-        root = Path(workspace_dir).resolve()
-        if not root.is_dir():
-            return []
-
-        all_violations: List[ASTViolation] = []
-
-        if audit_mode == "full":
-            py_files = [
-                p
-                for p in root.rglob("*.py")
-                if not is_ignored_path(str(p.relative_to(root)))
-            ]
-            for full_p in py_files:
-                rel_path = str(full_p.relative_to(root))
-                try:
-                    content = full_p.read_text(encoding="utf-8", errors="replace")
-                    file_violations = cls.scan_content(content, rel_path)
-                    all_violations.extend(file_violations)
-                except Exception as e:
-                    logger.warning(
-                        f"Erro ao ler arquivo para varredura AST ({rel_path}): {e}",
-                        exc_info=True,
-                    )
-            return all_violations
-
-        # Default: audit_mode == "delta"
-        diff_files = get_workspace_diff_files(str(root))
-        for df in diff_files:
-            rel_norm = normalize_workspace_relpath(df.path, str(root))
-            if df.is_binary or not rel_norm.endswith(".py"):
-                continue
-            if is_ignored_path(rel_norm):
-                continue
-
-            full_p = root / rel_norm
-            if full_p.is_file():
-                try:
-                    content = full_p.read_text(encoding="utf-8", errors="replace")
-                    file_violations = cls.scan_content(content, rel_norm)
-                    all_violations.extend(file_violations)
-                except Exception as e:
-                    logger.warning(
-                        f"Erro ao ler arquivo para varredura AST ({rel_norm}): {e}",
-                        exc_info=True,
-                    )
-
-        return all_violations
+        return list(cls.scan_workspace_report(workspace_dir, audit_mode=audit_mode)["violations"])
 
     # ── Camada 2: Meta-Regras Universais via Tree-Sitter ─────────────────────
 

@@ -210,16 +210,36 @@ def test_layer2_meta_rules_classify_blocking_and_warning(tmp_path: Path):
     assert elapsed < max_elapsed, f"Camada 2 levou {elapsed:.3f}s (contrato < {max_elapsed}s)"
 
 
-def test_layer2_meta_rules_fail_open_on_missing_workspace(tmp_path: Path):
+def test_layer2_meta_rules_missing_workspace_reports_coverage(tmp_path: Path):
     result = _run_layer2_meta_rules(tmp_path / "nao-existe", "full")
-    assert set(result) == {"available", "blocking", "warnings", "total_files"}
+    assert {"available", "blocking", "warnings", "total_files"} <= set(result)
     assert result["blocking"] == [] and result["warnings"] == []
+    # Cobertura honesta: workspace ausente nunca vira "0 violações" silencioso.
+    if result["available"]:
+        assert result["layer_status"] == "not_applicable"
+        assert result["layers_skipped"] == ["layer4_tree_sitter"]
+        assert "workspace inexistente" in result["skip_reasons"]["layer4_tree_sitter"]
+    else:
+        assert result["layer_status"] in {"not_executed", "not_applicable"}
+        assert result["layers_skipped"] == ["layer4_tree_sitter"]
+        assert result["skip_reasons"]["layer4_tree_sitter"]
+
+
+def test_layer2_meta_rules_executed_exposes_coverage(tmp_path: Path):
+    _workspace_with_meta_rules(str(tmp_path))
+    result = _run_layer2_meta_rules(tmp_path, "full")
+    if not result["available"]:
+        pytest.skip("tree-sitter ausente neste ambiente (fallback coberto no CI)")
+    assert result["layer_status"] == "executed"
+    assert result["layers_executed"] == ["layer4_tree_sitter"]
+    assert result["layers_skipped"] == []
+    assert result["files_scanned"] == result["total_files"]
 
 
 def test_layer1_and_layer2_helpers_are_subsecond(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JEV_NATIVE_BRIDGE_BUDGET_SECONDS", "0.5")
     started = time.monotonic()
-    layer1 = _run_layer1_native_bridge(tmp_path, "PYTHON_JEV", "full")
+    layer1 = _run_layer1_native_bridge(tmp_path, "PYTHON_GENERIC", "full")
     layer2 = _run_layer2_meta_rules(tmp_path, "full")
     elapsed = time.monotonic() - started
 
