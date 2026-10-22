@@ -214,7 +214,7 @@ def test_package_json_identity_is_canonical():
     """``package.json`` publica ``search-guard-agent`` com bin e URLs canônicos."""
     manifest = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "search-guard-agent"
-    assert manifest["version"] == "0.1.1"
+    assert manifest["version"] == "0.2.0"
     assert manifest["repository"]["url"] == (
         f"git+{CANONICAL_REPO_URL}.git"
     )

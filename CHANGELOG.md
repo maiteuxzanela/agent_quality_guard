@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-22
+
+Major contract and execution-integrity upgrade (`TICKET-SGA-09`) plus the
+unified package, sandbox and exclusion capabilities built since `0.1.1`.
+
 ### Added
+- **Explicit Verdict & Applicability Model (`VerdictState`):**
+  `agent_quality_guard` now emits `verdict_state` (`VERIFIED_PASS`,
+  `VERIFIED_FAIL`, `NOT_APPLICABLE`, `INCONCLUSIVE`, `EMERGENCY_RELEASE`),
+  `evidence_executed` (`bool`), `layers_executed`, `layers_skipped`,
+  `skip_reasons`, `layer_status`, and `inconclusive_reasons`. No execution path
+  can produce `passed: true` without executed verification evidence (except the
+  explicitly labeled 5th-attempt `EMERGENCY_RELEASE`).
+- **Capability-based polyglot & monorepo test discovery:** detects project
+  stacks and workspace packages directly from manifests (`pyproject.toml`,
+  `package.json`, `tsconfig.json`, `bun.lock`/`bun.lockb`, `Cargo.toml`,
+  `go.mod`, `pubspec.yaml`), including package-by-package test execution on
+  monorepos with root test guards (`do not run tests from root`).
 - `.cirurgicignore` support: workspace-root exclusion file (loaded only if
   present) with a gitignore-subset syntax — one pattern per line, `#` for
   full-line comments, blank lines ignored, trailing `\r` tolerated. A bare
@@ -28,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agent_quality_guard` quality verification workflow.
 
 ### Changed
+- **Eliminated project-fingerprint detection and fabricated test counters:**
+  removed all hardcoded repository names from `MultiStackRunner.detect_stack()`
+  and purged synthetic test-count fallbacks (`336`, `514`, `+= 5`).
+- **Elevated toolchain & test execution timeout to 600 seconds:** replaced the
+  legacy `0.8s`/`5.0s` budget caps with a `600s` budget across native compilers,
+  linters and test suites.
+- **Eliminated silent fail-open across Layers 0–4:** missing binaries, timeouts
+  and fail-fast short-circuits now report explicit `INCONCLUSIVE` or
+  `not_executed` layer status instead of returning empty violation lists
+  indistinguishable from clean scans.
 - Package identity unified as `search-guard-agent` for both the NPM package and
   the Python distribution. The NPM `bin` map ships `search-guard-agent` and the
   backward-compatible `agent-quality-guard` alias; the historical
@@ -140,6 +167,7 @@ MCP server, consolidating the former `cirurgic-search-mcp` and
 - Torch/Transformers dependencies and the obsolete `openjev_score_and_diagnose`
   tool from the ecosystem.
 
-[Unreleased]: https://github.com/maiteuxzanela/search-guard-agent/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/maiteuxzanela/search-guard-agent/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/maiteuxzanela/search-guard-agent/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/maiteuxzanela/search-guard-agent/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maiteuxzanela/search-guard-agent/releases/tag/v0.1.0
